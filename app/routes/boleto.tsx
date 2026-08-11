@@ -1,12 +1,15 @@
 import type { Route } from "./+types/boleto"
 import { db } from "~/lib/db.server"
 import { pdfDaCobranca } from "~/lib/cobranca.server"
+import { exigirUsuario } from "~/lib/sessao.server"
 
 /**
  * Serve o PDF do boleto da venda. Rota de recurso: sem componente, só o loader.
  * O PDF é buscado no Inter na hora — assim nada de binário grande fica no Mongo.
  */
-export async function loader({ params }: Route.LoaderArgs) {
+export async function loader({ params, request }: Route.LoaderArgs) {
+  await exigirUsuario(request)
+
   const cobranca = await db.cobranca.findUnique({
     where: { vendaId: params.vendaId },
   })

@@ -5,6 +5,7 @@ Frente de caixa operada pelo teclado, para a BrasSaco Embalagens.
 Três telas, todas navegáveis sem mouse:
 
 - **Caixa** (`/`) — lança produtos, aplica desconto, escolhe a forma de pagamento e fecha a venda.
+- **Usuários** (`/usuarios`) — cadastro e desativação de operadores.
 - **Estoque** (`/estoque`) — entrada de mercadoria e inventário, com o livro de movimentos.
 - **Vendas** (`/vendas`) — histórico, cancelamento com estorno, e o boleto de cada venda a prazo.
 
@@ -53,6 +54,7 @@ npm run typecheck  # a única verificação disponível
 ## Variáveis de ambiente
 
 ```
+SESSION_SECRET         # assina o cookie de sessão; obrigatório em produção
 DATABASE_URL           # MongoDB (replica set — o Prisma exige para transações)
 INTER_BASE_URL         # https://cdpj-sandbox.partners.uatinter.co ou o de produção
 INTER_CLIENT_ID
@@ -88,4 +90,5 @@ ambiente do Inter a aplicação aponta.
   do sandbox do Inter estavam indisponíveis). O fluxo não foi ligado ao caixa
   porque liberaria mercadoria sobre uma confirmação não verificada.
 - `CAIXA` e `OPERADOR` são constantes; viram sessão quando houver login.
-- Sem autenticação: qualquer um que alcance a URL opera o caixa.
+- Papéis de usuário: hoje todo operador pode tudo, inclusive cancelar venda e
+  cadastrar outros usuários.

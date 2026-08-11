@@ -17,6 +17,19 @@ model Produto {
   @@map("produtos")
 }
 
+/// Operador do caixa. A senha nunca é guardada: só o hash scrypt com sal.
+model Usuario {
+  id            String    @id @default(auto()) @map("_id") @db.ObjectId
+  nome          String
+  email         String    @unique
+  senhaHash     String
+  ativo         Boolean   @default(true)
+  criadoEm      DateTime  @default(now())
+  ultimoAcessoEm DateTime?
+
+  @@map("usuarios")
+}
+
 /// Cobrança emitida no Inter para uma venda a prazo ("bolepix": boleto com Pix).
 /// A emissão é assíncrona, então a linha digitável e o copia-e-cola chegam depois
 /// da criação — por isso ficam opcionais e a situação é acompanhada aqui.

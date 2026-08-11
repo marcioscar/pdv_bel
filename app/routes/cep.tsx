@@ -1,5 +1,6 @@
 import type { Route } from "./+types/cep"
 import { limparCep, validarCep } from "~/lib/documento"
+import { exigirUsuario } from "~/lib/sessao.server"
 
 export type EnderecoDoCep = {
   cep: string
@@ -71,7 +72,10 @@ async function consultar(cep: string): Promise<EnderecoDoCep | null> {
   }
 }
 
-export async function loader({ params }: Route.LoaderArgs) {
+export async function loader({ params, request }: Route.LoaderArgs) {
+  // Evita virar proxy aberto de consulta de CEP.
+  await exigirUsuario(request)
+
   const cep = limparCep(params.cep ?? "")
   if (!validarCep(cep)) {
     return Response.json({ erro: "CEP deve ter 8 dígitos" }, { status: 400 })

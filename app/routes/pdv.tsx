@@ -15,6 +15,7 @@ import { db } from "~/lib/db.server"
 import { criarCliente, lerCliente, listarClientes } from "~/lib/clientes.server"
 import { emitirParaVenda, type CobrancaDaVenda } from "~/lib/cobranca.server"
 import { saldosPorProduto } from "~/lib/estoque.server"
+import { exigirUsuario } from "~/lib/sessao.server"
 import { lerPedido, registrarVenda } from "~/lib/vendas.server"
 import {
   interpretarValor,
@@ -47,9 +48,10 @@ export function meta(_: Route.MetaArgs) {
 }
 
 const CAIXA = "01"
-const OPERADOR = "Marcio"
 
-export async function loader() {
+export async function loader({ request }: Route.LoaderArgs) {
+  const eu = await exigirUsuario(request)
+
   // O catálogo inteiro vai para o cliente para a busca responder sem latência
   // por tecla. Acima de ~5 mil produtos, trocar por busca no servidor.
   const [cadastro, saldos, clientes] = await Promise.all([
@@ -65,6 +67,7 @@ export async function loader() {
   }))
 
   return {
+    eu,
     produtos,
     clientes: clientes.map((c) => ({
       id: c.id,
@@ -77,6 +80,8 @@ export async function loader() {
 }
 
 export async function action({ request }: Route.ActionArgs) {
+  const eu = await exigirUsuario(request)
+
   // Cadastro de cliente vem como formulário; a venda vem como JSON.
   if (request.headers.get("content-type")?.includes("form")) {
     const resultado = await criarCliente(lerCliente(await request.formData()))
@@ -131,7 +136,7 @@ export async function action({ request }: Route.ActionArgs) {
     )
   }
 
-  const resultado = await registrarVenda({ ...pedido, caixa: CAIXA, operador: OPERADOR })
+  const resultado = await registrarVenda({ ...pedido, caixa: CAIXA, operador: eu.nome })
   return resultado.ok
     ? { ...resultado, tipo: "venda" as const }
     : data({ ...resultado, tipo: "venda" as const }, { status: 400 })
@@ -146,7 +151,7 @@ export function shouldRevalidate() {
 type Aviso = { texto: string; tipo: "erro" | "sucesso" } | null
 
 export default function Pdv({ loaderData }: Route.ComponentProps) {
-  const { produtos, clientes } = loaderData
+  const { eu, produtos, clientes } = loaderData
 
   const [venda, despachar] = useReducer(reduzirVenda, vendaVazia)
   const [entrada, setEntrada] = useState("")
@@ -685,7 +690,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     <main className="relative flex h-screen flex-col overflow-hidden bg-card text-foreground">
       <Topo
         caixa={CAIXA}
-        operador={OPERADOR}
+        operador={eu.nome}
         relogio={relogio}
         escuro={escuro}
         onAlternarTema={alternarTema}

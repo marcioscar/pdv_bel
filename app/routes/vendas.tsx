@@ -11,20 +11,22 @@ import { db } from "~/lib/db.server"
 import { CobrancaDialogo } from "~/components/pdv/cobranca-dialogo"
 import { cobrancaDaVenda, emitirParaVenda, type CobrancaDaVenda } from "~/lib/cobranca.server"
 import { cancelarVenda } from "~/lib/estoque.server"
+import { exigirUsuario } from "~/lib/sessao.server"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { FORMAS_PAGAMENTO } from "~/lib/pdv"
 import { useAtalhosDeSecao } from "~/lib/navegacao"
 import { useRelogio, useTema } from "~/lib/tema"
 import { cn } from "~/lib/utils"
 
-const OPERADOR = "Marcio"
 const OBJECT_ID = /^[0-9a-fA-F]{24}$/
 
 export function meta(_: Route.MetaArgs) {
   return [{ title: "Vendas — BrasSaco" }]
 }
 
-export async function loader() {
+export async function loader({ request }: Route.LoaderArgs) {
+  const eu = await exigirUsuario(request)
+
   const vendas = await db.venda.findMany({
     orderBy: { numero: "desc" },
     take: 100,
@@ -39,6 +41,7 @@ export async function loader() {
   const validas = vendas.filter((venda) => !venda.canceladaEm)
 
   return {
+    eu,
     vendas: vendas.map((venda) => ({
       ...venda,
       cobranca: porVenda.get(venda.id) ?? null,
@@ -52,6 +55,7 @@ export async function loader() {
 }
 
 export async function action({ request }: Route.ActionArgs) {
+  const eu = await exigirUsuario(request)
   const form = await request.formData()
   const vendaId = String(form.get("vendaId") ?? "")
 
@@ -83,7 +87,7 @@ export async function action({ request }: Route.ActionArgs) {
     }
   }
 
-  const resultado = await cancelarVenda(vendaId, OPERADOR)
+  const resultado = await cancelarVenda(vendaId, eu.nome)
   if (!resultado.ok) {
     return data({ ...resultado, tipo: "cancelamento" as const }, { status: 400 })
   }
@@ -98,7 +102,7 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Vendas({ loaderData }: Route.ComponentProps) {
-  const { vendas, resumo } = loaderData
+  const { eu, vendas, resumo } = loaderData
 
   const [indiceAtivo, setIndiceAtivo] = useState(0)
   const [confirmando, setConfirmando] = useState<string | null>(null)
@@ -267,7 +271,7 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
   return (
     <main className="relative flex h-screen flex-col overflow-hidden bg-card text-foreground">
       <Topo
-        operador={OPERADOR}
+        operador={eu.nome}
         relogio={relogio}
         escuro={escuro}
         onAlternarTema={alternar}

@@ -15,6 +15,7 @@ import {
   registrarEntrada,
   saldosPorProduto,
 } from "~/lib/estoque.server"
+import { exigirUsuario } from "~/lib/sessao.server"
 import { interpretarValor, quantidade as formatarQuantidade } from "~/lib/moeda"
 import {
   buscarProdutos,
@@ -27,14 +28,15 @@ import { useAtalhosDeSecao } from "~/lib/navegacao"
 import { useRelogio, useTema } from "~/lib/tema"
 import { cn } from "~/lib/utils"
 
-const OPERADOR = "Marcio"
 const OBJECT_ID = /^[0-9a-fA-F]{24}$/
 
 export function meta(_: Route.MetaArgs) {
   return [{ title: "Estoque — BrasSaco" }]
 }
 
-export async function loader() {
+export async function loader({ request }: Route.LoaderArgs) {
+  const eu = await exigirUsuario(request)
+
   const [cadastro, saldos, movimentos] = await Promise.all([
     db.produto.findMany({ orderBy: { descricao: "asc" } }),
     saldosPorProduto(),
@@ -42,6 +44,7 @@ export async function loader() {
   ])
 
   return {
+    eu,
     produtos: cadastro.map((produto) => ({
       ...produto,
       estoque: saldos.get(produto.id) ?? 0,
@@ -51,6 +54,7 @@ export async function loader() {
 }
 
 export async function action({ request }: Route.ActionArgs) {
+  const eu = await exigirUsuario(request)
   const form = await request.formData()
   const produtoId = String(form.get("produtoId") ?? "")
   const modo = String(form.get("modo") ?? "entrada")
@@ -75,7 +79,7 @@ export async function action({ request }: Route.ActionArgs) {
     if (valor <= 0) {
       return data({ ok: false as const, erro: "A entrada deve ser positiva" }, { status: 400 })
     }
-    await registrarEntrada(produtoId, valor, OPERADOR)
+    await registrarEntrada(produtoId, valor, eu.nome)
     return {
       ok: true as const,
       mensagem: `Entrada de ${valor} ${produto.unidade} · ${produto.descricao}`,
@@ -86,7 +90,7 @@ export async function action({ request }: Route.ActionArgs) {
     return data({ ok: false as const, erro: "O saldo contado não pode ser negativo" }, { status: 400 })
   }
 
-  const { diferenca } = await registrarAjuste(produtoId, valor, OPERADOR)
+  const { diferenca } = await registrarAjuste(produtoId, valor, eu.nome)
   return {
     ok: true as const,
     mensagem:
@@ -99,7 +103,7 @@ export async function action({ request }: Route.ActionArgs) {
 type Modo = "entrada" | "ajuste"
 
 export default function Estoque({ loaderData }: Route.ComponentProps) {
-  const { produtos, movimentos } = loaderData
+  const { eu, produtos, movimentos } = loaderData
 
   const [entrada, setEntrada] = useState("")
   const [indiceResultado, setIndiceResultado] = useState(0)
@@ -265,7 +269,7 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
   return (
     <main className="flex h-screen flex-col overflow-hidden bg-card text-foreground">
       <Topo
-        operador={OPERADOR}
+        operador={eu.nome}
         relogio={relogio}
         escuro={escuro}
         onAlternarTema={alternar}

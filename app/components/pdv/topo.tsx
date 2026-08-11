@@ -1,5 +1,5 @@
-import { Link, useLocation } from "react-router"
-import { Moon, Sun } from "lucide-react"
+import { Form, Link, useLocation } from "react-router"
+import { LogOut, Moon, Sun } from "lucide-react"
 
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
@@ -10,6 +10,7 @@ const SECOES = [
   { para: "/", rotulo: "Caixa", tecla: "Ctrl F1" },
   { para: "/estoque", rotulo: "Estoque", tecla: "Ctrl F2" },
   { para: "/vendas", rotulo: "Vendas", tecla: "Ctrl F3" },
+  { para: "/usuarios", rotulo: "Usuários", tecla: "" },
 ]
 
 type Props = {
@@ -61,7 +62,9 @@ export function Topo({
                 className={cn("rounded-lg", ativa && "font-semibold")}
               >
                 {secao.rotulo}
-                <Kbd className="text-[9px]">{secao.tecla}</Kbd>
+                {secao.tecla ? (
+                  <Kbd className="text-[9px]">{secao.tecla}</Kbd>
+                ) : null}
               </Button>
             )
           })}
@@ -90,6 +93,20 @@ export function Topo({
         >
           {escuro ? <Sun className="size-4" /> : <Moon className="size-4" />}
         </Button>
+
+        {/* POST: um GET permitiria deslogar o operador com um link ou imagem. */}
+        <Form method="post" action="/sair">
+          <Button
+            type="submit"
+            tabIndex={-1}
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Encerrar sessão"
+            title="Encerrar sessão"
+          >
+            <LogOut className="size-4" />
+          </Button>
+        </Form>
       </div>
     </header>
   )
