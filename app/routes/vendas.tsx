@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { data, useFetcher } from "react-router"
+import { data, useFetcher, useRevalidator } from "react-router"
 import { Receipt } from "lucide-react"
 
 import type { Route } from "./+types/vendas"
@@ -123,6 +123,32 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
   const { escuro, alternar } = useTema()
   const relogio = useRelogio()
   useAtalhosDeSecao()
+
+  /**
+   * A lista se atualiza sozinha a cada 20s.
+   *
+   * A baixa do boleto chega pelo webhook, direto no banco — a tela não tem como
+   * saber sem perguntar. Sem isso o operador via "A_RECEBER" numa cobrança já
+   * paga e só descobria dando F5, o que não é comportamento de quem confere caixa.
+   */
+  const revalidador = useRevalidator()
+  const [atualizadoEm, setAtualizadoEm] = useState<string | null>(null)
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      // Não recarrega no meio de um cancelamento nem com diálogo aberto.
+      if (revalidador.state === "idle" && !confirmando && !comprovante) {
+        revalidador.revalidate()
+      }
+    }, 20_000)
+    return () => clearInterval(id)
+  }, [revalidador, confirmando, comprovante])
+
+  useEffect(() => {
+    if (revalidador.state === "idle") {
+      setAtualizadoEm(new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }))
+    }
+  }, [revalidador.state, vendas])
 
   const ativa = vendas[indiceAtivo]
 
@@ -470,7 +496,13 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                 <Kbd>F9</Kbd> Cancelar venda
               </Button>
               <span className="ml-1 text-xs text-muted-foreground">
-                <Kbd>↑</Kbd> <Kbd>↓</Kbd> escolhe a venda · o cancelamento estorna o estoque
+                <Kbd>↑</Kbd> <Kbd>↓</Kbd> escolhe a venda · o cancelamento estorna o
+                estoque{" "}
+                {atualizadoEm ? (
+                  <span className="ml-2 font-mono text-[11px] tabular-nums">
+                    · atualizado {atualizadoEm}
+                  </span>
+                ) : null}
               </span>
             </div>
 
