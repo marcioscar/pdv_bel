@@ -187,6 +187,7 @@ export async function emitirParaVenda(vendaId: string): Promise<CobrancaDaVenda>
   const venda = await db.venda.findUnique({ where: { id: vendaId } })
   if (!venda) throw new Error("Venda não encontrada")
   if (venda.forma !== "prazo") throw new Error("Só venda a prazo gera boleto")
+  if (venda.canceladaEm) throw new Error("Venda cancelada não gera boleto")
   if (!venda.clienteId || !venda.vencimento) throw new Error("Venda sem cliente ou vencimento")
 
   const cliente = await db.cliente.findUnique({ where: { id: venda.clienteId } })
