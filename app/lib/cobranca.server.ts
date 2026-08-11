@@ -269,3 +269,30 @@ export async function cobrancaDaVenda(vendaId: string) {
   const c = await db.cobranca.findUnique({ where: { vendaId } })
   return c ? comQrCode(paraSaida(c)) : null
 }
+
+/**
+ * Simulador do sandbox: paga a cobrança. Depois disso o Inter dispara o callback
+ * com os dados atualizados para o webhook cadastrado — é o jeito de exercitar o
+ * webhook de verdade. Não existe em produção.
+ */
+export async function simularPagamentoCobranca(
+  codigoSolicitacao: string,
+  pagarCom: "BOLETO" | "PIX" = "BOLETO"
+) {
+  if (!process.env.INTER_BASE_URL?.includes("sandbox")) {
+    throw new Error("Pagamento simulado só existe no sandbox")
+  }
+  return chamarInter(`/cobranca/v3/cobrancas/${codigoSolicitacao}/pagar`, {
+    metodo: "POST",
+    escopos: ["boleto-cobranca.write"],
+    corpo: { pagarCom },
+  })
+}
+
+/** Callbacks que o Inter tentou entregar — serve para ver o payload real. */
+export function callbacksEnviados(dataHoraInicio: string, dataHoraFim: string) {
+  const q = new URLSearchParams({ dataHoraInicio, dataHoraFim })
+  return chamarInter<unknown>(`/cobranca/v3/cobrancas/webhook/callbacks?${q}`, {
+    escopos: ["boleto-cobranca.read"],
+  })
+}
