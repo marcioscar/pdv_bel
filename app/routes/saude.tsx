@@ -1,6 +1,7 @@
 import type { Route } from "./+types/saude"
 import { db } from "~/lib/db.server"
 import { interConfigurado } from "~/lib/inter.server"
+import { diagnosticoSessao } from "~/lib/sessao.server"
 
 /**
  * Diz o que está rodando. Serve para responder "o deploy entrou?" sem adivinhar
@@ -24,6 +25,8 @@ export async function loader(_: Route.LoaderArgs) {
       ok: true,
       build: __BUILD__,
       ambiente: process.env.NODE_ENV ?? "desconhecido",
+      // Sem SESSION_SECRET nada que exige login funciona; melhor dizer aqui.
+      sessao: diagnosticoSessao(),
       banco,
       inter: {
         configurado: inter,

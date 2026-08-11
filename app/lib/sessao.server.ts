@@ -11,50 +11,81 @@ export type UsuarioLogado = { id: string; nome: string; email: string }
  * produção é obrigatório vir do ambiente; em desenvolvimento cai num valor fixo
  * para não travar quem acabou de clonar o projeto.
  */
+/**
+ * Diagnóstico para o /saude. Reporta o TAMANHO do segredo, nunca o valor: sem
+ * isso, "não chegou" e "chegou errado" são indistinguíveis de fora, e foi
+ * exatamente essa cegueira que transformou uma variável faltando num 502 mudo.
+ */
+export function diagnosticoSessao() {
+  const segredoRecebido = process.env.SESSION_SECRET
+  return {
+    tamanhoDoSegredo: segredoRecebido?.length ?? 0,
+    ambiente: process.env.NODE_ENV ?? "desconhecido",
+    ok: Boolean(segredoRecebido && segredoRecebido.length >= 16),
+    exigido: process.env.NODE_ENV === "production",
+  }
+}
+
 function segredo() {
   const doAmbiente = process.env.SESSION_SECRET
   if (doAmbiente && doAmbiente.length >= 16) return doAmbiente
 
   if (process.env.NODE_ENV === "production") {
     throw new Error(
-      "SESSION_SECRET ausente ou curto demais (mínimo 16 caracteres) — obrigatório em produção"
+      "SESSION_SECRET ausente ou com menos de 16 caracteres — obrigatório em produção"
     )
   }
   return "segredo-de-desenvolvimento-nao-use-em-producao"
 }
 
-const armazem = createCookieSessionStorage<{ usuarioId: string }>({
-  cookie: {
-    name: "pdv_sessao",
-    httpOnly: true,
-    path: "/",
-    sameSite: "lax",
-    // 12 horas cobre um turno de caixa sem obrigar login no meio do expediente.
-    maxAge: 60 * 60 * 12,
-    secrets: [segredo()],
-    secure: process.env.NODE_ENV === "production",
-  },
-})
+type Armazem = ReturnType<typeof createCookieSessionStorage<{ usuarioId: string }>>
+let armazemCache: Armazem | null = null
+
+/**
+ * Construído sob demanda, não no carregamento do módulo.
+ *
+ * Lendo o segredo no import, a falta dele derrubava o processo inteiro — e com
+ * ele `/saude` e os webhooks do Inter, que não usam sessão. O resultado era um
+ * 502 mudo, sem nada que dissesse o que faltava. Assim só quebra quem depende
+ * de sessão, e o `/saude` continua respondendo para apontar a causa.
+ */
+function armazem(): Armazem {
+  if (armazemCache) return armazemCache
+
+  armazemCache = createCookieSessionStorage<{ usuarioId: string }>({
+    cookie: {
+      name: "pdv_sessao",
+      httpOnly: true,
+      path: "/",
+      sameSite: "lax",
+      // 12 horas cobre um turno de caixa sem obrigar login no meio do expediente.
+      maxAge: 60 * 60 * 12,
+      secrets: [segredo()],
+      secure: process.env.NODE_ENV === "production",
+    },
+  })
+  return armazemCache
+}
 
 export async function criarSessao(usuarioId: string, destino = "/") {
-  const sessao = await armazem.getSession()
+  const sessao = await armazem().getSession()
   sessao.set("usuarioId", usuarioId)
 
   return redirect(destino, {
-    headers: { "set-cookie": await armazem.commitSession(sessao) },
+    headers: { "set-cookie": await armazem().commitSession(sessao) },
   })
 }
 
 export async function encerrarSessao(request: Request) {
-  const sessao = await armazem.getSession(request.headers.get("cookie"))
+  const sessao = await armazem().getSession(request.headers.get("cookie"))
   return redirect("/entrar", {
-    headers: { "set-cookie": await armazem.destroySession(sessao) },
+    headers: { "set-cookie": await armazem().destroySession(sessao) },
   })
 }
 
 /** Devolve o usuário da sessão, ou null. Não redireciona. */
 export async function usuarioDaSessao(request: Request): Promise<UsuarioLogado | null> {
-  const sessao = await armazem.getSession(request.headers.get("cookie"))
+  const sessao = await armazem().getSession(request.headers.get("cookie"))
   const usuarioId = sessao.get("usuarioId")
   if (!usuarioId) return null
 
