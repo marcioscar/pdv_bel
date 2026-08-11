@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { UserPlus } from "lucide-react"
+import { useFetcher } from "react-router"
+import { Loader2, UserPlus } from "lucide-react"
 
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { Kbd } from "~/components/ui/kbd"
 import { Separator } from "~/components/ui/separator"
-import { formatarCpfCnpj, UFS } from "~/lib/documento"
+import { formatarCpfCnpj, limparCep, UFS, validarCep } from "~/lib/documento"
+import type { EnderecoDoCep } from "~/routes/cep"
 import { cn } from "~/lib/utils"
 
 export type ClienteResumo = {
@@ -49,6 +51,14 @@ export function ClienteDialogo({
   const [indice, setIndice] = useState(0)
   const [cadastrando, setCadastrando] = useState(false)
 
+  // Os campos de endereço são controlados para o CEP poder preenchê-los.
+  const [endereco, setEndereco] = useState({ endereco: "", bairro: "", cidade: "", uf: "MG" })
+  const [cep, setCep] = useState("")
+  const [cepErro, setCepErro] = useState<string | null>(null)
+  const cepBuscado = useRef<string | null>(null)
+  const buscaCep = useFetcher<EnderecoDoCep | { erro: string }>()
+  const buscandoCep = buscaCep.state !== "idle"
+
   const campoBusca = useRef<HTMLInputElement>(null)
   const primeiroCampo = useRef<HTMLInputElement>(null)
   const formulario = useRef<HTMLFormElement>(null)
@@ -59,6 +69,35 @@ export function ClienteDialogo({
   }, [cadastrando])
 
   useEffect(() => setIndice(0), [busca])
+
+  // Assim que o CEP fica completo, busca — sem o operador apertar nada.
+  useEffect(() => {
+    const limpo = limparCep(cep)
+    if (!validarCep(limpo) || cepBuscado.current === limpo) return
+    cepBuscado.current = limpo
+    setCepErro(null)
+    buscaCep.load(`/cep/${limpo}`)
+  }, [cep, buscaCep])
+
+  useEffect(() => {
+    if (buscaCep.state !== "idle" || !buscaCep.data) return
+
+    if ("erro" in buscaCep.data) {
+      setCepErro(buscaCep.data.erro)
+      return
+    }
+    const achado = buscaCep.data
+    setCepErro(null)
+    // Substitui os quatro campos, não só cidade/UF: preservar o que já estava
+    // deixava o bairro do CEP anterior numa cidade nova — endereço misturado,
+    // que iria para o boleto. O CEP é a fonte da verdade; dá para editar depois.
+    setEndereco({
+      endereco: achado.endereco,
+      bairro: achado.bairro,
+      cidade: achado.cidade,
+      uf: achado.uf,
+    })
+  }, [buscaCep.state, buscaCep.data])
 
   const encontrados = useMemo(() => {
     const termo = normalizar(busca)
@@ -182,19 +221,60 @@ export function ClienteDialogo({
             />
             <Campo nome="cpfCnpj" rotulo="CPF / CNPJ" className="col-span-2" obrigatorio />
 
-            <Campo nome="cep" rotulo="CEP" className="col-span-2" obrigatorio />
+            <div className="col-span-2">
+              <label
+                htmlFor="cep"
+                className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
+              >
+                CEP *
+                {buscandoCep ? <Loader2 className="size-3 animate-spin" aria-hidden /> : null}
+              </label>
+              <Input
+                id="cep"
+                name="cep"
+                value={cep}
+                onChange={(evento) => setCep(evento.target.value)}
+                required
+                inputMode="numeric"
+                autoComplete="off"
+                placeholder="30110-000"
+                aria-describedby={cepErro ? "cep-erro" : undefined}
+                className="rounded-lg"
+              />
+              {cepErro ? (
+                <p id="cep-erro" className="mt-1 text-[11px] font-medium text-destructive">
+                  {cepErro}
+                </p>
+              ) : null}
+            </div>
             <Campo
               nome="endereco"
               rotulo="Endereço"
               className="col-span-4"
               obrigatorio
+              value={endereco.endereco}
+              onValueChange={(v) => setEndereco((a) => ({ ...a, endereco: v }))}
             />
 
             <Campo nome="numero" rotulo="Número" className="col-span-1" />
             <Campo nome="complemento" rotulo="Complemento" className="col-span-2" />
-            <Campo nome="bairro" rotulo="Bairro" className="col-span-3" obrigatorio />
+            <Campo
+              nome="bairro"
+              rotulo="Bairro"
+              className="col-span-3"
+              obrigatorio
+              value={endereco.bairro}
+              onValueChange={(v) => setEndereco((a) => ({ ...a, bairro: v }))}
+            />
 
-            <Campo nome="cidade" rotulo="Cidade" className="col-span-3" obrigatorio />
+            <Campo
+              nome="cidade"
+              rotulo="Cidade"
+              className="col-span-3"
+              obrigatorio
+              value={endereco.cidade}
+              onValueChange={(v) => setEndereco((a) => ({ ...a, cidade: v }))}
+            />
             <div className="col-span-1">
               <label
                 htmlFor="uf"
@@ -206,7 +286,8 @@ export function ClienteDialogo({
                 id="uf"
                 name="uf"
                 required
-                defaultValue="MG"
+                value={endereco.uf}
+                onChange={(evento) => setEndereco((a) => ({ ...a, uf: evento.target.value }))}
                 className="h-9 w-full rounded-lg border border-border bg-input/50 px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
               >
                 {UFS.map((uf) => (
@@ -327,6 +408,8 @@ function Campo({
   tipo = "text",
   className,
   obrigatorio,
+  value,
+  onValueChange,
 }: {
   ref?: React.Ref<HTMLInputElement>
   nome: string
@@ -334,6 +417,8 @@ function Campo({
   tipo?: string
   className?: string
   obrigatorio?: boolean
+  value?: string
+  onValueChange?: (valor: string) => void
 }) {
   return (
     <div className={className}>
@@ -351,6 +436,9 @@ function Campo({
         required={obrigatorio}
         autoComplete="off"
         className="rounded-lg"
+        {...(onValueChange
+          ? { value: value ?? "", onChange: (e) => onValueChange(e.target.value) }
+          : {})}
       />
     </div>
   )
