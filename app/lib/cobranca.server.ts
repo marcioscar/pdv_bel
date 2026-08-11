@@ -181,7 +181,8 @@ async function comQrCode(dados: Omit<CobrancaDaVenda, "pixQrCode">): Promise<Cob
  * código da que já existe — nesse caso adotamos aquela em vez de falhar.
  */
 export async function emitirParaVenda(vendaId: string): Promise<CobrancaDaVenda> {
-  const existente = await db.cobranca.findUnique({ where: { vendaId } })
+  // Com parcelamento há mais de uma cobrança por venda; aqui olhamos a 1ª.
+  const existente = await db.cobranca.findFirst({ where: { vendaId, parcela: 1 } })
   if (existente?.linhaDigitavel) return comQrCode(paraSaida(existente))
 
   const venda = await db.venda.findUnique({ where: { id: vendaId } })
@@ -215,7 +216,7 @@ export async function emitirParaVenda(vendaId: string): Promise<CobrancaDaVenda>
   const detalhe = await aguardarEmissao(codigoSolicitacao)
 
   const gravada = await db.cobranca.upsert({
-    where: { vendaId },
+    where: { vendaId_parcela: { vendaId, parcela: 1 } },
     create: {
       vendaId,
       vendaNumero: venda.numero,
@@ -267,7 +268,7 @@ function paraSaida(c: {
 }
 
 export async function cobrancaDaVenda(vendaId: string) {
-  const c = await db.cobranca.findUnique({ where: { vendaId } })
+  const c = await db.cobranca.findFirst({ where: { vendaId }, orderBy: { parcela: "asc" } })
   return c ? comQrCode(paraSaida(c)) : null
 }
 

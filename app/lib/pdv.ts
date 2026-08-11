@@ -242,6 +242,55 @@ export const VALOR_MINIMO_BOLETO = 2.5
 export const DIAS_VENCIMENTO_PADRAO = 30
 
 /**
+ * Condições de pagamento a prazo. Fixas de propósito: deixar o vendedor digitar
+ * dias é fonte de erro e de combinação fora da política da empresa.
+ *
+ * `dias` com mais de um elemento é parcelamento — cada parcela vira um boleto
+ * com o seu próprio vencimento.
+ */
+export const CONDICOES_PAGAMENTO = [
+  { id: "7", rotulo: "7 dias", dias: [7] },
+  { id: "21", rotulo: "21 dias", dias: [21] },
+  { id: "28", rotulo: "28 dias", dias: [28] },
+  { id: "3x", rotulo: "3× — 21, 28 e 35 dias", dias: [21, 28, 35] },
+] as const
+
+export type CondicaoPagamento = (typeof CONDICOES_PAGAMENTO)[number]
+
+export function condicaoPorId(id: string): CondicaoPagamento | null {
+  return CONDICOES_PAGAMENTO.find((c) => c.id === id) ?? null
+}
+
+/** Vencimentos de uma condição, ao meio-dia para o fuso não empurrar o dia. */
+export function vencimentosDaCondicao(condicao: CondicaoPagamento, hoje = new Date()) {
+  return condicao.dias.map((dias) => {
+    const data = new Date(hoje)
+    data.setDate(data.getDate() + dias)
+    data.setHours(12, 0, 0, 0)
+    return data
+  })
+}
+
+/**
+ * Divide o total entre as parcelas em centavos, jogando a sobra na primeira.
+ * Dividir em reais deixaria diferença de centavo entre a soma e o total.
+ */
+export function dividirParcelas(total: number, quantidade: number): number[] {
+  const centavos = Math.round(total * 100)
+  const base = Math.floor(centavos / quantidade)
+  const sobra = centavos - base * quantidade
+
+  return Array.from({ length: quantidade }, (_, i) => (base + (i === 0 ? sobra : 0)) / 100)
+}
+
+/** O Inter recusa boleto abaixo de R$ 2,50 — e o limite vale POR parcela. */
+export function condicaoCabeNoTotal(condicao: CondicaoPagamento, total: number) {
+  return dividirParcelas(total, condicao.dias.length).every(
+    (valor) => valor >= VALOR_MINIMO_BOLETO
+  )
+}
+
+/**
  * Aceita o que o operador digita no vencimento: um número de dias ("30") ou uma
  * data ("15/09/2026"). Devolve o dia, ao meio-dia, para fuso não empurrar a data.
  */

@@ -35,8 +35,13 @@ model Usuario {
 /// da criação — por isso ficam opcionais e a situação é acompanhada aqui.
 model Cobranca {
   id                String   @id @default(auto()) @map("_id") @db.ObjectId
-  vendaId           String   @unique @db.ObjectId
+  vendaId           String   @db.ObjectId
   vendaNumero       Int
+  /// Parcelamento: a condição 3× gera três boletos para a mesma venda, com
+  /// vencimentos diferentes. Por isso `vendaId` não é mais único — a unicidade
+  /// passou a ser o par (vendaId, parcela).
+  parcela           Int      @default(1)
+  parcelas          Int      @default(1)
   codigoSolicitacao String   @unique
   situacao          String
   valor             Float
@@ -49,6 +54,7 @@ model Cobranca {
   criadaEm          DateTime @default(now())
   atualizadaEm      DateTime @updatedAt
 
+  @@unique([vendaId, parcela])
   @@index([vendaNumero])
   @@map("cobrancas")
 }
@@ -113,8 +119,10 @@ model Venda {
   clienteId      String?   @db.ObjectId
   clienteNome    String?
   clienteCpfCnpj String?
-  /// Vencimento da venda a prazo.
+  /// Vencimento da venda a prazo. Com parcelamento, é o da primeira parcela.
   vencimento     DateTime?
+  /// Id da condição escolhida em CONDICOES_PAGAMENTO (app/lib/pdv.ts).
+  condicao       String?
   /// Pix imediato: a venda só nasce depois de o pagamento ser confirmado, então
   /// o txid e o horário ficam guardados como comprovante.
   ///

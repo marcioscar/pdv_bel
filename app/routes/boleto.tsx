@@ -10,8 +10,10 @@ import { exigirUsuario } from "~/lib/sessao.server"
 export async function loader({ params, request }: Route.LoaderArgs) {
   await exigirUsuario(request)
 
-  const cobranca = await db.cobranca.findUnique({
+  // Sem parcela na URL, serve a primeira.
+  const cobranca = await db.cobranca.findFirst({
     where: { vendaId: params.vendaId },
+    orderBy: { parcela: "asc" },
   })
   if (!cobranca) throw new Response("Cobrança não encontrada", { status: 404 })
 
