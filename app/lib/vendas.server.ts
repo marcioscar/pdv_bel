@@ -181,12 +181,20 @@ export async function registrarVenda(pedido: PedidoVenda): Promise<ResultadoVend
 
 const SEQUENCIA_ESGOTADA = "sequencia-de-venda-esgotada"
 
+/**
+ * Só a colisão do `numero` justifica tentar de novo. Antes isto aceitava qualquer
+ * P2002, então uma violação em outro índice único era reprocessada 25 vezes —
+ * queimando 25 números de venda e mascarando a causa real com uma mensagem de
+ * "sequência fora de sincronia".
+ */
 function ehColisaoDeNumero(erro: unknown) {
-  return (
-    typeof erro === "object" &&
-    erro !== null &&
-    (erro as { code?: string }).code === "P2002"
-  )
+  if (typeof erro !== "object" || erro === null) return false
+  const falha = erro as { code?: string; meta?: { target?: unknown } }
+  if (falha.code !== "P2002") return false
+
+  const alvo = falha.meta?.target
+  const texto = Array.isArray(alvo) ? alvo.join(",") : String(alvo ?? "")
+  return texto.includes("numero")
 }
 
 /**

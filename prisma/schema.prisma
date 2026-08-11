@@ -104,7 +104,11 @@ model Venda {
   vencimento     DateTime?
   /// Pix imediato: a venda só nasce depois de o pagamento ser confirmado, então
   /// o txid e o horário ficam guardados como comprovante.
-  pixTxid        String?   @unique
+  ///
+  /// NÃO usar @unique aqui: o índice único do Mongo não é esparso, campo ausente
+  /// conta como null, e só um documento pode ter null — o que barraria toda venda
+  /// que não é Pix. A unicidade vem do txid ser aleatório de 35 caracteres.
+  pixTxid        String?
   pixPagoEm      DateTime?
   subtotal Float
   desconto Float      @default(0)
@@ -119,6 +123,7 @@ model Venda {
   canceladaPor String?
 
   @@index([criadaEm])
+  @@index([pixTxid])
   @@map("vendas")
 }
 
