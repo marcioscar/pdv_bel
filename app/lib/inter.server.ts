@@ -206,7 +206,13 @@ async function pedirToken(escopos: EscopoInter[]): Promise<string> {
 
   const corpo = await resposta.text()
   if (!resposta.ok) {
-    throw new ErroInter(resposta.status, corpo, `Falha ao obter token (${resposta.status})`)
+    throw new ErroInter(
+      resposta.status,
+      corpo,
+      resposta.status === 429
+        ? "Limite de chamadas do token excedido"
+        : `Falha ao obter token (${resposta.status})`
+    )
   }
 
   const dados = JSON.parse(corpo) as { access_token: string; expires_in: number }
@@ -236,11 +242,32 @@ type OpcoesChamada = {
   bruto?: boolean
 }
 
+/** Espera recomendada pela doc do Inter para o 429: alguns segundos. */
+const ESPERAS_429 = [2000, 5000, 10_000]
+
 export async function chamarInter<T = unknown>(
+  caminho: string,
+  opcoes: OpcoesChamada
+): Promise<T> {
+  for (let tentativa = 0; ; tentativa++) {
+    try {
+      return await chamarUmaVez<T>(caminho, opcoes)
+    } catch (erro) {
+      const espera =
+        erro instanceof ErroInter && erro.status === 429 ? ESPERAS_429[tentativa] : undefined
+      if (espera === undefined) throw erro
+      await new Promise((r) => setTimeout(r, espera))
+    }
+  }
+}
+
+async function chamarUmaVez<T>(
   caminho: string,
   { metodo = "GET", corpo, escopos, bruto = false }: OpcoesChamada
 ): Promise<T> {
   const { baseUrl, contaCorrente } = lerConfig()
+  // Barra dupla no path faz o Inter responder 406, conforme a doc de erros.
+  const rota = caminho.startsWith("/") ? caminho.replace(/\/{2,}/g, "/") : `/${caminho}`
   const acesso = await obterToken(escopos)
 
   const cabecalhos: Record<string, string> = {
@@ -252,7 +279,7 @@ export async function chamarInter<T = unknown>(
   if (corpo !== undefined) cabecalhos["content-type"] = "application/json"
   if (contaCorrente) cabecalhos["x-conta-corrente"] = contaCorrente
 
-  const resposta = await fetch(`${baseUrl}${caminho}`, {
+  const resposta = await fetch(`${baseUrl}${rota}`, {
     method: metodo,
     headers: cabecalhos,
     body: corpo === undefined ? undefined : JSON.stringify(corpo),
@@ -284,6 +311,19 @@ function seguroJson(texto: string): unknown {
   }
 }
 
+/**
+ * Mensagens conforme https://developers.inter.co/erros-status-code — sem isso, os
+ * códigos sem corpo (400, 406, 429) chegavam ao operador como "Inter respondeu 400".
+ */
+const PORTATUS: Record<number, string> = {
+  400: "Requisição inválida — se vier sem detalhe, o certificado não foi enviado",
+  401: "Credenciais ou token inválidos, ou o escopo não está registrado na integração",
+  403: "O token não tem os escopos necessários para este endpoint",
+  406: "Recusado pelo firewall do Inter (IP dinâmico de cloud) ou caminho malformado",
+  422: "Regra de negócio não atendida",
+  429: "Limite de chamadas por minuto excedido",
+}
+
 /** O Inter devolve `title`/`detail` (RFC 7807) e às vezes uma lista de violações. */
 function mensagemDeErro(status: number, dados: unknown): string {
   if (typeof dados === "object" && dados !== null) {
@@ -299,7 +339,8 @@ function mensagemDeErro(status: number, dados: unknown): string {
     if (erro.detail) return erro.detail
     if (erro.title) return erro.title
   }
-  return `Inter respondeu ${status}`
+  // Corpo vazio ou irreconhecível: a doc de status code explica o que significa.
+  return PORTATUS[status] ?? `Inter respondeu ${status}`
 }
 
 export function chavePix() {
