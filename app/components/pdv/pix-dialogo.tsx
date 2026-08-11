@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { Check, Copy, Loader2, QrCode } from "lucide-react"
+import { Check, Copy, Loader2, QrCode, RefreshCw } from "lucide-react"
 
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
@@ -23,6 +23,9 @@ type Props = {
   /** Preenchido quando o pagamento é confirmado e a venda é gravada. */
   concluida: { numero: number; pagoEm: string | null } | null
   motivoPendente: string | null
+  /** Força uma consulta agora. Não confirma nada: o servidor continua decidindo. */
+  onConferir: () => void
+  conferindo: boolean
   onCancelar: () => void
   onConcluir: () => void
 }
@@ -33,6 +36,8 @@ export function PixDialogo({
   erro,
   concluida,
   motivoPendente,
+  onConferir,
+  conferindo,
   onCancelar,
   onConcluir,
 }: Props) {
@@ -127,7 +132,25 @@ export function PixDialogo({
               ) : null}
             </div>
 
-            <div className="mt-4 flex items-center justify-center gap-2">
+            {cobranca.pixCopiaECola ? (
+              <div className="mt-3">
+                <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Copia e cola
+                </div>
+                {/* Mostrado como texto, não só no botão: o cliente às vezes pede o
+                    código, e não se dita um QR Code. */}
+                <div className="max-h-16 overflow-y-auto rounded-lg border border-border bg-muted/40 px-2 py-1.5">
+                  <code
+                    data-slot="pix-copia-e-cola"
+                    className="break-all font-mono text-[10px] leading-relaxed text-muted-foreground"
+                  >
+                    {cobranca.pixCopiaECola}
+                  </code>
+                </div>
+              </div>
+            ) : null}
+
+            <div className="mt-3 flex items-center justify-center gap-2">
               {cobranca.pixCopiaECola ? (
                 <Button
                   type="button"
@@ -183,7 +206,24 @@ export function PixDialogo({
         {!concluida && !criando ? (
           <>
             <Separator className="my-4" />
-            <div className="flex justify-end">
+            <div className="flex justify-between">
+              {/* Rede de segurança se a consulta automática travar. Não confirma
+                  pagamento: só pergunta ao banco agora, e o servidor decide. */}
+              <Button
+                type="button"
+                tabIndex={-1}
+                variant="ghost"
+                disabled={conferindo || !cobranca}
+                onClick={onConferir}
+                className="rounded-lg"
+              >
+                {conferindo ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="size-4" />
+                )}
+                Conferir agora
+              </Button>
               <Button
                 type="button"
                 tabIndex={-1}

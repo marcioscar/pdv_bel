@@ -307,8 +307,8 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                   <th scope="col" className="w-28 px-2 py-2.5 text-right font-semibold">
                     Total
                   </th>
-                  <th scope="col" className="w-40 px-2 py-2.5 text-left font-semibold">
-                    Cobrança
+                  <th scope="col" className="w-44 px-2 py-2.5 text-left font-semibold">
+                    Pagamento
                   </th>
                   <th scope="col" className="w-28 px-5 py-2.5 text-left font-semibold">
                     Situação
@@ -380,7 +380,29 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                           {moeda(venda.total)}
                         </td>
                         <td className="px-2 py-2.5">
-                          {venda.forma !== "prazo" ? (
+                          {/* Distingue pagamento CONFIRMADO pelo banco de pagamento
+                              apenas declarado no caixa. Sem isso, uma venda em Pix
+                              verificada ficava igual a uma só marcada como Pix. */}
+                          {venda.forma === "pix" ? (
+                            venda.pixPagoEm ? (
+                              <span className="flex items-center gap-1.5">
+                                <Badge className="text-[10px]">pago</Badge>
+                                <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
+                                  {new Date(venda.pixPagoEm).toLocaleTimeString("pt-BR", {
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                  })}
+                                </span>
+                              </span>
+                            ) : (
+                              <span
+                                className="text-xs text-muted-foreground"
+                                title="Registrada como Pix sem confirmação do banco"
+                              >
+                                não confirmado
+                              </span>
+                            )
+                          ) : venda.forma !== "prazo" ? (
                             <span className="text-xs text-muted-foreground">—</span>
                           ) : venda.cobranca ? (
                             <Badge

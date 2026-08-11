@@ -472,27 +472,48 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     )
   }, [fetcher.state, fetcher.data, avisar, fetcher, forma])
 
-  // Consulta o pagamento enquanto o QR está na tela.
+  /**
+   * Consulta o pagamento enquanto o QR está na tela.
+   *
+   * `setInterval` com ref, e não um `setTimeout` reagendado pelo próprio efeito:
+   * o reagendamento dependia de a identidade do objeto do fetcher mudar a cada
+   * resposta. Quando ela não muda, o efeito não re-executa e o polling morre
+   * depois da primeira consulta — foi o que aconteceu, e a venda paga nunca era
+   * registrada. O intervalo dispara independente de re-render.
+   */
+  const dadosDaConsulta = useRef({ fetcher: fetcherPix, itens: venda.itens, desconto: 0 })
+  dadosDaConsulta.current = {
+    fetcher: fetcherPix,
+    itens: venda.itens,
+    desconto: totais.desconto,
+  }
+
+  const conferirPix = useCallback((txid: string) => {
+    const { fetcher: f, itens, desconto } = dadosDaConsulta.current
+    if (f.state !== "idle") return
+
+    f.submit(
+      {
+        intencao: "pixConferir",
+        txid,
+        itens: itens.map((i) => ({ produtoId: i.produtoId, quantidade: i.quantidade })),
+        desconto,
+        forma: "pix",
+        recebido: null,
+      },
+      { method: "post", encType: "application/json" }
+    )
+  }, [])
+
+  const txidEmCobranca = pix?.cobranca?.txid ?? null
+  const pixConcluido = Boolean(pix?.concluida)
+
   useEffect(() => {
-    const cobranca = pix?.cobranca
-    if (!cobranca || pix?.concluida || fetcherPix.state !== "idle") return
+    if (!txidEmCobranca || pixConcluido) return
 
-    const id = setTimeout(() => {
-      fetcherPix.submit(
-        {
-          intencao: "pixConferir",
-          txid: cobranca.txid,
-          itens: venda.itens.map((i) => ({ produtoId: i.produtoId, quantidade: i.quantidade })),
-          desconto: totais.desconto,
-          forma: "pix",
-          recebido: null,
-        },
-        { method: "post", encType: "application/json" }
-      )
-    }, 5000)
-
-    return () => clearTimeout(id)
-  }, [pix?.cobranca, pix?.concluida, fetcherPix, venda.itens, totais.desconto])
+    const id = setInterval(() => conferirPix(txidEmCobranca), 5000)
+    return () => clearInterval(id)
+  }, [txidEmCobranca, pixConcluido, conferirPix])
 
   // Resposta da consulta: confirmou ou segue pendente.
   useEffect(() => {
@@ -996,6 +1017,10 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           erro={pix.erro}
           concluida={pix.concluida}
           motivoPendente={pix.motivoPendente}
+          onConferir={() => {
+            if (pix.cobranca) conferirPix(pix.cobranca.txid)
+          }}
+          conferindo={fetcherPix.state !== "idle"}
           onCancelar={() => {
             setPix(null)
             avisar("Pagamento por Pix cancelado — nada foi gravado", "erro")
