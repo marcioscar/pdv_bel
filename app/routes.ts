@@ -5,6 +5,7 @@ export default [
   route("estoque", "routes/estoque.tsx"),
   route("vendas", "routes/vendas.tsx"),
   route("vendas/:vendaId/boleto.pdf", "routes/boleto.tsx"),
+  route("saude", "routes/saude.tsx"),
   route("cep/:cep", "routes/cep.tsx"),
   route("webhooks/inter/cobranca", "routes/webhook.cobranca.tsx"),
   route("webhooks/inter/pix", "routes/webhook.pix.tsx"),
