@@ -136,55 +136,52 @@ function agente() {
 // Token
 // ---------------------------------------------------------------------------
 
-type TokenCache = { valor: string; escopos: string; expiraEm: number }
+
+type TokenCache = { valor: string; escopos: Set<EscopoInter>; expiraEm: number }
 
 let token: TokenCache | null = null
 let emVoo: Promise<string> | null = null
 
 /**
- * Reaproveita o token enquanto valer, com 60s de folga. Requisições simultâneas
- * compartilham a mesma promessa para não gastarem duas das 5 chamadas por minuto.
+ * Todos os escopos que o app usa. O token é pedido para o conjunto inteiro de uma
+ * só vez, de propósito: o endpoint de token aceita 5 chamadas por minuto, e pedir
+ * um token por combinação de escopo (venda, boleto, pix, webhook) estourava esse
+ * limite numa única operação.
  */
-export async function obterToken(escopos: EscopoInter[]): Promise<string> {
-  const chave = [...escopos].sort().join(" ")
-  const agora = Date.now()
+const ESCOPOS_DO_APP: EscopoInter[] = [
+  "boleto-cobranca.read",
+  "boleto-cobranca.write",
+  "cob.read",
+  "cob.write",
+  "pix.read",
+  "pix.write",
+  "webhook.read",
+  "webhook.write",
+]
 
-  if (token && token.escopos === chave && token.expiraEm > agora + 60_000) {
+/** Se algum escopo não estiver liberado, o pedido inteiro falha; aí pedimos só o necessário. */
+let usarConjuntoCompleto = true
+
+function cobre(cache: TokenCache, escopos: EscopoInter[]) {
+  return escopos.every((escopo) => cache.escopos.has(escopo))
+}
+
+export async function obterToken(escopos: EscopoInter[]): Promise<string> {
+  if (token && cobre(token, escopos) && token.expiraEm > Date.now() + 60_000) {
     return token.valor
   }
   if (emVoo) return emVoo
 
   emVoo = (async () => {
-    const { baseUrl, clientId, clientSecret } = lerConfig()
+    if (!usarConjuntoCompleto) return pedirToken(escopos)
 
-    const resposta = await fetch(`${baseUrl}/oauth/v2/token`, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: clientId,
-        client_secret: clientSecret,
-        grant_type: "client_credentials",
-        scope: chave,
-      }),
-      dispatcher: agente(),
-    } as RequestInit)
-
-    const corpo = await resposta.text()
-    if (!resposta.ok) {
-      throw new ErroInter(
-        resposta.status,
-        corpo,
-        `Falha ao obter token (${resposta.status})`
-      )
+    try {
+      return await pedirToken(ESCOPOS_DO_APP)
+    } catch (erro) {
+      if (!(erro instanceof ErroInter) || erro.status !== 401) throw erro
+      usarConjuntoCompleto = false
+      return pedirToken(escopos)
     }
-
-    const dados = JSON.parse(corpo) as { access_token: string; expires_in: number }
-    token = {
-      valor: dados.access_token,
-      escopos: chave,
-      expiraEm: Date.now() + dados.expires_in * 1000,
-    }
-    return token.valor
   })().finally(() => {
     emVoo = null
   })
@@ -192,10 +189,40 @@ export async function obterToken(escopos: EscopoInter[]): Promise<string> {
   return emVoo
 }
 
+async function pedirToken(escopos: EscopoInter[]): Promise<string> {
+  const { baseUrl, clientId, clientSecret } = lerConfig()
+
+  const resposta = await fetch(`${baseUrl}/oauth/v2/token`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      grant_type: "client_credentials",
+      scope: [...escopos].sort().join(" "),
+    }),
+    dispatcher: agente(),
+  } as RequestInit)
+
+  const corpo = await resposta.text()
+  if (!resposta.ok) {
+    throw new ErroInter(resposta.status, corpo, `Falha ao obter token (${resposta.status})`)
+  }
+
+  const dados = JSON.parse(corpo) as { access_token: string; expires_in: number }
+  token = {
+    valor: dados.access_token,
+    escopos: new Set(escopos),
+    expiraEm: Date.now() + dados.expires_in * 1000,
+  }
+  return token.valor
+}
+
 /** Só para os testes: descarta o token guardado. */
 export function esquecerToken() {
   token = null
 }
+
 
 // ---------------------------------------------------------------------------
 // Chamadas
@@ -295,9 +322,11 @@ export async function registrarWebhooks(baseUrlPublica: string) {
     throw new Error("A URL do webhook precisa ser HTTPS")
   }
 
+  // Cada API tem o seu escopo de webhook: a de Cobrança usa boleto-cobranca.*,
+  // e webhook.* pertence só à API Pix. Trocar os dois dá 401.
   const cobranca = await chamarInter("/cobranca/v3/cobrancas/webhook", {
     metodo: "PUT",
-    escopos: ["webhook.write"],
+    escopos: ["boleto-cobranca.write"],
     corpo: { webhookUrl: `${raiz}/webhooks/inter/cobranca` },
   })
 
@@ -312,7 +341,7 @@ export async function registrarWebhooks(baseUrlPublica: string) {
 
 export async function consultarWebhooks() {
   const [cobranca, pix] = await Promise.all([
-    chamarInter("/cobranca/v3/cobrancas/webhook", { escopos: ["webhook.read"] }).catch(
+    chamarInter("/cobranca/v3/cobrancas/webhook", { escopos: ["boleto-cobranca.read"] }).catch(
       (e) => ({ erro: String(e.message ?? e) })
     ),
     chamarInter(`/pix/v2/webhook/${chavePix()}`, { escopos: ["webhook.read"] }).catch(
