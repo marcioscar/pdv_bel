@@ -16,7 +16,12 @@ type CobRespostaInter = {
   valor?: { original?: string }
   pixCopiaECola?: string
   calendario?: { expiracao?: number; criacao?: string }
-  pix?: { endToEndId: string; valor: string; horario: string }[]
+  pix?: {
+    endToEndId: string
+    valor: string
+    horario: string
+    devolucoes?: unknown[]
+  }[]
 }
 
 export type PixImediato = {
@@ -29,6 +34,9 @@ export type PixImediato = {
   /** Preenchido quando o pagamento entra. */
   pagoEm: string | null
   endToEndId: string | null
+  /** O Inter devolve o valor como string; guardamos numérico para comparar. */
+  valorPago: number | null
+  devolucoes: number
 }
 
 async function paraSaida(dados: CobRespostaInter): Promise<PixImediato> {
@@ -46,6 +54,8 @@ async function paraSaida(dados: CobRespostaInter): Promise<PixImediato> {
     expiracaoSegundos: dados.calendario?.expiracao ?? 0,
     pagoEm: recebido?.horario ?? null,
     endToEndId: recebido?.endToEndId ?? null,
+    valorPago: recebido ? Number(recebido.valor) : null,
+    devolucoes: recebido?.devolucoes?.length ?? 0,
   }
 }
 
@@ -84,7 +94,39 @@ export async function consultarPixImediato(txid: string): Promise<PixImediato> {
   return paraSaida(resposta)
 }
 
-/** `CONCLUIDA` é o status do Pix pago. */
+export type ConfirmacaoPix =
+  | { pago: true; pix: PixImediato }
+  | { pago: false; motivo: string; pix: PixImediato }
+
+/**
+ * Decide se o pagamento pode liberar a venda.
+ *
+ * `CONCLUIDA` sozinho não basta. Confere também que o valor pago é o esperado e
+ * que não houve devolução — sem isso, uma cobrança de centavos poderia liberar
+ * uma venda de qualquer tamanho, ou mercadoria sairia depois de o dinheiro voltar.
+ */
+export function confirmarPagamento(pix: PixImediato, valorEsperado: number): ConfirmacaoPix {
+  if (pix.status !== "CONCLUIDA") {
+    return { pago: false, motivo: `Pagamento não confirmado (${pix.status})`, pix }
+  }
+  if (pix.devolucoes > 0) {
+    return { pago: false, motivo: "O Pix foi devolvido", pix }
+  }
+  if (pix.valorPago === null) {
+    return { pago: false, motivo: "Cobrança concluída sem Pix registrado", pix }
+  }
+  // Centavos: comparar em inteiros evita o erro de ponto flutuante.
+  if (Math.round(pix.valorPago * 100) !== Math.round(valorEsperado * 100)) {
+    return {
+      pago: false,
+      motivo: `Valor pago (${pix.valorPago}) diferente do total da venda (${valorEsperado})`,
+      pix,
+    }
+  }
+  return { pago: true, pix }
+}
+
+/** `CONCLUIDA` é o status do Pix pago. Use `confirmarPagamento` para liberar venda. */
 export function pixFoiPago(pix: PixImediato) {
   return pix.status === "CONCLUIDA"
 }
