@@ -1,6 +1,12 @@
-import { registrarWebhooks, consultarWebhooks } from "~/lib/inter.server"
+import { consultarWebhooks, registrarWebhookCobranca } from "~/lib/inter.server"
 
+/**
+ * Registra o webhook de Cobrança. O de Pix não é gerenciado aqui: a chave Pix
+ * desta conta é compartilhada com outro sistema da empresa, e o Inter aceita um
+ * destino por chave.
+ */
 const url = process.argv[2]
+
 if (!url) {
   console.log("uso: npx tsx registrar-webhooks.ts https://seu-dominio.com.br")
   console.log("\nwebhooks atuais:")
@@ -8,7 +14,7 @@ if (!url) {
   process.exit(0)
 }
 
-console.log("registrando webhooks para", url)
-await registrarWebhooks(url)
-console.log("\nconfirmando no Inter:")
+const r = await registrarWebhookCobranca(url)
+console.log("cobrança ->", r.webhookUrl, r.anterior ? `(antes: ${r.anterior})` : "(novo)")
+console.log("\nconfirmando:")
 console.log(JSON.stringify(await consultarWebhooks(), null, 2))

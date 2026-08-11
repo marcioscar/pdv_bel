@@ -354,40 +354,60 @@ export function chavePix() {
 // ---------------------------------------------------------------------------
 
 /**
- * Aponta os webhooks do Inter para a URL pública do app. Precisa ser HTTPS e
- * estar respondendo — o Inter valida a URL no momento do cadastro.
+ * Registra APENAS o webhook de Cobrança (boleto).
+ *
+ * O de Pix ficou de fora de propósito: o Inter aceita **um** destino por chave
+ * Pix, e a chave desta conta já é usada por outro sistema da empresa. Registrar
+ * aqui desviaria as notificações de pagamento dele — foi o que aconteceu uma vez,
+ * e por sorte nenhum Pix caiu na janela. O PDV confirma Pix consultando
+ * `GET /pix/v2/cob/{txid}`, que é o certo para o balcão: o cliente está na frente
+ * e a resposta precisa ser imediata.
+ *
+ * Antes de gravar, consulta o destino atual e **recusa** sobrescrever URL de
+ * terceiro. `sobrescrever: true` é a única forma de forçar, e deve ser decisão
+ * consciente de quem chama.
  */
-export async function registrarWebhooks(baseUrlPublica: string) {
+export async function registrarWebhookCobranca(
+  baseUrlPublica: string,
+  { sobrescrever = false } = {}
+) {
   const raiz = baseUrlPublica.replace(/\/$/, "")
   if (!raiz.startsWith("https://")) {
     throw new Error("A URL do webhook precisa ser HTTPS")
   }
+  const desejada = `${raiz}/webhooks/inter/cobranca`
 
-  // Cada API tem o seu escopo de webhook: a de Cobrança usa boleto-cobranca.*,
-  // e webhook.* pertence só à API Pix. Trocar os dois dá 401.
-  const cobranca = await chamarInter("/cobranca/v3/cobrancas/webhook", {
+  const atual = await chamarInter<{ webhookUrl?: string }>(
+    "/cobranca/v3/cobrancas/webhook",
+    { escopos: ["boleto-cobranca.read"] }
+  ).catch(() => null)
+
+  if (atual?.webhookUrl && atual.webhookUrl !== desejada && !sobrescrever) {
+    throw new Error(
+      `Já existe webhook de cobrança apontando para ${atual.webhookUrl}. ` +
+        "Se substituir é intencional, chame com { sobrescrever: true }."
+    )
+  }
+
+  await chamarInter("/cobranca/v3/cobrancas/webhook", {
     metodo: "PUT",
     escopos: ["boleto-cobranca.write"],
-    corpo: { webhookUrl: `${raiz}/webhooks/inter/cobranca` },
+    corpo: { webhookUrl: desejada },
   })
 
-  const pix = await chamarInter(`/pix/v2/webhook/${chavePix()}`, {
-    metodo: "PUT",
-    escopos: ["webhook.write"],
-    corpo: { webhookUrl: `${raiz}/webhooks/inter/pix` },
-  })
-
-  return { cobranca, pix }
+  return { webhookUrl: desejada, anterior: atual?.webhookUrl ?? null }
 }
 
+/** Só leitura: útil para conferir sem risco de sobrescrever nada. */
 export async function consultarWebhooks() {
-  const [cobranca, pix] = await Promise.all([
-    chamarInter("/cobranca/v3/cobrancas/webhook", { escopos: ["boleto-cobranca.read"] }).catch(
-      (e) => ({ erro: String(e.message ?? e) })
-    ),
-    chamarInter(`/pix/v2/webhook/${chavePix()}`, { escopos: ["webhook.read"] }).catch(
-      (e) => ({ erro: String(e.message ?? e) })
-    ),
-  ])
-  return { cobranca, pix }
+  const cobranca = await chamarInter("/cobranca/v3/cobrancas/webhook", {
+    escopos: ["boleto-cobranca.read"],
+  }).catch((e) => ({ erro: String(e?.message ?? e) }))
+
+  const pix = await chamarInter<Record<string, unknown>>(`/pix/v2/webhook/${chavePix()}`, {
+    escopos: ["webhook.read"],
+  }).catch((e) => ({ erro: String(e?.message ?? e) }))
+
+  // O de Pix aparece só para conferência — o PDV não o gerencia.
+  return { cobranca, pix, pixGerenciadoPeloPdv: false }
 }

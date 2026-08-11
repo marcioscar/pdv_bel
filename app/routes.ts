@@ -11,6 +11,5 @@ export default [
   route("saude", "routes/saude.tsx"),
   route("cep/:cep", "routes/cep.tsx"),
   route("webhooks/inter/cobranca", "routes/webhook.cobranca.tsx"),
-  route("webhooks/inter/pix", "routes/webhook.pix.tsx"),
   route("welcome", "routes/home.tsx"),
 ] satisfies RouteConfig

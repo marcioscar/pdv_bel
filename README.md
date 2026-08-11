@@ -80,15 +80,22 @@ ambiente do Inter a aplicação aponta.
 - Venda a prazo emite o "bolepix" (boleto com QR Pix embutido). A emissão é
   **assíncrona**: a resposta traz só o `codigoSolicitacao`, e a linha digitável
   chega na consulta ou pelo callback. O PDF vem em base64, não como binário.
-- Webhooks em `/webhooks/inter/cobranca` e `/webhooks/inter/pix`, idempotentes e
-  respondendo 200 até a corpo inválido — erro faria o Inter reenviar por horas.
+- Webhook de cobrança em `/webhooks/inter/cobranca`, idempotente e respondendo
+  200 até a corpo inválido — erro faria o Inter reenviar por horas.
+- **Não existe webhook de Pix.** O Inter aceita um destino por chave Pix, e a
+  chave desta conta é usada por outro sistema da empresa; registrar aqui desviaria
+  as notificações de pagamento dele. O PDV confirma Pix consultando
+  `GET /pix/v2/cob/{txid}`, que é o certo para o balcão de qualquer forma.
+  `registrarWebhookCobranca` consulta o destino atual e recusa sobrescrever URL
+  de terceiro sem `{ sobrescrever: true }`.
 
 ## Pendências
 
 - **Pix imediato no balcão**: criar e consultar a cobrança funcionam e estão
   testados, mas a transição para `CONCLUIDA` nunca foi observada (os simuladores
   do sandbox do Inter estavam indisponíveis). O fluxo não foi ligado ao caixa
-  porque liberaria mercadoria sobre uma confirmação não verificada.
+  porque liberaria mercadoria sobre uma confirmação não verificada. A confirmação
+  será por consulta, não por webhook — ver acima.
 - `CAIXA` e `OPERADOR` são constantes; viram sessão quando houver login.
 - Papéis de usuário: hoje todo operador pode tudo, inclusive cancelar venda e
   cadastrar outros usuários.
