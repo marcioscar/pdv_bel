@@ -1,0 +1,8 @@
+node_modules
+build
+.react-router
+.env
+.env.*
+certificados
+.git
+.DS_Store

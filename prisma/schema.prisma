@@ -1,0 +1,146 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model Produto {
+  id        String @id @default(auto()) @map("_id") @db.ObjectId
+  codigo    String
+  descricao String
+  unidade   String
+  preco     Float
+
+  @@map("produtos")
+}
+
+/// Cobrança emitida no Inter para uma venda a prazo ("bolepix": boleto com Pix).
+/// A emissão é assíncrona, então a linha digitável e o copia-e-cola chegam depois
+/// da criação — por isso ficam opcionais e a situação é acompanhada aqui.
+model Cobranca {
+  id                String   @id @default(auto()) @map("_id") @db.ObjectId
+  vendaId           String   @unique @db.ObjectId
+  vendaNumero       Int
+  codigoSolicitacao String   @unique
+  situacao          String
+  valor             Float
+  vencimento        DateTime
+  linhaDigitavel    String?
+  codigoBarras      String?
+  nossoNumero       String?
+  txid              String?
+  pixCopiaECola     String?
+  criadaEm          DateTime @default(now())
+  atualizadaEm      DateTime @updatedAt
+
+  @@index([vendaNumero])
+  @@map("cobrancas")
+}
+
+/// Livro-caixa do estoque: o saldo de um produto é a soma de `quantidade` dos
+/// seus movimentos, nunca um número guardado. Saída é negativa, entrada é
+/// positiva — assim o estorno é só um movimento de sinal oposto, e o histórico
+/// nunca é reescrito.
+model MovimentoEstoque {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  produtoId  String   @db.ObjectId
+  criadoEm   DateTime @default(now())
+  /// "venda" | "entrada" | "ajuste" | "estorno"
+  tipo       String
+  quantidade Float
+  operador   String
+  vendaId    String?  @db.ObjectId
+  vendaNumero Int?
+  observacao String?
+
+  @@index([produtoId])
+  @@index([criadoEm])
+  @@index([vendaId])
+  @@map("movimentos_estoque")
+}
+
+/// Os nomes dos campos espelham o objeto `pagador` da API de Cobrança do Inter
+/// (endereco, bairro, cidade, uf, cep, ddd, telefone, tipoPessoa) para o boleto
+/// ser montado sem camada de tradução. Boleto exige nome, CPF/CNPJ e endereço.
+model Cliente {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  nome        String
+  cpfCnpj     String   @unique
+  /// "FISICA" | "JURIDICA" — derivado do tamanho do documento
+  tipoPessoa  String
+  endereco    String
+  bairro      String
+  cidade      String
+  uf          String
+  cep         String
+  numero      String?
+  complemento String?
+  email       String?
+  ddd         String?
+  telefone    String?
+  criadoEm    DateTime @default(now())
+
+  @@index([nome])
+  @@map("clientes")
+}
+
+model Venda {
+  id       String     @id @default(auto()) @map("_id") @db.ObjectId
+  numero   Int        @unique
+  criadaEm DateTime   @default(now())
+  caixa    String
+  operador String
+  itens    VendaItem[]
+
+  /// Cliente é obrigatório na venda a prazo (o boleto precisa do pagador).
+  /// Nome e documento ficam copiados para o histórico não mudar se o cadastro mudar.
+  clienteId      String?   @db.ObjectId
+  clienteNome    String?
+  clienteCpfCnpj String?
+  /// Vencimento da venda a prazo.
+  vencimento     DateTime?
+  /// Pix imediato: a venda só nasce depois de o pagamento ser confirmado, então
+  /// o txid e o horário ficam guardados como comprovante.
+  pixTxid        String?   @unique
+  pixPagoEm      DateTime?
+  subtotal Float
+  desconto Float      @default(0)
+  total    Float
+  /// Um dos ids de FORMAS_PAGAMENTO em app/lib/pdv.ts — a lista canônica vive lá
+  /// para não haver duas fontes da verdade a manter em sincronia.
+  forma    String
+  recebido Float?
+  troco    Float?
+  /// Venda cancelada não é apagada: fica com a marca e os movimentos estornados.
+  canceladaEm  DateTime?
+  canceladaPor String?
+
+  @@index([criadaEm])
+  @@map("vendas")
+}
+
+/// Itens ficam embutidos na venda: são imutáveis depois do fechamento e nunca
+/// consultados fora dela. Preço e descrição são copiados para o histórico não
+/// mudar quando o cadastro do produto mudar.
+type VendaItem {
+  produtoId  String @db.ObjectId
+  codigo     String
+  descricao  String
+  unidade    String
+  preco      Float
+  quantidade Float
+  subtotal   Float
+}
+
+/// Sequência do número de venda. O incremento é atômico ($inc num único
+/// documento), então dois caixas simultâneos não pegam o mesmo número.
+model Contador {
+  id    String @id @default(auto()) @map("_id") @db.ObjectId
+  nome  String @unique
+  valor Int
+
+  @@map("contadores")
+}

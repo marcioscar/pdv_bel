@@ -1,0 +1,801 @@
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react"
+import { data, useFetcher } from "react-router"
+
+import type { Route } from "./+types/pdv"
+import { AjudaAtalhos } from "~/components/pdv/ajuda-atalhos"
+import { ClienteDialogo, type ClienteResumo } from "~/components/pdv/cliente-dialogo"
+import { CobrancaDialogo } from "~/components/pdv/cobranca-dialogo"
+import { BarraAtalhos, type Atalho } from "~/components/pdv/barra-atalhos"
+import { BarraComando, type ModoComando } from "~/components/pdv/barra-comando"
+import { ListaItens } from "~/components/pdv/lista-itens"
+import { PainelPagamento } from "~/components/pdv/painel-pagamento"
+import { Topo } from "~/components/pdv/topo"
+import { Kbd } from "~/components/ui/kbd"
+import { db } from "~/lib/db.server"
+import { criarCliente, lerCliente, listarClientes } from "~/lib/clientes.server"
+import { emitirParaVenda, type CobrancaDaVenda } from "~/lib/cobranca.server"
+import { saldosPorProduto } from "~/lib/estoque.server"
+import { lerPedido, registrarVenda } from "~/lib/vendas.server"
+import {
+  interpretarValor,
+  moeda,
+  quantidade as formatarQuantidade,
+} from "~/lib/moeda"
+import { useAtalhosDeSecao } from "~/lib/navegacao"
+import { useRelogio, useTema } from "~/lib/tema"
+import { cn } from "~/lib/utils"
+import {
+  buscarProdutos,
+  criarIndice,
+  DIAS_VENCIMENTO_PADRAO,
+  FORMAS_PAGAMENTO,
+  interpretarVencimento,
+  interpretarComando,
+  produtosPorCodigo,
+  reduzirVenda,
+  totaisDaVenda,
+  vendaVazia,
+  type FormaPagamento,
+  type ProdutoCatalogo,
+} from "~/lib/pdv"
+
+export function meta(_: Route.MetaArgs) {
+  return [
+    { title: "PDV — Vendas" },
+    { name: "description", content: "Frente de caixa operada pelo teclado." },
+  ]
+}
+
+const CAIXA = "01"
+const OPERADOR = "Marcio"
+
+export async function loader() {
+  // O catálogo inteiro vai para o cliente para a busca responder sem latência
+  // por tecla. Acima de ~5 mil produtos, trocar por busca no servidor.
+  const [cadastro, saldos, clientes] = await Promise.all([
+    db.produto.findMany({ orderBy: { descricao: "asc" } }),
+    saldosPorProduto(),
+    listarClientes(),
+  ])
+
+  // O estoque não é um campo do produto: é a soma dos movimentos.
+  const produtos = cadastro.map((produto) => ({
+    ...produto,
+    estoque: saldos.get(produto.id) ?? 0,
+  }))
+
+  return {
+    produtos,
+    clientes: clientes.map((c) => ({
+      id: c.id,
+      nome: c.nome,
+      cpfCnpj: c.cpfCnpj,
+      cidade: c.cidade,
+      uf: c.uf,
+    })),
+  }
+}
+
+export async function action({ request }: Route.ActionArgs) {
+  // Cadastro de cliente vem como formulário; a venda vem como JSON.
+  if (request.headers.get("content-type")?.includes("form")) {
+    const resultado = await criarCliente(lerCliente(await request.formData()))
+    if (!resultado.ok) {
+      return data({ ok: false as const, tipo: "cliente" as const, erro: resultado.erro }, { status: 400 })
+    }
+    const { id, nome, cpfCnpj, cidade, uf } = resultado.cliente
+    return {
+      ok: true as const,
+      tipo: "cliente" as const,
+      cliente: { id, nome, cpfCnpj, cidade, uf },
+    }
+  }
+
+  let bruto: unknown
+  try {
+    bruto = await request.json()
+  } catch {
+    return data(
+      { ok: false as const, tipo: "venda" as const, erro: "Requisição inválida" },
+      { status: 400 }
+    )
+  }
+
+  // Emissão do boleto da venda a prazo, disparada logo após a venda gravar.
+  if ((bruto as { intencao?: string })?.intencao === "cobranca") {
+    const vendaId = String((bruto as { vendaId?: string }).vendaId ?? "")
+    try {
+      return {
+        ok: true as const,
+        tipo: "cobranca" as const,
+        cobranca: await emitirParaVenda(vendaId),
+        vendaId,
+      }
+    } catch (erro) {
+      return data(
+        {
+          ok: false as const,
+          tipo: "cobranca" as const,
+          erro: erro instanceof Error ? erro.message : "Falha ao emitir a cobrança",
+        },
+        { status: 400 }
+      )
+    }
+  }
+
+  const pedido = lerPedido(bruto)
+  if (!pedido) {
+    return data(
+      { ok: false as const, tipo: "venda" as const, erro: "Dados da venda inválidos" },
+      { status: 400 }
+    )
+  }
+
+  const resultado = await registrarVenda({ ...pedido, caixa: CAIXA, operador: OPERADOR })
+  return resultado.ok
+    ? { ...resultado, tipo: "venda" as const }
+    : data({ ...resultado, tipo: "venda" as const }, { status: 400 })
+}
+
+// O catálogo não muda durante o expediente; revalidar depois de cada venda
+// reenviaria os mil e poucos produtos sem motivo. Recarregar a página atualiza.
+export function shouldRevalidate() {
+  return false
+}
+
+type Aviso = { texto: string; tipo: "erro" | "sucesso" } | null
+
+export default function Pdv({ loaderData }: Route.ComponentProps) {
+  const { produtos, clientes } = loaderData
+
+  const [venda, despachar] = useReducer(reduzirVenda, vendaVazia)
+  const [entrada, setEntrada] = useState("")
+  const [modo, setModo] = useState<ModoComando>("busca")
+  const [indiceResultado, setIndiceResultado] = useState(0)
+  const [forma, setForma] = useState<FormaPagamento>("dinheiro")
+  const [recebido, setRecebido] = useState<number | null>(null)
+  const [ajudaAberta, setAjudaAberta] = useState(false)
+  const [aviso, setAviso] = useState<Aviso>(null)
+  const [cliente, setCliente] = useState<ClienteResumo | null>(null)
+  const [clienteAberto, setClienteAberto] = useState(false)
+  const [clienteErro, setClienteErro] = useState<string | null>(null)
+  // Clientes criados nesta sessão: o loader não revalida (shouldRevalidate=false)
+  // para não reenviar o catálogo inteiro, então mantemos os novos aqui.
+  const [novosClientes, setNovosClientes] = useState<ClienteResumo[]>([])
+  const [vencimento, setVencimento] = useState<Date | null>(null)
+  const [comprovante, setComprovante] = useState<{
+    vendaNumero: number
+    vendaId: string
+    cobranca: CobrancaDaVenda | null
+    erro: string | null
+    emitindo: boolean
+  } | null>(null)
+  const { escuro, alternar: alternarTema } = useTema()
+  const relogio = useRelogio()
+  useAtalhosDeSecao(!ajudaAberta)
+
+  const campo = useRef<HTMLInputElement>(null)
+  const ultimaResposta = useRef<unknown>(null)
+
+  const fetcher = useFetcher<typeof action>()
+  const gravando = fetcher.state !== "idle"
+
+  const todosClientes = useMemo(
+    () => [...clientes, ...novosClientes].sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR")),
+    [clientes, novosClientes]
+  )
+
+  const indice = useMemo(() => criarIndice(produtos), [produtos])
+  const comando = useMemo(() => interpretarComando(entrada), [entrada])
+  const totais = useMemo(() => totaisDaVenda(venda), [venda])
+
+  const resultados = useMemo(() => {
+    if (modo !== "busca") return []
+    if (comando.tipo === "texto") return buscarProdutos(indice, comando.termo)
+    if (comando.tipo === "codigo") {
+      // 55 códigos do catálogo se repetem: quando o código é ambíguo o operador
+      // escolhe na lista em vez de a venda receber o produto errado.
+      const achados = produtosPorCodigo(produtos, comando.codigo)
+      return achados.length > 1 ? achados : []
+    }
+    return []
+  }, [modo, comando, indice, produtos])
+
+  const avisar = useCallback((texto: string, tipo: "erro" | "sucesso") => {
+    setAviso({ texto, tipo })
+  }, [])
+
+  useEffect(() => {
+    if (!aviso) return
+    const id = setTimeout(() => setAviso(null), 4000)
+    return () => clearTimeout(id)
+  }, [aviso])
+
+  useEffect(() => setIndiceResultado(0), [entrada])
+
+  // O campo de comando é o único ponto de foco da tela.
+  const focar = useCallback(() => campo.current?.focus(), [])
+
+  useEffect(() => {
+    if (!ajudaAberta && !clienteAberto && !comprovante) focar()
+  }, [ajudaAberta, clienteAberto, comprovante, modo, focar])
+
+  // Clicar num botão de atalho tira o foco do campo; devolvemos no frame seguinte
+  // para que a próxima tecla continue caindo na barra de comando.
+  const devolverFoco = useCallback(() => {
+    if (ajudaAberta || clienteAberto) return
+    requestAnimationFrame(focar)
+  }, [ajudaAberta, clienteAberto, focar])
+
+  const voltarParaBusca = useCallback(() => {
+    setModo("busca")
+    setEntrada("")
+  }, [])
+
+  const adicionar = useCallback(
+    (produto: ProdutoCatalogo, quantidade: number) => {
+      despachar({ tipo: "adicionar", produto, quantidade })
+      setEntrada("")
+
+      // O item entra de qualquer jeito: com o catálogo todo em estoque 0, impedir
+      // a venda travaria o caixa. O aviso e a marca na linha sinalizam a falta.
+      const jaNoCarrinho =
+        venda.itens.find((item) => item.produtoId === produto.id)?.quantidade ?? 0
+      const resultante = jaNoCarrinho + quantidade
+      const excede = resultante > produto.estoque
+
+      avisar(
+        excede
+          ? `${produto.descricao} · ${formatarQuantidade(resultante)} ${produto.unidade} — acima do estoque (${formatarQuantidade(produto.estoque)})`
+          : `${produto.descricao} · ${formatarQuantidade(quantidade)} ${produto.unidade}`,
+        excede ? "erro" : "sucesso"
+      )
+    },
+    [avisar, venda.itens]
+  )
+
+  const concluir = useCallback(
+    (valorRecebido: number | null, vencimentoEscolhido: Date | null = null) => {
+      if (gravando) return
+
+      fetcher.submit(
+        {
+          // Só o que e quanto: o servidor busca os preços e recalcula os totais.
+          itens: venda.itens.map((item) => ({
+            produtoId: item.produtoId,
+            quantidade: item.quantidade,
+          })),
+          desconto: totais.desconto,
+          forma,
+          recebido: valorRecebido,
+          clienteId: cliente?.id ?? null,
+          vencimento: vencimentoEscolhido ? vencimentoEscolhido.toISOString() : null,
+        },
+        { method: "post", encType: "application/json" }
+      )
+    },
+    [cliente, fetcher, forma, gravando, totais.desconto, venda.itens]
+  )
+
+  // O carrinho só é limpo depois de o servidor confirmar a gravação.
+  useEffect(() => {
+    if (fetcher.state !== "idle" || !fetcher.data) return
+    if (ultimaResposta.current === fetcher.data) return
+    ultimaResposta.current = fetcher.data
+    const resposta = fetcher.data
+
+    if (resposta.tipo === "cliente") {
+      if (!resposta.ok) {
+        setClienteErro(resposta.erro)
+        return
+      }
+      setClienteErro(null)
+      setNovosClientes((atuais) => [...atuais, resposta.cliente])
+      setCliente(resposta.cliente)
+      setClienteAberto(false)
+      avisar(`${resposta.cliente.nome} cadastrado e vinculado à venda`, "sucesso")
+      return
+    }
+
+    // Antes da checagem genérica: a falha da emissão pertence ao comprovante,
+    // não à barra de status — a venda já está gravada.
+    if (resposta.tipo === "cobranca") {
+      const atualizacao = resposta.ok
+        ? { cobranca: resposta.cobranca, erro: null, emitindo: false }
+        : { cobranca: null, erro: resposta.erro, emitindo: false }
+
+      setComprovante((atual) => (atual === null ? null : { ...atual, ...atualizacao }))
+      return
+    }
+
+    if (!resposta.ok) {
+      avisar(resposta.erro, "erro")
+      return
+    }
+
+    const { numero, troco } = resposta
+
+    // Venda a prazo: abre o comprovante e emite o boleto em seguida.
+    if (forma === "prazo") {
+      setComprovante({
+        vendaNumero: numero,
+        vendaId: resposta.vendaId,
+        cobranca: null,
+        erro: null,
+        emitindo: true,
+      })
+      fetcher.submit(
+        { intencao: "cobranca", vendaId: resposta.vendaId },
+        { method: "post", encType: "application/json" }
+      )
+    }
+
+    despachar({ tipo: "limpar" })
+    setRecebido(null)
+    setModo("busca")
+    setEntrada("")
+    setCliente(null)
+    setVencimento(null)
+    avisar(
+      troco > 0
+        ? `Venda #${numero} registrada · troco ${moeda(troco)}`
+        : `Venda #${numero} registrada`,
+      "sucesso"
+    )
+  }, [fetcher.state, fetcher.data, avisar, fetcher, forma])
+
+  const iniciarPagamento = useCallback(() => {
+    if (venda.itens.length === 0) {
+      avisar("Nenhum item na venda", "erro")
+      return
+    }
+    // Dinheiro precisa do valor recebido para calcular troco; o resto fecha direto.
+    if (forma === "dinheiro") {
+      setModo("recebido")
+      setEntrada("")
+      return
+    }
+    // A prazo vira boleto: precisa do pagador e de uma data de vencimento.
+    if (forma === "prazo") {
+      if (!cliente) {
+        setClienteAberto(true)
+        avisar("Venda a prazo exige cliente", "erro")
+        return
+      }
+      setModo("vencimento")
+      setEntrada("")
+      return
+    }
+    concluir(null)
+  }, [avisar, cliente, concluir, forma, venda.itens.length])
+
+  const confirmar = useCallback(() => {
+    if (modo === "busca") {
+      if (comando.tipo === "vazio") return
+
+      if (comando.tipo === "codigo") {
+        const achados = produtosPorCodigo(produtos, comando.codigo)
+        if (achados.length === 0) {
+          // O leitor de código de barras termina com Enter: se o texto ficasse,
+          // a próxima leitura concatenaria no código que falhou.
+          setEntrada("")
+          avisar(`Código ${comando.codigo} não encontrado`, "erro")
+          return
+        }
+        const escolhido =
+          achados.length === 1 ? achados[0] : achados[indiceResultado]
+        if (escolhido) adicionar(escolhido, comando.quantidade)
+        return
+      }
+
+      const escolhido = resultados[indiceResultado]
+      if (!escolhido) {
+        avisar(`Nada encontrado para “${comando.termo}”`, "erro")
+        return
+      }
+      adicionar(escolhido, comando.quantidade)
+      return
+    }
+
+    // O vencimento aceita dias ou data, então não passa por interpretarValor.
+    if (modo !== "vencimento") {
+      const valorTeste = interpretarValor(entrada)
+      if (valorTeste === null) {
+        avisar("Valor inválido", "erro")
+        return
+      }
+    }
+    const valor = interpretarValor(entrada) ?? 0
+
+    if (modo === "quantidade") {
+      despachar({ tipo: "definirQuantidade", indice: venda.indiceAtivo, quantidade: valor })
+      voltarParaBusca()
+      return
+    }
+
+    if (modo === "desconto") {
+      if (valor > totais.subtotal) {
+        avisar("Desconto maior que o subtotal", "erro")
+        return
+      }
+      despachar({ tipo: "definirDesconto", valor })
+      voltarParaBusca()
+      return
+    }
+
+    if (modo === "vencimento") {
+      // Enter vazio usa o padrão de 30 dias.
+      const data =
+        entrada.trim() === ""
+          ? interpretarVencimento(String(DIAS_VENCIMENTO_PADRAO))
+          : interpretarVencimento(entrada)
+
+      if (!data) {
+        avisar("Vencimento inválido — use dias (30) ou data (15/09/2026)", "erro")
+        return
+      }
+      setVencimento(data)
+      concluir(null, data)
+      return
+    }
+
+    // modo === "recebido"
+    setRecebido(valor)
+    if (valor < totais.total) {
+      avisar(`Faltam ${moeda(totais.total - valor)}`, "erro")
+      return
+    }
+    concluir(valor)
+  }, [
+    adicionar,
+    avisar,
+    comando,
+    concluir,
+    entrada,
+    indiceResultado,
+    modo,
+    produtos,
+    resultados,
+    totais.subtotal,
+    totais.total,
+    venda.indiceAtivo,
+    voltarParaBusca,
+  ])
+
+  const pedirQuantidade = useCallback(() => {
+    if (venda.indiceAtivo < 0) {
+      avisar("Selecione um item com ↑ ↓", "erro")
+      return
+    }
+    setModo("quantidade")
+    setEntrada("")
+  }, [avisar, venda.indiceAtivo])
+
+  const pedirDesconto = useCallback(() => {
+    if (venda.itens.length === 0) {
+      avisar("Nenhum item na venda", "erro")
+      return
+    }
+    setModo("desconto")
+    setEntrada("")
+  }, [avisar, venda.itens.length])
+
+  const cancelarVenda = useCallback(() => {
+    if (venda.itens.length === 0) return
+    despachar({ tipo: "limpar" })
+    setRecebido(null)
+    voltarParaBusca()
+    avisar("Venda cancelada", "erro")
+  }, [avisar, venda.itens.length, voltarParaBusca])
+
+  // -------------------------------------------------------------------------
+  // Teclado global — tudo passa por aqui para a lógica ficar num só lugar.
+  // -------------------------------------------------------------------------
+  useEffect(() => {
+    function aoTeclar(evento: KeyboardEvent) {
+      const { key, altKey, ctrlKey, shiftKey } = evento
+
+      if (comprovante) {
+        if (key === "Escape" || key === "Enter") {
+          evento.preventDefault()
+          // Não deixa fechar no meio da emissão, para o operador não perder o código.
+          if (!comprovante.emitindo) setComprovante(null)
+        }
+        return
+      }
+
+      // O diálogo de cliente tem o próprio handler em captura; aqui só saímos.
+      if (clienteAberto) return
+
+      if (ajudaAberta) {
+        if (key === "Escape" || key === "F1" || key === "?") {
+          evento.preventDefault()
+          setAjudaAberta(false)
+        }
+        return
+      }
+
+      // Shift+F<n> escolhe a forma de pagamento direto. A lista de teclas é
+      // derivada de FORMAS_PAGAMENTO para não dessincronizar ao incluir formas.
+      if (shiftKey && !ctrlKey && !altKey) {
+        const posicao = FORMAS_PAGAMENTO.findIndex((_, i) => key === `F${i + 1}`)
+        if (posicao >= 0) {
+          evento.preventDefault()
+          setForma(FORMAS_PAGAMENTO[posicao].id)
+          return
+        }
+      }
+
+      if (ctrlKey && !shiftKey && !altKey && key === "F6") {
+        evento.preventDefault()
+        alternarTema()
+        return
+      }
+
+      // A operação da venda é toda sem modificador. Sair aqui evita que um
+      // Ctrl+F10 do navegador finalize venda, ou que Ctrl+F1..F3 (navegação,
+      // tratada em ~/lib/navegacao) também caia nos atalhos abaixo.
+      if (ctrlKey || shiftKey || altKey || evento.metaKey) return
+
+      switch (key) {
+        case "F1":
+          evento.preventDefault()
+          setAjudaAberta(true)
+          return
+        case "F2":
+          evento.preventDefault()
+          voltarParaBusca()
+          return
+        case "F3":
+          evento.preventDefault()
+          pedirDesconto()
+          return
+        case "F4":
+          evento.preventDefault()
+          despachar({ tipo: "remover" })
+          return
+        case "F5":
+          evento.preventDefault()
+          pedirQuantidade()
+          return
+        case "F6":
+          evento.preventDefault()
+          setClienteErro(null)
+          setClienteAberto(true)
+          return
+        case "F8":
+          evento.preventDefault()
+          setForma((atual) => {
+            const i = FORMAS_PAGAMENTO.findIndex((f) => f.id === atual)
+            return FORMAS_PAGAMENTO[(i + 1) % FORMAS_PAGAMENTO.length].id
+          })
+          return
+        case "F9":
+          evento.preventDefault()
+          cancelarVenda()
+          return
+        case "F10":
+          evento.preventDefault()
+          if (modo === "recebido") confirmar()
+          else iniciarPagamento()
+          return
+        case "Enter":
+          evento.preventDefault()
+          confirmar()
+          return
+        case "Escape":
+          evento.preventDefault()
+          if (modo !== "busca") {
+            setRecebido(null)
+            voltarParaBusca()
+          } else {
+            setEntrada("")
+          }
+          return
+      }
+
+      if (modo !== "busca") return
+
+      if (key === "ArrowDown" || key === "ArrowUp") {
+        evento.preventDefault()
+        const delta = key === "ArrowDown" ? 1 : -1
+
+        if (resultados.length > 0) {
+          setIndiceResultado((atual) =>
+            Math.min(Math.max(atual + delta, 0), resultados.length - 1)
+          )
+        } else if (entrada === "") {
+          despachar({ tipo: "mover", delta })
+        }
+        return
+      }
+
+      // As teclas de edição rápida só valem com a busca vazia, senão atropelam
+      // a digitação de uma descrição.
+      if (entrada !== "") return
+
+      if (key === "+" || key === "-") {
+        evento.preventDefault()
+        despachar({ tipo: "ajustarQuantidade", delta: key === "+" ? 1 : -1 })
+        return
+      }
+
+      if (key === "Delete") {
+        evento.preventDefault()
+        despachar({ tipo: "remover" })
+      }
+    }
+
+    window.addEventListener("keydown", aoTeclar)
+    return () => window.removeEventListener("keydown", aoTeclar)
+  }, [
+    ajudaAberta,
+    clienteAberto,
+    comprovante,
+    alternarTema,
+    cancelarVenda,
+    confirmar,
+    entrada,
+    iniciarPagamento,
+    modo,
+    pedirDesconto,
+    pedirQuantidade,
+    resultados.length,
+    voltarParaBusca,
+  ])
+
+  const atalhos: Atalho[] = [
+    { tecla: "F1", rotulo: "Ajuda", acao: () => setAjudaAberta(true) },
+    {
+      tecla: "F3",
+      rotulo: "Desconto",
+      acao: pedirDesconto,
+      desabilitado: venda.itens.length === 0,
+    },
+    {
+      tecla: "F4",
+      rotulo: "Remover item",
+      acao: () => despachar({ tipo: "remover" }),
+      desabilitado: venda.indiceAtivo < 0,
+    },
+    {
+      tecla: "F5",
+      rotulo: "Alterar qtd",
+      acao: pedirQuantidade,
+      desabilitado: venda.indiceAtivo < 0,
+    },
+    {
+      tecla: "F6",
+      rotulo: cliente ? "Trocar cliente" : "Vincular cliente",
+      acao: () => {
+        setClienteErro(null)
+        setClienteAberto(true)
+      },
+    },
+    {
+      tecla: "F9",
+      rotulo: "Cancelar venda",
+      acao: cancelarVenda,
+      destrutivo: true,
+      desabilitado: venda.itens.length === 0,
+    },
+  ]
+
+  return (
+    <main className="relative flex h-screen flex-col overflow-hidden bg-card text-foreground">
+      <Topo
+        caixa={CAIXA}
+        operador={OPERADOR}
+        relogio={relogio}
+        escuro={escuro}
+        onAlternarTema={alternarTema}
+      >
+        <span>{produtos.length.toLocaleString("pt-BR")} produtos</span>
+      </Topo>
+
+      <div className="flex min-h-0 flex-1">
+        <section className="flex min-w-0 flex-1 flex-col">
+          <BarraComando
+            ref={campo}
+            modo={modo}
+            valor={entrada}
+            onValorChange={setEntrada}
+            onBlur={devolverFoco}
+            resultados={resultados}
+            indiceResultado={indiceResultado}
+            onEscolherResultado={(i) => {
+              setIndiceResultado(i)
+              confirmar()
+            }}
+            multiplicador={comando.tipo === "vazio" ? 1 : comando.quantidade}
+          />
+          <ListaItens
+            itens={venda.itens}
+            indiceAtivo={venda.indiceAtivo}
+            onSelecionar={(i) => despachar({ tipo: "selecionar", indice: i })}
+          />
+
+          <BarraAtalhos atalhos={atalhos} />
+
+          <div className="flex items-center justify-between border-t border-border px-5 py-2.5 text-xs">
+            <span className="text-muted-foreground">
+              <b className="font-semibold text-foreground">{venda.itens.length}</b>{" "}
+              {venda.itens.length === 1 ? "item" : "itens"} · use{" "}
+              <Kbd>↑</Kbd> <Kbd>↓</Kbd> para navegar e <Kbd>+</Kbd> <Kbd>−</Kbd> para a
+              quantidade
+            </span>
+            {aviso ? (
+              <span
+                className={cn(
+                  "font-medium",
+                  aviso.tipo === "erro" ? "text-destructive" : "text-foreground"
+                )}
+                role="status"
+              >
+                {aviso.texto}
+              </span>
+            ) : null}
+          </div>
+        </section>
+
+        <PainelPagamento
+          subtotal={totais.subtotal}
+          desconto={totais.desconto}
+          total={totais.total}
+          volumes={totais.volumes}
+          forma={forma}
+          onFormaChange={setForma}
+          // No modo recebido o troco acompanha a digitação, sem esperar o Enter.
+          recebido={modo === "recebido" ? interpretarValor(entrada) : recebido}
+          onFinalizar={() => (modo === "recebido" ? confirmar() : iniciarPagamento())}
+          finalizando={modo === "recebido"}
+          gravando={gravando}
+          cliente={cliente}
+          // O vencimento acompanha a digitação, como o troco.
+          vencimento={
+            modo === "vencimento"
+              ? (interpretarVencimento(entrada) ?? vencimento)
+              : vencimento
+          }
+        />
+      </div>
+
+      {clienteAberto ? (
+        <ClienteDialogo
+          clientes={todosClientes}
+          selecionado={cliente}
+          gravando={gravando}
+          erro={clienteErro}
+          onEscolher={(escolhido) => {
+            setCliente(escolhido)
+            setClienteAberto(false)
+            avisar(`Cliente ${escolhido.nome} vinculado`, "sucesso")
+          }}
+          onDesvincular={() => {
+            setCliente(null)
+            setClienteAberto(false)
+            avisar("Cliente desvinculado", "erro")
+          }}
+          onCriar={(dados) => {
+            setClienteErro(null)
+            fetcher.submit(dados, { method: "post" })
+          }}
+          onFechar={() => setClienteAberto(false)}
+        />
+      ) : null}
+
+      {comprovante ? (
+        <CobrancaDialogo
+          vendaNumero={comprovante.vendaNumero}
+          vendaId={comprovante.vendaId}
+          cobranca={comprovante.cobranca}
+          erro={comprovante.erro}
+          emitindo={comprovante.emitindo}
+          onFechar={() => setComprovante(null)}
+        />
+      ) : null}
+
+      {ajudaAberta ? <AjudaAtalhos onFechar={() => setAjudaAberta(false)} /> : null}
+    </main>
+  )
+}

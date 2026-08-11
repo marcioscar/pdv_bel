@@ -1,0 +1,278 @@
+import { arredondar } from "~/lib/moeda"
+
+export type ProdutoCatalogo = {
+  id: string
+  codigo: string
+  descricao: string
+  unidade: string
+  preco: number
+  estoque: number
+}
+
+export type ItemVenda = {
+  produtoId: string
+  codigo: string
+  descricao: string
+  unidade: string
+  precoUnitario: number
+  quantidade: number
+  /** Estoque no momento em que o item entrou, só para sinalizar falta na tela. */
+  estoque: number
+}
+
+export type EstadoVenda = {
+  itens: ItemVenda[]
+  /** -1 quando o carrinho está vazio. */
+  indiceAtivo: number
+  desconto: number
+}
+
+export const vendaVazia: EstadoVenda = { itens: [], indiceAtivo: -1, desconto: 0 }
+
+export type AcaoVenda =
+  | { tipo: "adicionar"; produto: ProdutoCatalogo; quantidade: number }
+  | { tipo: "remover"; indice?: number }
+  | { tipo: "definirQuantidade"; indice: number; quantidade: number }
+  | { tipo: "ajustarQuantidade"; delta: number }
+  | { tipo: "mover"; delta: number }
+  | { tipo: "selecionar"; indice: number }
+  | { tipo: "definirDesconto"; valor: number }
+  | { tipo: "limpar" }
+
+function limitar(indice: number, total: number) {
+  if (total === 0) return -1
+  return Math.min(Math.max(indice, 0), total - 1)
+}
+
+export function reduzirVenda(estado: EstadoVenda, acao: AcaoVenda): EstadoVenda {
+  switch (acao.tipo) {
+    case "adicionar": {
+      const { produto, quantidade } = acao
+      const existente = estado.itens.findIndex((item) => item.produtoId === produto.id)
+
+      if (existente >= 0) {
+        const itens = estado.itens.map((item, i) =>
+          i === existente
+            ? { ...item, quantidade: arredondar(item.quantidade + quantidade) }
+            : item
+        )
+        return { ...estado, itens, indiceAtivo: existente }
+      }
+
+      const itens = [
+        ...estado.itens,
+        {
+          produtoId: produto.id,
+          codigo: produto.codigo,
+          descricao: produto.descricao,
+          unidade: produto.unidade,
+          precoUnitario: produto.preco,
+          quantidade,
+          estoque: produto.estoque,
+        },
+      ]
+      return { ...estado, itens, indiceAtivo: itens.length - 1 }
+    }
+
+    case "remover": {
+      const alvo = acao.indice ?? estado.indiceAtivo
+      if (alvo < 0 || alvo >= estado.itens.length) return estado
+
+      const itens = estado.itens.filter((_, i) => i !== alvo)
+      return { ...estado, itens, indiceAtivo: limitar(alvo, itens.length) }
+    }
+
+    case "definirQuantidade": {
+      const { indice, quantidade } = acao
+      if (indice < 0 || indice >= estado.itens.length) return estado
+      if (quantidade <= 0) return reduzirVenda(estado, { tipo: "remover", indice })
+
+      const itens = estado.itens.map((item, i) =>
+        i === indice ? { ...item, quantidade: arredondar(quantidade) } : item
+      )
+      return { ...estado, itens }
+    }
+
+    case "ajustarQuantidade": {
+      const indice = estado.indiceAtivo
+      if (indice < 0) return estado
+
+      const atual = estado.itens[indice].quantidade
+      return reduzirVenda(estado, {
+        tipo: "definirQuantidade",
+        indice,
+        quantidade: atual + acao.delta,
+      })
+    }
+
+    case "mover":
+      if (estado.itens.length === 0) return estado
+      return {
+        ...estado,
+        indiceAtivo: limitar(estado.indiceAtivo + acao.delta, estado.itens.length),
+      }
+
+    case "selecionar":
+      return { ...estado, indiceAtivo: limitar(acao.indice, estado.itens.length) }
+
+    case "definirDesconto":
+      return { ...estado, desconto: Math.max(0, arredondar(acao.valor)) }
+
+    case "limpar":
+      return vendaVazia
+  }
+}
+
+export function totaisDaVenda(estado: EstadoVenda) {
+  const subtotal = arredondar(
+    estado.itens.reduce((acc, item) => acc + item.precoUnitario * item.quantidade, 0)
+  )
+  // Um desconto maior que o subtotal nunca vira total negativo.
+  const desconto = Math.min(estado.desconto, subtotal)
+  const volumes = arredondar(estado.itens.reduce((acc, item) => acc + item.quantidade, 0))
+
+  return { subtotal, desconto, total: arredondar(subtotal - desconto), volumes }
+}
+
+// ---------------------------------------------------------------------------
+// Interpretação da barra de comando
+// ---------------------------------------------------------------------------
+
+export type Comando =
+  | { tipo: "vazio" }
+  | { tipo: "codigo"; codigo: string; quantidade: number }
+  | { tipo: "texto"; termo: string; quantidade: number }
+
+/** "3*141", "3x141", "2 X papel" — quantidade, separador, alvo. */
+const MULTIPLICADOR = /^(\d+(?:[.,]\d+)?)\s*[*xX]\s*(.+)$/
+const SOMENTE_DIGITOS = /^\d+$/
+
+export function interpretarComando(entrada: string): Comando {
+  const bruto = entrada.trim()
+  if (!bruto) return { tipo: "vazio" }
+
+  const multiplicado = MULTIPLICADOR.exec(bruto)
+  if (multiplicado) {
+    const quantidade = Number(multiplicado[1].replace(",", "."))
+    const alvo = multiplicado[2].trim()
+
+    if (quantidade > 0 && alvo) {
+      return SOMENTE_DIGITOS.test(alvo)
+        ? { tipo: "codigo", codigo: alvo, quantidade }
+        : { tipo: "texto", termo: alvo, quantidade }
+    }
+  }
+
+  if (SOMENTE_DIGITOS.test(bruto)) {
+    return { tipo: "codigo", codigo: bruto, quantidade: 1 }
+  }
+
+  return { tipo: "texto", termo: bruto, quantidade: 1 }
+}
+
+// ---------------------------------------------------------------------------
+// Busca no catálogo
+// ---------------------------------------------------------------------------
+
+export type EntradaIndice = { produto: ProdutoCatalogo; chave: string }
+
+function normalizar(texto: string) {
+  return texto
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+}
+
+/**
+ * O catálogo inteiro vem no loader, então a busca roda no cliente e responde
+ * sem latência a cada tecla. Normalizar uma vez evita refazer isso por keystroke.
+ */
+export function criarIndice(catalogo: ProdutoCatalogo[]): EntradaIndice[] {
+  return catalogo.map((produto) => ({
+    produto,
+    chave: normalizar(`${produto.codigo} ${produto.descricao} ${produto.unidade}`),
+  }))
+}
+
+export function buscarProdutos(
+  indice: EntradaIndice[],
+  termo: string,
+  limite = 7
+): ProdutoCatalogo[] {
+  const termos = normalizar(termo).split(/\s+/).filter(Boolean)
+  if (termos.length === 0) return []
+
+  const encontrados: { produto: ProdutoCatalogo; peso: number }[] = []
+
+  for (const entrada of indice) {
+    if (!termos.every((t) => entrada.chave.includes(t))) continue
+    // Quem começa com o termo digitado aparece primeiro.
+    encontrados.push({
+      produto: entrada.produto,
+      peso: entrada.chave.startsWith(termos[0]) ? 0 : 1,
+    })
+  }
+
+  return encontrados
+    .sort((a, b) => a.peso - b.peso || a.produto.descricao.length - b.produto.descricao.length)
+    .slice(0, limite)
+    .map((e) => e.produto)
+}
+
+export function produtosPorCodigo(catalogo: ProdutoCatalogo[], codigo: string) {
+  return catalogo.filter((produto) => produto.codigo === codigo)
+}
+
+// ---------------------------------------------------------------------------
+// Pagamento
+// ---------------------------------------------------------------------------
+
+export const FORMAS_PAGAMENTO = [
+  { id: "dinheiro", rotulo: "Dinheiro" },
+  { id: "credito", rotulo: "Crédito" },
+  { id: "debito", rotulo: "Débito" },
+  { id: "pix", rotulo: "Pix" },
+  { id: "prazo", rotulo: "A prazo" },
+] as const
+
+export type FormaPagamento = (typeof FORMAS_PAGAMENTO)[number]["id"]
+
+/** Venda a prazo vira boleto: exige cliente com endereço e respeita o mínimo do Inter. */
+export const VALOR_MINIMO_BOLETO = 2.5
+export const DIAS_VENCIMENTO_PADRAO = 30
+
+/**
+ * Aceita o que o operador digita no vencimento: um número de dias ("30") ou uma
+ * data ("15/09/2026"). Devolve o dia, ao meio-dia, para fuso não empurrar a data.
+ */
+export function interpretarVencimento(entrada: string, hoje = new Date()): Date | null {
+  const bruto = entrada.trim()
+  if (!bruto) return null
+
+  if (/^\d{1,3}$/.test(bruto)) {
+    const dias = Number(bruto)
+    if (dias < 1 || dias > 999) return null
+    const data = new Date(hoje)
+    data.setDate(data.getDate() + dias)
+    data.setHours(12, 0, 0, 0)
+    return data
+  }
+
+  const comBarras = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/.exec(bruto)
+  if (!comBarras) return null
+
+  const [, dia, mes, anoBruto] = comBarras
+  const ano = anoBruto.length === 2 ? 2000 + Number(anoBruto) : Number(anoBruto)
+  const data = new Date(ano, Number(mes) - 1, Number(dia), 12, 0, 0, 0)
+
+  // Rejeita 31/02: o Date rola para março e o dia deixa de bater.
+  if (
+    data.getFullYear() !== ano ||
+    data.getMonth() !== Number(mes) - 1 ||
+    data.getDate() !== Number(dia)
+  ) {
+    return null
+  }
+
+  return data
+}
