@@ -13,6 +13,9 @@ export type PedidoVenda = {
   clienteId: string | null
   /** ISO date; só usado na venda a prazo. */
   vencimento: string | null
+  /** Pix imediato: comprovante do pagamento já confirmado. */
+  pixTxid?: string | null
+  pixPagoEm?: Date | null
   caixa: string
   operador: string
 }
@@ -83,24 +86,31 @@ export function lerPedido(bruto: unknown): PedidoVenda | null {
   }
 }
 
-/**
- * Os preços vêm do banco, nunca do cliente: o payload só diz *o que* e *quanto*.
- * Assim um total adulterado no navegador não chega a ser gravado.
- */
-export async function registrarVenda(pedido: PedidoVenda): Promise<ResultadoVenda> {
-  if (pedido.itens.length === 0) return { ok: false, erro: "Venda sem itens" }
+export type Precificacao =
+  | { ok: true; itens: ItemGravado[]; subtotal: number; total: number }
+  | { ok: false; erro: string }
 
-  if (!FORMAS_PAGAMENTO.some((f) => f.id === pedido.forma)) {
-    return { ok: false, erro: "Forma de pagamento inválida" }
-  }
+/**
+ * Monta os itens com os preços do BANCO e calcula o total.
+ *
+ * O cliente só informa o que e quanto; preço e total nunca vêm dele. Extraído
+ * para o fluxo do Pix usar o mesmo cálculo na criação da cobrança e na
+ * confirmação — se fossem cálculos diferentes, dava para pagar um valor e
+ * registrar outro.
+ */
+export async function precificar(
+  itensRecebidos: ItemRecebido[],
+  desconto: number
+): Promise<Precificacao> {
+  if (itensRecebidos.length === 0) return { ok: false, erro: "Venda sem itens" }
 
   const produtos = await db.produto.findMany({
-    where: { id: { in: pedido.itens.map((i) => i.produtoId) } },
+    where: { id: { in: itensRecebidos.map((i) => i.produtoId) } },
   })
   const porId = new Map(produtos.map((p) => [p.id, p]))
 
   const itens: ItemGravado[] = []
-  for (const recebido of pedido.itens) {
+  for (const recebido of itensRecebidos) {
     const produto = porId.get(recebido.produtoId)
     if (!produto) return { ok: false, erro: "Produto não encontrado no catálogo" }
 
@@ -116,11 +126,23 @@ export async function registrarVenda(pedido: PedidoVenda): Promise<ResultadoVend
   }
 
   const subtotal = arredondar(itens.reduce((acc, item) => acc + item.subtotal, 0))
-  if (pedido.desconto > subtotal) {
-    return { ok: false, erro: "Desconto maior que o subtotal" }
+  if (desconto > subtotal) return { ok: false, erro: "Desconto maior que o subtotal" }
+
+  return { ok: true, itens, subtotal, total: arredondar(subtotal - desconto) }
+}
+
+/**
+ * Os preços vêm do banco, nunca do cliente: o payload só diz *o que* e *quanto*.
+ * Assim um total adulterado no navegador não chega a ser gravado.
+ */
+export async function registrarVenda(pedido: PedidoVenda): Promise<ResultadoVenda> {
+  if (!FORMAS_PAGAMENTO.some((f) => f.id === pedido.forma)) {
+    return { ok: false, erro: "Forma de pagamento inválida" }
   }
 
-  const total = arredondar(subtotal - pedido.desconto)
+  const preco = await precificar(pedido.itens, pedido.desconto)
+  if (!preco.ok) return { ok: false, erro: preco.erro }
+  const { itens, subtotal, total } = preco
 
   if (pedido.forma === "dinheiro") {
     if (pedido.recebido === null) return { ok: false, erro: "Informe o valor recebido" }
@@ -260,6 +282,8 @@ async function gravarUmaVez(
         clienteNome: cliente?.nome ?? null,
         clienteCpfCnpj: cliente?.cpfCnpj ?? null,
         vencimento,
+        pixTxid: pedido.pixTxid ?? null,
+        pixPagoEm: pedido.pixPagoEm ?? null,
       },
     })
 

@@ -8,6 +8,7 @@ import { CobrancaDialogo } from "~/components/pdv/cobranca-dialogo"
 import { BarraAtalhos, type Atalho } from "~/components/pdv/barra-atalhos"
 import { BarraComando, type ModoComando } from "~/components/pdv/barra-comando"
 import { ListaItens } from "~/components/pdv/lista-itens"
+import { PixDialogo, type PixNoBalcao } from "~/components/pdv/pix-dialogo"
 import { PainelPagamento } from "~/components/pdv/painel-pagamento"
 import { Topo } from "~/components/pdv/topo"
 import { Kbd } from "~/components/ui/kbd"
@@ -16,7 +17,14 @@ import { criarCliente, lerCliente, listarClientes } from "~/lib/clientes.server"
 import { emitirParaVenda, type CobrancaDaVenda } from "~/lib/cobranca.server"
 import { saldosPorProduto } from "~/lib/estoque.server"
 import { exigirUsuario } from "~/lib/sessao.server"
-import { lerPedido, registrarVenda } from "~/lib/vendas.server"
+import { lerPedido, precificar, registrarVenda } from "~/lib/vendas.server"
+import {
+  confirmarPagamento,
+  consultarPixImediato,
+  criarPixImediato,
+  novoTxid,
+  type PixImediato,
+} from "~/lib/pix.server"
 import {
   interpretarValor,
   moeda,
@@ -128,6 +136,93 @@ export async function action({ request }: Route.ActionArgs) {
     }
   }
 
+  // --- Pix no balcão: cria a cobrança pelo total recalculado do banco ---
+  if ((bruto as { intencao?: string })?.intencao === "pixCriar") {
+    const pedido = lerPedido(bruto)
+    if (!pedido) {
+      return data({ ok: false as const, tipo: "pix" as const, erro: "Dados inválidos" }, { status: 400 })
+    }
+
+    const preco = await precificar(pedido.itens, pedido.desconto)
+    if (!preco.ok) {
+      return data({ ok: false as const, tipo: "pix" as const, erro: preco.erro }, { status: 400 })
+    }
+
+    try {
+      const cobranca = await criarPixImediato({
+        txid: novoTxid(),
+        valor: preco.total,
+        expiracaoSegundos: 900,
+        solicitacao: `Caixa ${CAIXA} - BrasSaco Embalagens`,
+      })
+      return { ok: true as const, tipo: "pix" as const, cobranca, total: preco.total }
+    } catch (erro) {
+      return data(
+        {
+          ok: false as const,
+          tipo: "pix" as const,
+          erro: erro instanceof Error ? erro.message : "Falha ao criar a cobrança Pix",
+        },
+        { status: 400 }
+      )
+    }
+  }
+
+  // --- Pix no balcão: confere e, se pago, grava a venda ---
+  if ((bruto as { intencao?: string })?.intencao === "pixConferir") {
+    const pedido = lerPedido(bruto)
+    const txid = String((bruto as { txid?: string }).txid ?? "")
+    if (!pedido || !/^[a-zA-Z0-9]{26,35}$/.test(txid)) {
+      return data({ ok: false as const, tipo: "pixStatus" as const, erro: "Dados inválidos" }, { status: 400 })
+    }
+
+    // O total é recalculado agora, e não o que foi criado antes: se o carrinho
+    // mudou no meio, o valor pago não bate e a venda não é liberada.
+    const preco = await precificar(pedido.itens, pedido.desconto)
+    if (!preco.ok) {
+      return data({ ok: false as const, tipo: "pixStatus" as const, erro: preco.erro }, { status: 400 })
+    }
+
+    const pix = await consultarPixImediato(txid)
+    const confirmacao = confirmarPagamento(pix, preco.total)
+
+    if (!confirmacao.pago) {
+      return {
+        ok: true as const,
+        tipo: "pixStatus" as const,
+        pago: false as const,
+        status: pix.status,
+        motivo: confirmacao.motivo,
+      }
+    }
+
+    const resultado = await registrarVenda({
+      ...pedido,
+      forma: "pix",
+      recebido: preco.total,
+      pixTxid: txid,
+      pixPagoEm: pix.pagoEm ? new Date(pix.pagoEm) : new Date(),
+      caixa: CAIXA,
+      operador: eu.nome,
+    })
+
+    if (!resultado.ok) {
+      return data(
+        { ok: false as const, tipo: "pixStatus" as const, erro: resultado.erro },
+        { status: 400 }
+      )
+    }
+
+    return {
+      ok: true as const,
+      tipo: "pixStatus" as const,
+      pago: true as const,
+      numero: resultado.numero,
+      pagoEm: pix.pagoEm,
+      endToEndId: pix.endToEndId,
+    }
+  }
+
   const pedido = lerPedido(bruto)
   if (!pedido) {
     return data(
@@ -168,6 +263,13 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   // para não reenviar o catálogo inteiro, então mantemos os novos aqui.
   const [novosClientes, setNovosClientes] = useState<ClienteResumo[]>([])
   const [vencimento, setVencimento] = useState<Date | null>(null)
+  const [pix, setPix] = useState<{
+    cobranca: PixNoBalcao | null
+    criando: boolean
+    erro: string | null
+    concluida: { numero: number; pagoEm: string | null } | null
+    motivoPendente: string | null
+  } | null>(null)
   const [comprovante, setComprovante] = useState<{
     vendaNumero: number
     vendaId: string
@@ -184,6 +286,9 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
 
   const fetcher = useFetcher<typeof action>()
   const gravando = fetcher.state !== "idle"
+  // Fetcher separado para o Pix: a consulta a cada 5s não pode interferir no
+  // fetcher que grava venda e cadastra cliente.
+  const fetcherPix = useFetcher<typeof action>()
 
   const todosClientes = useMemo(
     () => [...clientes, ...novosClientes].sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR")),
@@ -222,8 +327,8 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   const focar = useCallback(() => campo.current?.focus(), [])
 
   useEffect(() => {
-    if (!ajudaAberta && !clienteAberto && !comprovante) focar()
-  }, [ajudaAberta, clienteAberto, comprovante, modo, focar])
+    if (!ajudaAberta && !clienteAberto && !comprovante && !pix) focar()
+  }, [ajudaAberta, clienteAberto, comprovante, pix, modo, focar])
 
   // Clicar num botão de atalho tira o foco do campo; devolvemos no frame seguinte
   // para que a próxima tecla continue caindo na barra de comando.
@@ -302,6 +407,21 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       return
     }
 
+    if (resposta.tipo === "pix") {
+      if (!resposta.ok) {
+        setPix({ cobranca: null, criando: false, erro: resposta.erro, concluida: null, motivoPendente: null })
+        return
+      }
+      setPix({
+        cobranca: { ...resposta.cobranca, valor: resposta.total },
+        criando: false,
+        erro: null,
+        concluida: null,
+        motivoPendente: null,
+      })
+      return
+    }
+
     // Antes da checagem genérica: a falha da emissão pertence ao comprovante,
     // não à barra de status — a venda já está gravada.
     if (resposta.tipo === "cobranca") {
@@ -317,6 +437,9 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       avisar(resposta.erro, "erro")
       return
     }
+
+    // As respostas de Pix são tratadas pelo fetcher próprio; aqui só a venda.
+    if (resposta.tipo !== "venda") return
 
     const { numero, troco } = resposta
 
@@ -349,6 +472,53 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     )
   }, [fetcher.state, fetcher.data, avisar, fetcher, forma])
 
+  // Consulta o pagamento enquanto o QR está na tela.
+  useEffect(() => {
+    const cobranca = pix?.cobranca
+    if (!cobranca || pix?.concluida || fetcherPix.state !== "idle") return
+
+    const id = setTimeout(() => {
+      fetcherPix.submit(
+        {
+          intencao: "pixConferir",
+          txid: cobranca.txid,
+          itens: venda.itens.map((i) => ({ produtoId: i.produtoId, quantidade: i.quantidade })),
+          desconto: totais.desconto,
+          forma: "pix",
+          recebido: null,
+        },
+        { method: "post", encType: "application/json" }
+      )
+    }, 5000)
+
+    return () => clearTimeout(id)
+  }, [pix?.cobranca, pix?.concluida, fetcherPix, venda.itens, totais.desconto])
+
+  // Resposta da consulta: confirmou ou segue pendente.
+  useEffect(() => {
+    if (fetcherPix.state !== "idle" || !fetcherPix.data) return
+    const r = fetcherPix.data
+    if (r.tipo !== "pixStatus") return
+
+    if (!r.ok) {
+      setPix((atual) => (atual ? { ...atual, erro: r.erro, criando: false } : atual))
+      return
+    }
+    if (!r.pago) {
+      setPix((atual) => (atual ? { ...atual, motivoPendente: r.motivo } : atual))
+      return
+    }
+
+    // Pago: a venda já foi gravada no servidor. Limpa o carrinho.
+    despachar({ tipo: "limpar" })
+    setRecebido(null)
+    setModo("busca")
+    setEntrada("")
+    setPix((atual) =>
+      atual ? { ...atual, concluida: { numero: r.numero, pagoEm: r.pagoEm }, motivoPendente: null } : atual
+    )
+  }, [fetcherPix.state, fetcherPix.data])
+
   const iniciarPagamento = useCallback(() => {
     if (venda.itens.length === 0) {
       avisar("Nenhum item na venda", "erro")
@@ -360,6 +530,22 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       setEntrada("")
       return
     }
+    // Pix no balcão: gera a cobrança e espera a confirmação do banco.
+    if (forma === "pix") {
+      setPix({ cobranca: null, criando: true, erro: null, concluida: null, motivoPendente: null })
+      fetcher.submit(
+        {
+          intencao: "pixCriar",
+          itens: venda.itens.map((i) => ({ produtoId: i.produtoId, quantidade: i.quantidade })),
+          desconto: totais.desconto,
+          forma: "pix",
+          recebido: null,
+        },
+        { method: "post", encType: "application/json" }
+      )
+      return
+    }
+
     // A prazo vira boleto: precisa do pagador e de uma data de vencimento.
     if (forma === "prazo") {
       if (!cliente) {
@@ -372,7 +558,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       return
     }
     concluir(null)
-  }, [avisar, cliente, concluir, forma, venda.itens.length])
+  }, [avisar, cliente, concluir, fetcher, forma, totais.desconto, venda.itens])
 
   const confirmar = useCallback(() => {
     if (modo === "busca") {
@@ -499,6 +685,19 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   useEffect(() => {
     function aoTeclar(evento: KeyboardEvent) {
       const { key, altKey, ctrlKey, shiftKey } = evento
+
+      if (pix) {
+        if (key === "Escape" && !pix.concluida) {
+          evento.preventDefault()
+          setPix(null)
+          avisar("Pagamento por Pix cancelado — nada foi gravado", "erro")
+        } else if (key === "Enter" && pix.concluida) {
+          evento.preventDefault()
+          avisar(`Venda #${pix.concluida.numero} paga por Pix`, "sucesso")
+          setPix(null)
+        }
+        return
+      }
 
       if (comprovante) {
         if (key === "Escape" || key === "Enter") {
@@ -637,6 +836,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     ajudaAberta,
     clienteAberto,
     comprovante,
+    pix,
     alternarTema,
     cancelarVenda,
     confirmar,
@@ -786,6 +986,24 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
             fetcher.submit(dados, { method: "post" })
           }}
           onFechar={() => setClienteAberto(false)}
+        />
+      ) : null}
+
+      {pix ? (
+        <PixDialogo
+          cobranca={pix.cobranca}
+          criando={pix.criando}
+          erro={pix.erro}
+          concluida={pix.concluida}
+          motivoPendente={pix.motivoPendente}
+          onCancelar={() => {
+            setPix(null)
+            avisar("Pagamento por Pix cancelado — nada foi gravado", "erro")
+          }}
+          onConcluir={() => {
+            if (pix.concluida) avisar(`Venda #${pix.concluida.numero} paga por Pix`, "sucesso")
+            setPix(null)
+          }}
         />
       ) : null}
 
