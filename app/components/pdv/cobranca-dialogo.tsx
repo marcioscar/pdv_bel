@@ -1,5 +1,5 @@
-import { useState } from "react"
-import { Barcode, Check, Copy, FileText, Loader2 } from "lucide-react"
+import { useEffect, useState } from "react"
+import { Barcode, Check, Copy, FileText, Loader2, Printer } from "lucide-react"
 
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
@@ -104,6 +104,113 @@ function BotaoPdf({
   )
 }
 
+/**
+ * Manda o boleto para a impressora sem passar por outra aba.
+ *
+ * O PDF é baixado como blob e posto num iframe oculto, cujo `print()` abre a
+ * caixa de impressão do navegador. Um link `target="_blank"` obrigaria o operador
+ * a achar a aba, apertar Ctrl+P e fechá-la — três passos com cliente esperando.
+ *
+ * Dois detalhes que fazem isso funcionar:
+ *
+ * - o iframe NÃO pode ser removido logo depois: remover cancela a impressão que
+ *   ainda está na tela. Ele sai um minuto depois, junto com o blob.
+ * - o foco precisa VOLTAR. Focar o iframe é necessário para o `print()` sair, mas
+ *   o foco fica lá dentro: medido em Chrome, depois de imprimir o Enter parava de
+ *   fechar o diálogo e o teclado do operador ficava morto. Como `print()` bloqueia
+ *   até a caixa ser fechada, devolver o foco na linha seguinte funciona.
+ * - se o `print()` falhar (navegador que não imprime PDF em iframe), cai em abrir
+ *   numa aba, que é o comportamento antigo — melhor um passo extra do que nada.
+ */
+async function imprimirBoleto(vendaId: string, parcela: number): Promise<string | null> {
+  const url = `/vendas/${vendaId}/boleto.pdf?parcela=${parcela}`
+
+  let endereco: string
+  try {
+    const resposta = await fetch(url)
+    if (!resposta.ok) {
+      return resposta.status === 403
+        ? "Boleto de outra loja"
+        : `Não foi possível buscar o boleto (${resposta.status})`
+    }
+    endereco = URL.createObjectURL(await resposta.blob())
+  } catch {
+    return "Falha ao buscar o boleto"
+  }
+
+  const quadro = document.createElement("iframe")
+  quadro.setAttribute("aria-hidden", "true")
+  quadro.style.cssText = "position:fixed;width:0;height:0;border:0;visibility:hidden"
+  quadro.src = endereco
+
+  const limpar = () => {
+    setTimeout(() => {
+      quadro.remove()
+      URL.revokeObjectURL(endereco)
+    }, 60_000)
+  }
+
+  quadro.onload = () => {
+    const focoAnterior = document.activeElement as HTMLElement | null
+
+    try {
+      quadro.contentWindow?.focus()
+      quadro.contentWindow?.print()
+    } catch {
+      window.open(endereco, "_blank", "noreferrer")
+    } finally {
+      // Depois da caixa de impressão, o teclado tem de voltar para a tela.
+      window.focus()
+      focoAnterior?.focus?.()
+    }
+    limpar()
+  }
+  quadro.onerror = () => {
+    window.open(endereco, "_blank", "noreferrer")
+    limpar()
+  }
+
+  document.body.appendChild(quadro)
+  return null
+}
+
+function BotaoImprimir({
+  vendaId,
+  parcela,
+  rotulo = "Imprimir",
+  onErro,
+}: {
+  vendaId: string
+  parcela: number
+  rotulo?: string
+  onErro: (mensagem: string) => void
+}) {
+  const [buscando, setBuscando] = useState(false)
+
+  return (
+    <Button
+      type="button"
+      tabIndex={-1}
+      size="sm"
+      disabled={buscando}
+      className="rounded-lg"
+      onClick={async () => {
+        setBuscando(true)
+        const erro = await imprimirBoleto(vendaId, parcela)
+        setBuscando(false)
+        if (erro) onErro(erro)
+      }}
+    >
+      {buscando ? (
+        <Loader2 className="size-4 animate-spin" />
+      ) : (
+        <Printer className="size-4" />
+      )}
+      {buscando ? "Buscando…" : rotulo}
+    </Button>
+  )
+}
+
 function EtiquetaSituacao({ situacao }: { situacao: string }) {
   return (
     <Badge
@@ -125,9 +232,11 @@ function EtiquetaSituacao({ situacao }: { situacao: string }) {
 function LinhaParcela({
   cobranca,
   vendaId,
+  onErroImpressao,
 }: {
   cobranca: CobrancaExibida
   vendaId: string
+  onErroImpressao: (mensagem: string) => void
 }) {
   return (
     <li className="rounded-lg border border-border p-3">
@@ -154,6 +263,11 @@ function LinhaParcela({
             </span>
           </div>
           <div className="mt-2 flex flex-wrap gap-2">
+            <BotaoImprimir
+              vendaId={vendaId}
+              parcela={cobranca.parcela}
+              onErro={onErroImpressao}
+            />
             <BotaoCopiar texto={cobranca.linhaDigitavel} rotulo="Copiar linha" />
             <BotaoPdf vendaId={vendaId} parcela={cobranca.parcela} rotulo="PDF" />
             {cobranca.pixCopiaECola ? (
@@ -179,9 +293,31 @@ export function CobrancaDialogo({
   emitindo,
   onFechar,
 }: Props) {
+  const [erroImpressao, setErroImpressao] = useState<string | null>(null)
   const parcelada = cobrancas.length > 1
   const unica = cobrancas.length === 1 ? cobrancas[0] : null
   const totalCobrado = cobrancas.reduce((acc, c) => acc + c.valor, 0)
+
+  /**
+   * F7 imprime. Em captura e tratando SÓ o F7: Esc e Enter continuam chegando aos
+   * handlers das telas, que é quem sabe fechar o diálogo.
+   *
+   * Com parcelamento imprime a primeira; as outras têm o botão na linha — três
+   * caixas de impressão empilhadas seriam pior que três cliques.
+   */
+  useEffect(() => {
+    async function aoTeclar(evento: KeyboardEvent) {
+      if (evento.key !== "F7" || evento.ctrlKey || evento.altKey || evento.metaKey) return
+      const alvo = cobrancas.find((c) => c.linhaDigitavel)
+      if (!alvo) return
+
+      evento.preventDefault()
+      const problema = await imprimirBoleto(vendaId, alvo.parcela)
+      if (problema) setErroImpressao(problema)
+    }
+    window.addEventListener("keydown", aoTeclar, true)
+    return () => window.removeEventListener("keydown", aoTeclar, true)
+  }, [cobrancas, vendaId])
 
   return (
     <div
@@ -233,6 +369,7 @@ export function CobrancaDialogo({
                   key={cobranca.codigoSolicitacao}
                   cobranca={cobranca}
                   vendaId={vendaId}
+                  onErroImpressao={setErroImpressao}
                 />
               ))}
             </ul>
@@ -264,13 +401,19 @@ export function CobrancaDialogo({
                       {agruparLinha(unica.linhaDigitavel)}
                     </span>
                   </div>
-                  <div className="mt-2 flex gap-2">
-                    <BotaoCopiar texto={unica.linhaDigitavel} rotulo="Copiar linha" />
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <BotaoImprimir
+                      vendaId={vendaId}
+                      parcela={unica.parcela}
+                      rotulo="Imprimir"
+                      onErro={setErroImpressao}
+                    />
                     <BotaoPdf
                       vendaId={vendaId}
                       parcela={unica.parcela}
                       rotulo="Abrir boleto (PDF)"
                     />
+                    <BotaoCopiar texto={unica.linhaDigitavel} rotulo="Copiar linha" />
                   </div>
                 </div>
               ) : (
@@ -325,7 +468,19 @@ export function CobrancaDialogo({
 
         <Separator className="my-4" />
 
-        <div className="flex justify-end">
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-xs">
+            {erroImpressao ? (
+              <span className="font-medium text-destructive" role="alert">
+                {erroImpressao}
+              </span>
+            ) : cobrancas.some((c) => c.linhaDigitavel) ? (
+              <span className="text-muted-foreground">
+                <Kbd>F7</Kbd> imprime
+                {parcelada ? " a 1ª parcela" : ""}
+              </span>
+            ) : null}
+          </span>
           <Button type="button" tabIndex={-1} onClick={onFechar} className="rounded-lg">
             Concluir
             <Kbd className="bg-primary-foreground/20 text-primary-foreground">Enter</Kbd>
