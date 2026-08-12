@@ -48,6 +48,14 @@ export function emitirCobranca(entrada: {
   valor: number
   vencimento: Date
   pagador: PagadorInter
+  /**
+   * Quem de fato vendeu, quando não é o dono da conta.
+   *
+   * O beneficiário do boleto é sempre o titular da conta — o dinheiro cai lá, e
+   * isso é regra do banco, não escolha nossa. Este campo preenche a linha
+   * "Beneficiário Final" do boleto, que existe para exatamente este caso.
+   */
+  beneficiarioFinal?: PagadorInter
   /** Dias corridos após o vencimento até o cancelamento automático (0–60). */
   diasAgenda?: number
   mensagem?: string
@@ -79,6 +87,20 @@ export function emitirCobranca(entrada: {
         ddd: limpo(pagador.ddd),
         telefone: limpo(pagador.telefone),
       },
+      ...(entrada.beneficiarioFinal
+        ? {
+            beneficiarioFinal: {
+              nome: entrada.beneficiarioFinal.nome,
+              cpfCnpj: entrada.beneficiarioFinal.cpfCnpj,
+              tipoPessoa: entrada.beneficiarioFinal.tipoPessoa,
+              endereco: entrada.beneficiarioFinal.endereco,
+              bairro: entrada.beneficiarioFinal.bairro,
+              cidade: entrada.beneficiarioFinal.cidade,
+              uf: entrada.beneficiarioFinal.uf,
+              cep: limpo(entrada.beneficiarioFinal.cep),
+            },
+          }
+        : {}),
       ...(entrada.mensagem ? { mensagem: { linha1: entrada.mensagem } } : {}),
       formasRecebimento: ["BOLETO", "PIX"],
     },
@@ -195,6 +217,48 @@ async function comQrCode(dados: Omit<CobrancaDaVenda, "pixQrCode">): Promise<Cob
   return { ...dados, pixQrCode }
 }
 
+/**
+ * Os dados da loja para a linha "Beneficiário Final" do boleto.
+ *
+ * Devolve `undefined` quando não faz sentido, e é a regra que importa: só quando o
+ * CNPJ da loja é DIFERENTE do da conta. NRT e SDS têm conta própria, então o
+ * beneficiário já é a empresa delas e repetir seria ruído; QI é a própria titular.
+ * Sobra a QNE, filial que cobra pela conta da matriz — o único caso real.
+ *
+ * Endereço incompleto também devolve `undefined`: o Inter recusaria a emissão
+ * inteira por causa dele, e é melhor um boleto sem a linha extra do que venda a
+ * prazo que não consegue cobrar.
+ */
+async function beneficiarioFinalDaLoja(
+  codigoLoja: string,
+  codigoConta: string
+): Promise<PagadorInter | undefined> {
+  const [loja, conta] = await Promise.all([
+    db.loja.findUnique({ where: { codigo: codigoLoja } }),
+    db.contaInter.findUnique({ where: { codigo: codigoConta } }),
+  ])
+  if (!loja || !conta || loja.cnpj === conta.cnpj) return undefined
+
+  if (!loja.endereco || !loja.bairro || !loja.cidade || !loja.uf || !loja.cep) {
+    console.warn(
+      `[cobranca] loja ${codigoLoja} cobra pela conta ${codigoConta} (CNPJ diferente) ` +
+        "mas está sem endereço completo — boleto sai sem Beneficiário Final"
+    )
+    return undefined
+  }
+
+  return {
+    nome: loja.razaoSocial ?? loja.nome,
+    cpfCnpj: loja.cnpj,
+    tipoPessoa: "JURIDICA",
+    endereco: loja.endereco,
+    bairro: loja.bairro,
+    cidade: loja.cidade,
+    uf: loja.uf,
+    cep: loja.cep,
+  }
+}
+
 type VendaParaCobrar = {
   id: string
   numero: number
@@ -258,6 +322,7 @@ export async function emitirParaVenda(vendaId: string): Promise<CobrancaDaVenda[
 
   // A conta sai da loja da venda: QI e QNE na da matriz, NRT e SDS nas suas.
   const conta = await contaDaLoja(venda.loja)
+  const beneficiarioFinal = await beneficiarioFinalDaLoja(venda.loja, conta)
   const plano = planoDaVenda(venda)
   const existentes = await db.cobranca.findMany({ where: { vendaId } })
   const porParcela = new Map(existentes.map((c) => [c.parcela, c]))
@@ -285,7 +350,7 @@ export async function emitirParaVenda(vendaId: string): Promise<CobrancaDaVenda[
     }
     codigos.set(
       p.parcela,
-      await emitirUmaParcela(venda, conta, cliente, p, plano.length)
+      await emitirUmaParcela(venda, conta, cliente, p, plano.length, beneficiarioFinal)
     )
   }
 
@@ -335,13 +400,15 @@ async function emitirUmaParcela(
   conta: string,
   cliente: PagadorInter,
   p: Parcela,
-  parcelas: number
+  parcelas: number,
+  beneficiarioFinal?: PagadorInter
 ): Promise<string> {
   const sufixo = parcelas === 1 ? "" : ` - parcela ${p.parcela}/${parcelas}`
 
   try {
     const emitida = await emitirCobranca({
       conta,
+      beneficiarioFinal,
       seuNumero: seuNumeroDaParcela(venda.loja, venda.numero, p.parcela, parcelas),
       valor: p.valor,
       vencimento: p.vencimento,

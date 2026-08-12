@@ -31,6 +31,9 @@ model Loja {
   id     String @id @default(auto()) @map("_id") @db.ObjectId
   codigo String @unique
   nome   String
+  /// Razão social, que é o que vai no boleto — diferente do nome curto da tela.
+  /// QNE tem a mesma da matriz (é filial); NRT e SDS são outras empresas.
+  razaoSocial String?
   cnpj   String @unique
   /// Código da ContaInter que emite boleto e Pix desta loja.
   conta  String
