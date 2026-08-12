@@ -354,6 +354,91 @@ function paraSaida(
   }
 }
 
+export type ResultadoCancelamentoCobrancas =
+  | { ok: true; canceladas: number; jaEstavam: number }
+  | { ok: false; erro: string }
+
+/** Situações em que ainda há o que cancelar no Inter. */
+const CANCELAVEIS = ["A_RECEBER", "EM_PROCESSAMENTO", "ATRASADO"]
+
+/**
+ * Cancela no Inter as cobranças de uma venda.
+ *
+ * Existe porque cancelar a venda só marcava o documento e estornava o estoque: o
+ * boleto seguia vivo no banco, e o cliente podia pagar uma venda desfeita. Foi o
+ * que aconteceu de verdade com a venda #1 — cancelada aqui, R$ 100 em aberto lá.
+ *
+ * A situação é reconsultada no Inter antes de decidir, porque a nossa cópia só se
+ * atualiza pelo webhook: agir sobre um "A_RECEBER" velho poderia cancelar uma
+ * cobrança já paga. E se alguma estiver PAGA, recusa tudo — dinheiro que entrou
+ * exige devolução, não um estorno silencioso de estoque.
+ */
+export async function cancelarCobrancasDaVenda(
+  vendaId: string,
+  motivo = "APEDIDODOBENEFICIARIO"
+): Promise<ResultadoCancelamentoCobrancas> {
+  const cobrancas = await db.cobranca.findMany({
+    where: { vendaId },
+    orderBy: { parcela: "asc" },
+  })
+  if (cobrancas.length === 0) return { ok: true, canceladas: 0, jaEstavam: 0 }
+
+  const atuais: { id: string; codigoSolicitacao: string; situacao: string; parcela: number }[] = []
+
+  for (const c of cobrancas) {
+    let situacao = c.situacao
+    try {
+      const detalhe = await consultarCobranca(c.codigoSolicitacao)
+      situacao = detalhe.cobranca?.situacao ?? situacao
+      if (situacao !== c.situacao) {
+        await db.cobranca.update({ where: { id: c.id }, data: { situacao } })
+      }
+    } catch {
+      // Sem resposta do Inter, seguimos com a situação conhecida: melhor tentar
+      // cancelar e falhar do que deixar o boleto vivo por causa da consulta.
+    }
+    atuais.push({ id: c.id, codigoSolicitacao: c.codigoSolicitacao, situacao, parcela: c.parcela })
+  }
+
+  const pagas = atuais.filter((c) => c.situacao === "RECEBIDO" || c.situacao === "PAGO")
+  if (pagas.length > 0) {
+    const quais = pagas.map((c) => `${c.parcela}ª`).join(", ")
+    return {
+      ok: false,
+      erro:
+        pagas.length === atuais.length
+          ? "O boleto desta venda já foi pago — faça a devolução antes de cancelar"
+          : `A parcela ${quais} já foi paga — faça a devolução antes de cancelar`,
+    }
+  }
+
+  let canceladas = 0
+  let jaEstavam = 0
+
+  for (const c of atuais) {
+    if (!CANCELAVEIS.includes(c.situacao)) {
+      jaEstavam++
+      continue
+    }
+    try {
+      await cancelarCobranca(c.codigoSolicitacao, motivo)
+      await db.cobranca.update({ where: { id: c.id }, data: { situacao: "CANCELADO" } })
+      canceladas++
+    } catch (erro) {
+      // Falha aqui é o caso perigoso: um boleto vivo numa venda desfeita. A venda
+      // NÃO é cancelada, e o gerente recebe o motivo para resolver no banco.
+      return {
+        ok: false,
+        erro: `Não foi possível cancelar o boleto da ${c.parcela}ª parcela no Inter: ${
+          erro instanceof Error ? erro.message : "erro desconhecido"
+        }`,
+      }
+    }
+  }
+
+  return { ok: true, canceladas, jaEstavam }
+}
+
 /** As cobranças já emitidas, sem chamar o Inter. Vazio quando não há nenhuma. */
 export async function cobrancasDaVenda(vendaId: string): Promise<CobrancaDaVenda[]> {
   const cobrancas = await db.cobranca.findMany({

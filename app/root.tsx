@@ -28,7 +28,7 @@ export const links: Route.LinksFunction = () => [
 
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="pt-BR">
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -54,31 +54,45 @@ export default function App() {
   return <Outlet />;
 }
 
+const TITULOS: Record<number, string> = {
+  403: "Acesso restrito",
+  404: "Página não encontrada",
+};
+
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
-  let message = "Oops!";
-  let details = "An unexpected error occurred.";
-  let stack: string | undefined;
+  let titulo = "Algo deu errado";
+  let detalhe = "Erro inesperado. Tente de novo ou volte ao caixa.";
+  let pilha: string | undefined;
 
   if (isRouteErrorResponse(error)) {
-    message = error.status === 404 ? "404" : "Error";
-    details =
-      error.status === 404
-        ? "The requested page could not be found."
-        : error.statusText || details;
-  } else if (import.meta.env.DEV && error && error instanceof Error) {
-    details = error.message;
-    stack = error.stack;
+    titulo = TITULOS[error.status] ?? `Erro ${error.status}`;
+    // `data` é o CORPO da resposta lançada, que é onde as guardas de permissão
+    // põem a explicação. `statusText` costuma vir vazio — ler dele deixava a tela
+    // dizendo "erro inesperado" mesmo quando o motivo era conhecido.
+    const doCorpo = typeof error.data === "string" ? error.data.trim() : "";
+    detalhe = doCorpo || error.statusText || detalhe;
+  } else if (import.meta.env.DEV && error instanceof Error) {
+    detalhe = error.message;
+    pilha = error.stack;
   }
 
   return (
-    <main className="pt-16 p-4 container mx-auto">
-      <h1>{message}</h1>
-      <p>{details}</p>
-      {stack && (
-        <pre className="w-full p-4 overflow-x-auto">
-          <code>{stack}</code>
-        </pre>
-      )}
+    <main className="flex min-h-screen items-center justify-center bg-muted/30 p-6">
+      <div className="w-full max-w-md rounded-xl border border-border bg-card p-7 shadow-lg">
+        <h1 className="text-base font-semibold">{titulo}</h1>
+        <p className="mt-2 text-sm text-muted-foreground">{detalhe}</p>
+        <a
+          href="/"
+          className="mt-5 inline-block rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground"
+        >
+          Voltar ao caixa
+        </a>
+        {pilha ? (
+          <pre className="mt-5 max-h-72 w-full overflow-auto rounded-lg bg-muted/60 p-3 text-[11px]">
+            <code>{pilha}</code>
+          </pre>
+        ) : null}
+      </div>
     </main>
   );
 }

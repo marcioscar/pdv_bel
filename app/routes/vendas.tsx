@@ -9,10 +9,16 @@ import { Button } from "~/components/ui/button"
 import { Kbd } from "~/components/ui/kbd"
 import { db } from "~/lib/db.server"
 import { CobrancaDialogo } from "~/components/pdv/cobranca-dialogo"
-import { cobrancasDaVenda, emitirParaVenda, type CobrancaDaVenda } from "~/lib/cobranca.server"
+import {
+  cancelarCobrancasDaVenda,
+  cobrancasDaVenda,
+  emitirParaVenda,
+  type CobrancaDaVenda,
+} from "~/lib/cobranca.server"
 import { cancelarVenda } from "~/lib/estoque.server"
-import { exigirUsuario } from "~/lib/sessao.server"
+import { exigirGerente, exigirUsuario } from "~/lib/sessao.server"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
+import { ACOES_DE_GERENTE, ehGerente } from "~/lib/permissoes"
 import { FORMAS_PAGAMENTO } from "~/lib/pdv"
 import { useAtalhosDeSecao } from "~/lib/navegacao"
 import { useRelogio, useTema } from "~/lib/tema"
@@ -62,9 +68,16 @@ export async function loader({ request }: Route.LoaderArgs) {
 }
 
 export async function action({ request }: Route.ActionArgs) {
-  const eu = await exigirUsuario(request)
   const form = await request.formData()
   const vendaId = String(form.get("vendaId") ?? "")
+  const acao = String(form.get("acao") ?? "")
+
+  // Ver/emitir cobrança é operação de turno; cancelar desfaz faturamento e
+  // estorna estoque, então é do gerente. A guarda vem antes de qualquer trabalho.
+  const eu =
+    acao === "cobranca"
+      ? await exigirUsuario(request)
+      : await exigirGerente(request, "cancelarVenda")
 
   if (!OBJECT_ID.test(vendaId)) {
     return data(
@@ -74,7 +87,7 @@ export async function action({ request }: Route.ActionArgs) {
   }
 
   // Ver/emitir a cobrança de uma venda a prazo.
-  if (String(form.get("acao")) === "cobranca") {
+  if (acao === "cobranca") {
     try {
       const venda = await db.venda.findUnique({
         where: { id: vendaId },
@@ -103,17 +116,36 @@ export async function action({ request }: Route.ActionArgs) {
     }
   }
 
+  // O boleto é cancelado no Inter ANTES de a venda ser desfeita aqui. Na ordem
+  // inversa, uma falha no banco deixaria um boleto vivo numa venda cancelada — e
+  // isso não aparece em nenhuma tela. Falhando assim, a venda segue ativa, e a
+  // cobrança cancelada aparece como CANCELADO na lista: visível e recuperável.
+  const cobrancas = await cancelarCobrancasDaVenda(vendaId)
+  if (!cobrancas.ok) {
+    return data(
+      { ok: false as const, tipo: "cancelamento" as const, erro: cobrancas.erro },
+      { status: 400 }
+    )
+  }
+
   const resultado = await cancelarVenda(vendaId, eu.nome)
   if (!resultado.ok) {
     return data({ ...resultado, tipo: "cancelamento" as const }, { status: 400 })
   }
 
+  const partes = [
+    `${resultado.estornados} ${resultado.estornados === 1 ? "item estornado" : "itens estornados"}`,
+  ]
+  if (cobrancas.canceladas > 0) {
+    partes.push(
+      `${cobrancas.canceladas} ${cobrancas.canceladas === 1 ? "boleto cancelado" : "boletos cancelados"} no Inter`
+    )
+  }
+
   return {
     ok: true as const,
     tipo: "cancelamento" as const,
-    mensagem: `Venda #${resultado.numero} cancelada · ${resultado.estornados} ${
-      resultado.estornados === 1 ? "item estornado" : "itens estornados"
-    }`,
+    mensagem: `Venda #${resultado.numero} cancelada · ${partes.join(" · ")}`,
   }
 }
 
@@ -160,6 +192,7 @@ function SituacaoCobrancas({
 
 export default function Vendas({ loaderData }: Route.ComponentProps) {
   const { eu, vendas, resumo } = loaderData
+  const podeCancelar = ehGerente(eu.papel)
 
   const [indiceAtivo, setIndiceAtivo] = useState(0)
   const [confirmando, setConfirmando] = useState<string | null>(null)
@@ -179,7 +212,7 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
 
   const { escuro, alternar } = useTema()
   const relogio = useRelogio()
-  useAtalhosDeSecao()
+  useAtalhosDeSecao(eu.papel)
 
   /**
    * A lista se atualiza sozinha a cada 20s.
@@ -271,13 +304,18 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
 
   const pedirCancelamento = useCallback(() => {
     if (!ativa || cancelando) return
+    // Espelha exigirGerente: o operador recebe o motivo, não um 403 seco.
+    if (!podeCancelar) {
+      avisar(ACOES_DE_GERENTE.cancelarVenda, "erro")
+      return
+    }
     if (ativa.canceladaEm) {
       avisar(`Venda #${ativa.numero} já está cancelada`, "erro")
       return
     }
     // Cancelar estorna estoque; exige uma segunda confirmação deliberada.
     setConfirmando(ativa.id)
-  }, [ativa, avisar, cancelando])
+  }, [ativa, avisar, cancelando, podeCancelar])
 
   const confirmarCancelamento = useCallback(() => {
     if (!confirmando) return
@@ -355,6 +393,7 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
     <main className="relative flex h-screen flex-col overflow-hidden bg-card text-foreground">
       <Topo
         operador={eu.nome}
+        papel={eu.papel}
         relogio={relogio}
         escuro={escuro}
         onAlternarTema={alternar}
@@ -532,20 +571,26 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                     ? `Ver ${ativa.cobrancas.length} boletos`
                     : "Ver boleto"}
               </Button>
-              <Button
-                type="button"
-                tabIndex={-1}
-                variant="destructive"
-                size="sm"
-                disabled={!ativa || Boolean(ativa?.canceladaEm) || cancelando}
-                onClick={pedirCancelamento}
-                className="rounded-lg"
-              >
-                <Kbd>F9</Kbd> Cancelar venda
-              </Button>
+              {/* Operador não vê o botão de cancelar: o que ele não pode fazer não
+                  precisa ocupar espaço no balcão. O F9 explica o motivo. */}
+              {podeCancelar ? (
+                <Button
+                  type="button"
+                  tabIndex={-1}
+                  variant="destructive"
+                  size="sm"
+                  disabled={!ativa || Boolean(ativa?.canceladaEm) || cancelando}
+                  onClick={pedirCancelamento}
+                  className="rounded-lg"
+                >
+                  <Kbd>F9</Kbd> Cancelar venda
+                </Button>
+              ) : null}
               <span className="ml-1 text-xs text-muted-foreground">
-                <Kbd>↑</Kbd> <Kbd>↓</Kbd> escolhe a venda · o cancelamento estorna o
-                estoque{" "}
+                <Kbd>↑</Kbd> <Kbd>↓</Kbd> escolhe a venda ·{" "}
+                {podeCancelar
+                  ? "o cancelamento estorna o estoque"
+                  : "cancelamento é do gerente"}{" "}
                 {atualizadoEm ? (
                   <span className="ml-2 font-mono text-[11px] tabular-nums">
                     · atualizado {atualizadoEm}
@@ -598,6 +643,17 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                 ? "O item volta"
                 : `Os ${vendaConfirmando.itens.length} itens voltam`}{" "}
               para o estoque. A venda não é apagada — fica marcada como cancelada.
+              {vendaConfirmando.cobrancas.length > 0 ? (
+                <>
+                  {" "}
+                  <b className="font-semibold text-foreground">
+                    {vendaConfirmando.cobrancas.length === 1
+                      ? "O boleto será cancelado no Inter"
+                      : `Os ${vendaConfirmando.cobrancas.length} boletos serão cancelados no Inter`}
+                  </b>{" "}
+                  — se algum já estiver pago, o cancelamento é recusado.
+                </>
+              ) : null}
             </p>
             <div className="mt-5 flex justify-end gap-2">
               <Button

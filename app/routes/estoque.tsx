@@ -15,8 +15,9 @@ import {
   registrarEntrada,
   saldosPorProduto,
 } from "~/lib/estoque.server"
-import { exigirUsuario } from "~/lib/sessao.server"
+import { exigirGerente, exigirUsuario } from "~/lib/sessao.server"
 import { interpretarValor, quantidade as formatarQuantidade } from "~/lib/moeda"
+import { ACOES_DE_GERENTE, ehGerente } from "~/lib/permissoes"
 import {
   buscarProdutos,
   criarIndice,
@@ -54,11 +55,18 @@ export async function loader({ request }: Route.LoaderArgs) {
 }
 
 export async function action({ request }: Route.ActionArgs) {
-  const eu = await exigirUsuario(request)
   const form = await request.formData()
   const produtoId = String(form.get("produtoId") ?? "")
   const modo = String(form.get("modo") ?? "entrada")
   const valor = Number(form.get("valor"))
+
+  // Entrada tem nota por trás e é trabalho de quem recebe mercadoria. Inventário
+  // reescreve o saldo para o número que a pessoa diz ter contado — é por onde uma
+  // falta desaparece sem deixar rastro, então fica com o gerente.
+  const eu =
+    modo === "ajuste"
+      ? await exigirGerente(request, "inventario")
+      : await exigirUsuario(request)
 
   if (!OBJECT_ID.test(produtoId)) {
     return data({ ok: false as const, erro: "Produto inválido" }, { status: 400 })
@@ -104,6 +112,7 @@ type Modo = "entrada" | "ajuste"
 
 export default function Estoque({ loaderData }: Route.ComponentProps) {
   const { eu, produtos, movimentos } = loaderData
+  const podeInventariar = ehGerente(eu.papel)
 
   const [entrada, setEntrada] = useState("")
   const [indiceResultado, setIndiceResultado] = useState(0)
@@ -118,7 +127,7 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
 
   const { escuro, alternar } = useTema()
   const relogio = useRelogio()
-  useAtalhosDeSecao()
+  useAtalhosDeSecao(eu.papel)
 
   const indice = useMemo(() => criarIndice(produtos), [produtos])
   const comando = useMemo(() => interpretarComando(entrada), [entrada])
@@ -247,6 +256,10 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
           return
         case "F4":
           evento.preventDefault()
+          if (!podeInventariar) {
+            avisar(ACOES_DE_GERENTE.inventario, "erro")
+            return
+          }
           setModo((atual) => (atual === "entrada" ? "ajuste" : "entrada"))
           return
       }
@@ -264,12 +277,13 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
 
     window.addEventListener("keydown", aoTeclar)
     return () => window.removeEventListener("keydown", aoTeclar)
-  }, [alternar, confirmar, resultados.length, selecionado])
+  }, [alternar, avisar, confirmar, podeInventariar, resultados.length, selecionado])
 
   return (
     <main className="flex h-screen flex-col overflow-hidden bg-card text-foreground">
       <Topo
         operador={eu.nome}
+        papel={eu.papel}
         relogio={relogio}
         escuro={escuro}
         onAlternarTema={alternar}
@@ -400,21 +414,29 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
               >
                 Entrada
               </Button>
-              <Button
-                type="button"
-                tabIndex={-1}
-                variant={modo === "ajuste" ? "default" : "outline"}
-                size="sm"
-                onClick={() => setModo("ajuste")}
-                className="rounded-lg"
-              >
-                Inventário
-              </Button>
+              {podeInventariar ? (
+                <Button
+                  type="button"
+                  tabIndex={-1}
+                  variant={modo === "ajuste" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setModo("ajuste")}
+                  className="rounded-lg"
+                >
+                  Inventário
+                </Button>
+              ) : null}
               <span className="ml-1 text-xs text-muted-foreground">
-                <Kbd>F4</Kbd> alterna ·{" "}
-                {modo === "entrada"
-                  ? "soma ao saldo"
-                  : "grava a diferença até o saldo contado"}
+                {podeInventariar ? (
+                  <>
+                    <Kbd>F4</Kbd> alterna ·{" "}
+                    {modo === "entrada"
+                      ? "soma ao saldo"
+                      : "grava a diferença até o saldo contado"}
+                  </>
+                ) : (
+                  "a entrada soma ao saldo · inventário é do gerente"
+                )}
               </span>
             </div>
 

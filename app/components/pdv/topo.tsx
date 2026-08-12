@@ -4,18 +4,14 @@ import { LogOut, Moon, Sun } from "lucide-react"
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
 import { Kbd } from "~/components/ui/kbd"
+import { rotuloDoPapel, secoesDoPapel } from "~/lib/permissoes"
 import { cn } from "~/lib/utils"
-
-const SECOES = [
-  { para: "/", rotulo: "Caixa", tecla: "Ctrl F1" },
-  { para: "/estoque", rotulo: "Estoque", tecla: "Ctrl F2" },
-  { para: "/vendas", rotulo: "Vendas", tecla: "Ctrl F3" },
-  { para: "/usuarios", rotulo: "Usuários", tecla: "" },
-]
 
 type Props = {
   caixa?: string
   operador: string
+  /** Decide quais seções aparecem — mesma fonte que as guardas do servidor. */
+  papel: string
   relogio: string | null
   escuro: boolean
   onAlternarTema: () => void
@@ -25,6 +21,7 @@ type Props = {
 export function Topo({
   caixa,
   operador,
+  papel,
   relogio,
   escuro,
   onAlternarTema,
@@ -48,7 +45,7 @@ export function Topo({
         </span>
 
         <nav className="flex items-center gap-1">
-          {SECOES.map((secao) => {
+          {secoesDoPapel(papel).map((secao) => {
             const ativa = pathname === secao.para
             return (
               <Button
@@ -63,7 +60,7 @@ export function Topo({
               >
                 {secao.rotulo}
                 {secao.tecla ? (
-                  <Kbd className="text-[9px]">{secao.tecla}</Kbd>
+                  <Kbd className="text-[9px]">Ctrl {secao.tecla}</Kbd>
                 ) : null}
               </Button>
             )
@@ -79,8 +76,11 @@ export function Topo({
 
       <div className="flex items-center gap-4 font-mono text-xs text-muted-foreground">
         {children}
+        {/* O papel substitui o rótulo fixo "Operador": quem está no caixa precisa
+            saber com que poder está logado, e um selo extra ao lado seria redundante. */}
         <span>
-          Operador <b className="font-semibold text-foreground">{operador}</b>
+          {rotuloDoPapel(papel)}{" "}
+          <b className="font-semibold text-foreground">{operador}</b>
         </span>
         <span>{relogio ?? "--/-- --:--"}</span>
         <Button

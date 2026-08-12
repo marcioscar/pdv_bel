@@ -23,6 +23,10 @@ model Usuario {
   nome          String
   email         String    @unique
   senhaHash     String
+  /// "operador" | "gerente" — a lista canônica e o que cada um alcança estão em
+  /// app/lib/permissoes.ts. O padrão é o menor privilégio: quem for cadastrado
+  /// sem papel explícito não ganha poder de cancelar venda nem criar usuário.
+  papel         String    @default("operador")
   ativo         Boolean   @default(true)
   criadoEm      DateTime  @default(now())
   ultimoAcessoEm DateTime?

@@ -285,7 +285,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   } | null>(null)
   const { escuro, alternar: alternarTema } = useTema()
   const relogio = useRelogio()
-  useAtalhosDeSecao(!ajudaAberta)
+  useAtalhosDeSecao(eu.papel, !ajudaAberta)
 
   const campo = useRef<HTMLInputElement>(null)
   const ultimaResposta = useRef<unknown>(null)
@@ -907,6 +907,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       <Topo
         caixa={CAIXA}
         operador={eu.nome}
+        papel={eu.papel}
         relogio={relogio}
         escuro={escuro}
         onAlternarTema={alternarTema}

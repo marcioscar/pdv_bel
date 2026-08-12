@@ -55,10 +55,13 @@ export async function action({ request }: Route.ActionArgs) {
     const problema = validarSenha(senha)
     if (problema) return data({ erro: problema }, { status: 400 })
 
+    // O primeiro nasce gerente: alguém precisa poder criar os demais, e não há
+    // quem o promova depois.
     const usuario = await db.usuario.create({
       data: {
         nome,
         email: normalizarEmail(email),
+        papel: "gerente",
         senhaHash: await gerarHash(senha),
       },
     })
@@ -94,7 +97,7 @@ export default function Entrar({ loaderData, actionData }: Route.ComponentProps)
         </h1>
         <p className="mt-1 text-xs text-muted-foreground">
           {primeiroAcesso
-            ? "Nenhum usuário cadastrado ainda. Este será o primeiro operador."
+            ? "Nenhum usuário cadastrado ainda. Este será o gerente, que cadastra os demais."
             : "Use seu e-mail e senha de operador."}
         </p>
 

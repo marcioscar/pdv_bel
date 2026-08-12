@@ -2,9 +2,22 @@ import { createCookieSessionStorage, redirect } from "react-router"
 
 import { db } from "~/lib/db.server"
 import "~/lib/env.server"
+import {
+  ACOES_DE_GERENTE,
+  ehGerente,
+  PAPEL_PADRAO,
+  papelValido,
+  type AcaoDeGerente,
+  type Papel,
+} from "~/lib/permissoes"
 import { conferirSenha, normalizarEmail } from "~/lib/senha.server"
 
-export type UsuarioLogado = { id: string; nome: string; email: string }
+export type UsuarioLogado = {
+  id: string
+  nome: string
+  email: string
+  papel: Papel
+}
 
 /**
  * O segredo assina o cookie: sem ele qualquer um forjaria uma sessão. Em
@@ -93,7 +106,14 @@ export async function usuarioDaSessao(request: Request): Promise<UsuarioLogado |
   // Usuário desativado perde o acesso na próxima requisição, sem esperar o cookie expirar.
   if (!usuario || !usuario.ativo) return null
 
-  return { id: usuario.id, nome: usuario.nome, email: usuario.email }
+  return {
+    id: usuario.id,
+    nome: usuario.nome,
+    email: usuario.email,
+    // Papel desconhecido no banco cai no menor privilégio, não no maior: um valor
+    // digitado errado não pode virar promoção.
+    papel: papelValido(usuario.papel) ? usuario.papel : PAPEL_PADRAO,
+  }
 }
 
 /**
@@ -109,8 +129,31 @@ export async function exigirUsuario(request: Request): Promise<UsuarioLogado> {
   throw redirect(`/entrar?destino=${encodeURIComponent(destino)}`)
 }
 
+/**
+ * Exige gerente. Vale para loader E action da mesma rota: esconder o botão não é
+ * controle de acesso — a rota continua respondendo a quem digitar a URL, e a
+ * action continua aceitando um POST montado à mão.
+ *
+ * Lança 403 em vez de redirecionar para dizer o motivo. Redirecionar em silêncio
+ * faz o operador achar que a tela quebrou.
+ */
+export async function exigirGerente(
+  request: Request,
+  acao: AcaoDeGerente
+): Promise<UsuarioLogado> {
+  const usuario = await exigirUsuario(request)
+  if (ehGerente(usuario.papel)) return usuario
+
+  throw new Response(ACOES_DE_GERENTE[acao], { status: 403 })
+}
+
 export async function contarUsuarios() {
   return db.usuario.count()
+}
+
+/** Gerentes ativos. Serve para não deixar o sistema sem ninguém que administre. */
+export async function contarGerentesAtivos() {
+  return db.usuario.count({ where: { papel: "gerente", ativo: true } })
 }
 
 export type ResultadoLogin =
