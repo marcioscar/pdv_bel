@@ -46,7 +46,10 @@ export function Topo({
 
         <nav className="flex items-center gap-1">
           {secoesDoPapel(papel).map((secao) => {
-            const ativa = pathname === secao.para
+            // Prefixo, não igualdade: /admin/produtos precisa acender "Administração".
+            const ativa =
+              pathname === secao.para ||
+              (secao.para !== "/" && pathname.startsWith(`${secao.para}/`))
             return (
               <Button
                 key={secao.para}

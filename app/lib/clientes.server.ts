@@ -51,8 +51,11 @@ export function lerCliente(form: FormData): ClienteEntrada {
 /**
  * Valida o que o boleto vai exigir. É melhor recusar aqui, no cadastro, do que
  * descobrir na emissão que o endereço está incompleto e a cobrança foi rejeitada.
+ *
+ * Compartilhada entre criar e atualizar: se fossem duas listas, editar um cliente
+ * poderia deixá-lo com menos dados do que o cadastro aceita.
  */
-export async function criarCliente(entrada: ClienteEntrada): Promise<ResultadoCliente> {
+function validarEntrada(entrada: ClienteEntrada): { ok: false; erro: string; campo?: keyof ClienteEntrada } | null {
   if (entrada.nome.length < 3) {
     return { ok: false, erro: "Informe o nome completo", campo: "nome" }
   }
@@ -68,6 +71,12 @@ export async function criarCliente(entrada: ClienteEntrada): Promise<ResultadoCl
   if (!validarCep(entrada.cep)) {
     return { ok: false, erro: "CEP deve ter 8 dígitos", campo: "cep" }
   }
+  return null
+}
+
+export async function criarCliente(entrada: ClienteEntrada): Promise<ResultadoCliente> {
+  const problema = validarEntrada(entrada)
+  if (problema) return problema
 
   const cpfCnpj = limparDocumento(entrada.cpfCnpj)
   const tipoPessoa = tipoPessoaDe(cpfCnpj)
@@ -101,4 +110,56 @@ export async function criarCliente(entrada: ClienteEntrada): Promise<ResultadoCl
 
 export function listarClientes() {
   return db.cliente.findMany({ orderBy: { nome: "asc" } })
+}
+
+const OBJECT_ID = /^[0-9a-fA-F]{24}$/
+
+/**
+ * Atualiza o cadastro. Vale mais do que parece: endereço incompleto ou errado faz
+ * o Inter recusar o boleto, e antes disto só havia como corrigir no banco à mão.
+ *
+ * As mesmas validações do cadastro, porque o boleto exige o mesmo dos dois.
+ */
+export async function atualizarCliente(
+  id: string,
+  entrada: ClienteEntrada
+): Promise<ResultadoCliente> {
+  if (!OBJECT_ID.test(id)) return { ok: false, erro: "Cliente inválido" }
+
+  const existente = await db.cliente.findUnique({ where: { id } })
+  if (!existente) return { ok: false, erro: "Cliente não encontrado" }
+
+  const problema = validarEntrada(entrada)
+  if (problema) return problema
+
+  const cpfCnpj = limparDocumento(entrada.cpfCnpj)
+  const tipoPessoa = tipoPessoaDe(cpfCnpj)
+  if (!tipoPessoa) return { ok: false, erro: "CPF/CNPJ inválido", campo: "cpfCnpj" }
+
+  // Trocar o documento para o de outro cadastro violaria o índice único.
+  const outro = await db.cliente.findUnique({ where: { cpfCnpj } })
+  if (outro && outro.id !== id) {
+    return { ok: false, erro: `${outro.nome} já usa esse CPF/CNPJ`, campo: "cpfCnpj" }
+  }
+
+  const cliente = await db.cliente.update({
+    where: { id },
+    data: {
+      nome: entrada.nome,
+      cpfCnpj,
+      tipoPessoa,
+      endereco: entrada.endereco,
+      bairro: entrada.bairro,
+      cidade: entrada.cidade,
+      uf: entrada.uf.toUpperCase(),
+      cep: limparCep(entrada.cep),
+      numero: entrada.numero ?? null,
+      complemento: entrada.complemento ?? null,
+      email: entrada.email ?? null,
+      ddd: entrada.ddd ?? null,
+      telefone: entrada.telefone ?? null,
+    },
+  })
+
+  return { ok: true, cliente }
 }

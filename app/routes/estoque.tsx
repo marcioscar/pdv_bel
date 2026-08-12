@@ -1,35 +1,21 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { data, useFetcher } from "react-router"
-import { PackagePlus } from "lucide-react"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { Link } from "react-router"
+import { PackageSearch, ScanLine } from "lucide-react"
 
 import type { Route } from "./+types/estoque"
-import { BarraComando } from "~/components/pdv/barra-comando"
 import { Topo } from "~/components/pdv/topo"
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
+import { Input } from "~/components/ui/input"
 import { Kbd } from "~/components/ui/kbd"
 import { db } from "~/lib/db.server"
-import {
-  movimentosRecentes,
-  registrarAjuste,
-  registrarEntrada,
-  saldosPorProduto,
-} from "~/lib/estoque.server"
-import { exigirGerente, exigirUsuario } from "~/lib/sessao.server"
-import { interpretarValor, quantidade as formatarQuantidade } from "~/lib/moeda"
-import { ACOES_DE_GERENTE, ehGerente } from "~/lib/permissoes"
-import {
-  buscarProdutos,
-  criarIndice,
-  interpretarComando,
-  produtosPorCodigo,
-  type ProdutoCatalogo,
-} from "~/lib/pdv"
+import { movimentosRecentes, saldosPorProduto } from "~/lib/estoque.server"
+import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { useAtalhosDeSecao } from "~/lib/navegacao"
+import { buscarProdutos, criarIndice } from "~/lib/pdv"
+import { exigirUsuario } from "~/lib/sessao.server"
 import { useRelogio, useTema } from "~/lib/tema"
 import { cn } from "~/lib/utils"
-
-const OBJECT_ID = /^[0-9a-fA-F]{24}$/
 
 export function meta(_: Route.MetaArgs) {
   return [{ title: "Estoque — BrasSaco" }]
@@ -44,240 +30,63 @@ export async function loader({ request }: Route.LoaderArgs) {
     movimentosRecentes(),
   ])
 
+  const produtos = cadastro.map((produto) => ({
+    ...produto,
+    estoque: saldos.get(produto.id) ?? 0,
+  }))
+
   return {
     eu,
-    produtos: cadastro.map((produto) => ({
-      ...produto,
-      estoque: saldos.get(produto.id) ?? 0,
-    })),
+    produtos,
     movimentos,
+    semEstoque: produtos.filter((p) => p.estoque <= 0).length,
   }
 }
 
-export async function action({ request }: Route.ActionArgs) {
-  const form = await request.formData()
-  const produtoId = String(form.get("produtoId") ?? "")
-  const modo = String(form.get("modo") ?? "entrada")
-  const valor = Number(form.get("valor"))
-
-  // Entrada tem nota por trás e é trabalho de quem recebe mercadoria. Inventário
-  // reescreve o saldo para o número que a pessoa diz ter contado — é por onde uma
-  // falta desaparece sem deixar rastro, então fica com o gerente.
-  const eu =
-    modo === "ajuste"
-      ? await exigirGerente(request, "inventario")
-      : await exigirUsuario(request)
-
-  if (!OBJECT_ID.test(produtoId)) {
-    return data({ ok: false as const, erro: "Produto inválido" }, { status: 400 })
-  }
-  if (!Number.isFinite(valor)) {
-    return data({ ok: false as const, erro: "Quantidade inválida" }, { status: 400 })
-  }
-  if (modo !== "entrada" && modo !== "ajuste") {
-    return data({ ok: false as const, erro: "Operação inválida" }, { status: 400 })
-  }
-
-  const produto = await db.produto.findUnique({ where: { id: produtoId } })
-  if (!produto) {
-    return data({ ok: false as const, erro: "Produto não encontrado" }, { status: 400 })
-  }
-
-  if (modo === "entrada") {
-    if (valor <= 0) {
-      return data({ ok: false as const, erro: "A entrada deve ser positiva" }, { status: 400 })
-    }
-    await registrarEntrada(produtoId, valor, eu.nome)
-    return {
-      ok: true as const,
-      mensagem: `Entrada de ${valor} ${produto.unidade} · ${produto.descricao}`,
-    }
-  }
-
-  if (valor < 0) {
-    return data({ ok: false as const, erro: "O saldo contado não pode ser negativo" }, { status: 400 })
-  }
-
-  const { diferenca } = await registrarAjuste(produtoId, valor, eu.nome)
-  return {
-    ok: true as const,
-    mensagem:
-      diferenca === 0
-        ? `${produto.descricao} já estava com ${valor} ${produto.unidade}`
-        : `Ajuste de ${diferenca > 0 ? "+" : ""}${diferenca} · ${produto.descricao} agora tem ${valor} ${produto.unidade}`,
-  }
-}
-
-type Modo = "entrada" | "ajuste"
-
+/**
+ * Consulta de estoque — a pergunta de balcão: "tem esse aí?".
+ *
+ * É só leitura. Entrada de mercadoria e inventário moveram para
+ * /admin/estoque: são tarefas de escritório, e ter o campo que **escreve** no
+ * saldo na mesma tela que se abre com cliente esperando convida ao acidente.
+ */
 export default function Estoque({ loaderData }: Route.ComponentProps) {
-  const { eu, produtos, movimentos } = loaderData
-  const podeInventariar = ehGerente(eu.papel)
+  const { eu, produtos, movimentos, semEstoque } = loaderData
 
-  const [entrada, setEntrada] = useState("")
-  const [indiceResultado, setIndiceResultado] = useState(0)
-  const [selecionado, setSelecionado] = useState<ProdutoCatalogo | null>(null)
-  const [modo, setModo] = useState<Modo>("entrada")
-  const [aviso, setAviso] = useState<{ texto: string; tipo: "erro" | "sucesso" } | null>(null)
-
+  const [busca, setBusca] = useState("")
   const campo = useRef<HTMLInputElement>(null)
-  const ultimaResposta = useRef<unknown>(null)
-  const fetcher = useFetcher<typeof action>()
-  const gravando = fetcher.state !== "idle"
-
   const { escuro, alternar } = useTema()
   const relogio = useRelogio()
   useAtalhosDeSecao(eu.papel)
 
   const indice = useMemo(() => criarIndice(produtos), [produtos])
-  const comando = useMemo(() => interpretarComando(entrada), [entrada])
 
-  const resultados = useMemo(() => {
-    if (selecionado) return []
-    if (comando.tipo === "texto") return buscarProdutos(indice, comando.termo)
-    if (comando.tipo === "codigo") {
-      const achados = produtosPorCodigo(produtos, comando.codigo)
-      return achados.length > 1 ? achados : []
+  // Sem busca, mostra o que está faltando: é a informação mais útil de graça.
+  const encontrados = useMemo(() => {
+    if (!busca.trim()) {
+      return produtos.filter((p) => p.estoque <= 0).slice(0, 40)
     }
-    return []
-  }, [selecionado, comando, indice, produtos])
-
-  useEffect(() => setIndiceResultado(0), [entrada])
-
-  const focar = useCallback(() => campo.current?.focus(), [])
-  useEffect(() => focar(), [focar, selecionado])
-
-  const avisar = useCallback((texto: string, tipo: "erro" | "sucesso") => {
-    setAviso({ texto, tipo })
-  }, [])
-
-  useEffect(() => {
-    if (!aviso) return
-    const id = setTimeout(() => setAviso(null), 5000)
-    return () => clearTimeout(id)
-  }, [aviso])
-
-  useEffect(() => {
-    if (fetcher.state !== "idle" || !fetcher.data) return
-    if (ultimaResposta.current === fetcher.data) return
-    ultimaResposta.current = fetcher.data
-
-    if (fetcher.data.ok) {
-      avisar(fetcher.data.mensagem, "sucesso")
-      setSelecionado(null)
-      setEntrada("")
-    } else {
-      avisar(fetcher.data.erro, "erro")
-    }
-  }, [fetcher.state, fetcher.data, avisar])
-
-  const confirmar = useCallback(() => {
-    if (gravando) return
-
-    // Primeiro passo: escolher o produto. Segundo: informar a quantidade.
-    if (!selecionado) {
-      if (comando.tipo === "vazio") return
-
-      if (comando.tipo === "codigo") {
-        const achados = produtosPorCodigo(produtos, comando.codigo)
-        if (achados.length === 0) {
-          setEntrada("")
-          avisar(`Código ${comando.codigo} não encontrado`, "erro")
-          return
-        }
-        const escolhido = achados.length === 1 ? achados[0] : achados[indiceResultado]
-        if (escolhido) {
-          setSelecionado(escolhido)
-          setEntrada("")
-        }
-        return
-      }
-
-      const escolhido = resultados[indiceResultado]
-      if (!escolhido) {
-        avisar(`Nada encontrado para “${comando.termo}”`, "erro")
-        return
-      }
-      setSelecionado(escolhido)
-      setEntrada("")
-      return
-    }
-
-    const valor = interpretarValor(entrada)
-    if (valor === null) {
-      avisar("Quantidade inválida", "erro")
-      return
-    }
-
-    fetcher.submit(
-      { produtoId: selecionado.id, modo, valor: String(valor) },
-      { method: "post" }
-    )
-  }, [
-    avisar,
-    comando,
-    entrada,
-    fetcher,
-    gravando,
-    indiceResultado,
-    modo,
-    produtos,
-    resultados,
-    selecionado,
-  ])
+    return buscarProdutos(indice, busca, 40)
+  }, [busca, indice, produtos])
 
   useEffect(() => {
     function aoTeclar(evento: KeyboardEvent) {
-      const { key, ctrlKey, shiftKey, altKey } = evento
-
-      if (ctrlKey && !shiftKey && !altKey && key === "F6") {
+      if (evento.ctrlKey || evento.altKey || evento.metaKey) return
+      if (evento.key === "F6") {
         evento.preventDefault()
         alternar()
         return
       }
-
-      // Ctrl+F1..F3 navegam (ver ~/lib/navegacao); o resto é sem modificador.
-      if (ctrlKey || altKey || evento.metaKey) return
-
-      switch (key) {
-        case "Enter":
-          evento.preventDefault()
-          confirmar()
-          return
-        case "Escape":
-          evento.preventDefault()
-          if (selecionado) setSelecionado(null)
-          setEntrada("")
-          return
-        case "F2":
-          evento.preventDefault()
-          setSelecionado(null)
-          setEntrada("")
-          return
-        case "F4":
-          evento.preventDefault()
-          if (!podeInventariar) {
-            avisar(ACOES_DE_GERENTE.inventario, "erro")
-            return
-          }
-          setModo((atual) => (atual === "entrada" ? "ajuste" : "entrada"))
-          return
-      }
-
-      if (selecionado || resultados.length === 0) return
-
-      if (key === "ArrowDown" || key === "ArrowUp") {
-        evento.preventDefault()
-        const delta = key === "ArrowDown" ? 1 : -1
-        setIndiceResultado((atual) =>
-          Math.min(Math.max(atual + delta, 0), resultados.length - 1)
-        )
+      if (evento.key === "Escape") {
+        setBusca("")
+        campo.current?.focus()
       }
     }
-
     window.addEventListener("keydown", aoTeclar)
     return () => window.removeEventListener("keydown", aoTeclar)
-  }, [alternar, avisar, confirmar, podeInventariar, resultados.length, selecionado])
+  }, [alternar])
+
+  useEffect(() => campo.current?.focus(), [])
 
   return (
     <main className="flex h-screen flex-col overflow-hidden bg-card text-foreground">
@@ -288,175 +97,168 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
         escuro={escuro}
         onAlternarTema={alternar}
       >
-        <span>{produtos.length.toLocaleString("pt-BR")} produtos</span>
+        <span>
+          {produtos.length.toLocaleString("pt-BR")} produtos ·{" "}
+          <b className="font-semibold text-foreground">{semEstoque}</b> sem estoque
+        </span>
       </Topo>
 
+      <div className="flex items-center gap-3 border-b border-border bg-muted/40 px-5 py-3">
+        <ScanLine className="size-5 shrink-0 text-muted-foreground" aria-hidden />
+        <Input
+          ref={campo}
+          value={busca}
+          onChange={(e) => setBusca(e.target.value)}
+          placeholder="Bipe o código ou digite a descrição para ver o saldo…"
+          aria-label="Buscar produto"
+          autoComplete="off"
+          spellCheck={false}
+          data-1p-ignore=""
+          data-lpignore="true"
+          className="h-9 flex-1 rounded-none border-0 bg-transparent px-0 font-mono text-lg tracking-tight tabular-nums shadow-none placeholder:font-sans placeholder:text-sm placeholder:tracking-normal focus-visible:border-transparent focus-visible:ring-0 md:text-lg"
+        />
+        <Button
+          type="button"
+          tabIndex={-1}
+          variant="outline"
+          size="sm"
+          nativeButton={false}
+          render={<Link to="/admin/estoque" />}
+          className="shrink-0 rounded-lg"
+        >
+          Dar entrada
+        </Button>
+      </div>
+
       <div className="flex min-h-0 flex-1">
-        <section className="flex min-w-0 flex-1 flex-col">
-          {selecionado ? (
-            <div className="flex items-center gap-3 border-b border-border bg-primary/5 px-5 py-3">
-              <span className="shrink-0 text-sm font-semibold text-primary">
-                {modo === "entrada" ? "Entrada de" : "Saldo contado de"}
-              </span>
-              <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                {selecionado.descricao}
-              </span>
-              <Badge variant="outline" className="shrink-0 font-mono text-[10px]">
-                {selecionado.unidade}
-              </Badge>
-              <span className="shrink-0 font-mono text-xs text-muted-foreground">
-                saldo atual {formatarQuantidade(selecionado.estoque)}
-              </span>
-            </div>
-          ) : null}
-
-          <BarraComando
-            ref={campo}
-            modo={selecionado ? "quantidade" : "busca"}
-            valor={entrada}
-            onValorChange={setEntrada}
-            onBlur={() => requestAnimationFrame(focar)}
-            resultados={resultados}
-            indiceResultado={indiceResultado}
-            onEscolherResultado={(i) => {
-              setIndiceResultado(i)
-              confirmar()
-            }}
-            multiplicador={1}
-          />
-
-          <div className="flex-1 overflow-y-auto">
-            <table className="w-full text-sm">
-              <thead className="sticky top-0 z-10 bg-card">
-                <tr className="border-b border-border text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  <th scope="col" className="px-5 py-2.5 text-left font-semibold">
-                    Quando
-                  </th>
-                  <th scope="col" className="px-2 py-2.5 text-left font-semibold">
-                    Tipo
-                  </th>
-                  <th scope="col" className="px-2 py-2.5 text-left font-semibold">
-                    Produto
-                  </th>
-                  <th scope="col" className="w-24 px-2 py-2.5 text-right font-semibold">
-                    Qtd
-                  </th>
-                  <th scope="col" className="px-5 py-2.5 text-left font-semibold">
-                    Observação
-                  </th>
+        <section className="flex min-w-0 flex-1 flex-col overflow-y-auto">
+          <table className="w-full text-sm">
+            <thead className="sticky top-0 z-10 bg-card">
+              <tr className="border-b border-border text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <th scope="col" className="w-20 px-5 py-2.5 text-left font-semibold">
+                  Código
+                </th>
+                <th scope="col" className="px-2 py-2.5 text-left font-semibold">
+                  Produto
+                </th>
+                <th scope="col" className="w-16 px-2 py-2.5 text-left font-semibold">
+                  Un
+                </th>
+                <th scope="col" className="w-28 px-2 py-2.5 text-right font-semibold">
+                  Preço
+                </th>
+                <th scope="col" className="w-28 px-5 py-2.5 text-right font-semibold">
+                  Saldo
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {encontrados.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="px-5 py-16 text-center">
+                    <PackageSearch
+                      className="mx-auto size-10 text-muted-foreground/40"
+                      aria-hidden
+                    />
+                    <p className="mt-3 text-sm text-muted-foreground">
+                      {busca.trim()
+                        ? `Nada encontrado para “${busca}”`
+                        : "Todos os produtos têm saldo."}
+                    </p>
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {movimentos.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="px-5 py-16 text-center">
-                      <PackagePlus
-                        className="mx-auto size-10 text-muted-foreground/40"
-                        aria-hidden
-                      />
-                      <p className="mt-3 text-sm text-muted-foreground">
-                        Nenhum movimento ainda. Busque um produto e informe a quantidade.
-                      </p>
+              ) : (
+                encontrados.map((produto) => (
+                  <tr key={produto.id} className="border-b border-border">
+                    <td className="px-5 py-2.5 font-mono text-xs text-muted-foreground tabular-nums">
+                      {produto.codigo}
+                    </td>
+                    <td className="max-w-md px-2 py-2.5">{produto.descricao}</td>
+                    <td className="px-2 py-2.5">
+                      <Badge variant="outline" className="font-mono text-[10px]">
+                        {produto.unidade}
+                      </Badge>
+                    </td>
+                    <td className="px-2 py-2.5 text-right font-mono tabular-nums">
+                      {moeda(produto.preco)}
+                    </td>
+                    <td
+                      className={cn(
+                        "px-5 py-2.5 text-right font-mono font-semibold tabular-nums",
+                        produto.estoque <= 0 ? "text-destructive" : "text-foreground"
+                      )}
+                    >
+                      {produto.estoque <= 0
+                        ? "sem estoque"
+                        : formatarQuantidade(produto.estoque)}
                     </td>
                   </tr>
-                ) : (
-                  movimentos.map((movimento) => (
-                    <tr key={movimento.id} className="border-b border-border">
-                      <td className="px-5 py-2.5 font-mono text-xs text-muted-foreground tabular-nums">
-                        {new Date(movimento.criadoEm).toLocaleString("pt-BR", {
-                          dateStyle: "short",
-                          timeStyle: "short",
-                        })}
-                      </td>
-                      <td className="px-2 py-2.5">
-                        <Badge
-                          variant={movimento.tipo === "venda" ? "outline" : "secondary"}
-                          className="font-mono text-[10px]"
-                        >
-                          {movimento.tipo}
-                        </Badge>
-                      </td>
-                      <td className="max-w-md px-2 py-2.5">
-                        <span className="font-mono text-xs text-muted-foreground">
-                          {movimento.codigo}
-                        </span>{" "}
-                        <span className="truncate">{movimento.descricao}</span>
-                      </td>
-                      <td
+                ))
+              )}
+            </tbody>
+          </table>
+        </section>
+
+        <aside className="flex w-[380px] shrink-0 flex-col border-l border-border bg-muted/30">
+          <div className="border-b border-border px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Últimos movimentos
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {movimentos.length === 0 ? (
+              <p className="p-4 text-xs text-muted-foreground">
+                Nenhum movimento ainda. As entradas ficam em{" "}
+                <Link to="/admin/estoque" className="underline">
+                  Administração → Entradas
+                </Link>
+                .
+              </p>
+            ) : (
+              <ul>
+                {movimentos.map((movimento) => (
+                  <li
+                    key={movimento.id}
+                    className="border-b border-border px-4 py-2 text-xs"
+                  >
+                    <div className="flex items-baseline gap-2">
+                      <Badge
+                        variant={movimento.tipo === "venda" ? "outline" : "secondary"}
+                        className="font-mono text-[9px]"
+                      >
+                        {movimento.tipo}
+                      </Badge>
+                      <span
                         className={cn(
-                          "px-2 py-2.5 text-right font-mono font-medium tabular-nums",
-                          movimento.quantidade < 0 ? "text-destructive" : "text-foreground"
+                          "ml-auto font-mono font-semibold tabular-nums",
+                          movimento.quantidade < 0
+                            ? "text-destructive"
+                            : "text-foreground"
                         )}
                       >
                         {movimento.quantidade > 0 ? "+" : ""}
                         {formatarQuantidade(movimento.quantidade)}
-                      </td>
-                      <td className="px-5 py-2.5 text-xs text-muted-foreground">
-                        {movimento.vendaNumero ? `venda #${movimento.vendaNumero} · ` : ""}
-                        {movimento.observacao ?? ""}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="flex items-center justify-between border-t border-border px-5 py-3">
-            <div className="flex items-center gap-2">
-              <Button
-                type="button"
-                tabIndex={-1}
-                variant={modo === "entrada" ? "default" : "outline"}
-                size="sm"
-                onClick={() => setModo("entrada")}
-                className="rounded-lg"
-              >
-                Entrada
-              </Button>
-              {podeInventariar ? (
-                <Button
-                  type="button"
-                  tabIndex={-1}
-                  variant={modo === "ajuste" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setModo("ajuste")}
-                  className="rounded-lg"
-                >
-                  Inventário
-                </Button>
-              ) : null}
-              <span className="ml-1 text-xs text-muted-foreground">
-                {podeInventariar ? (
-                  <>
-                    <Kbd>F4</Kbd> alterna ·{" "}
-                    {modo === "entrada"
-                      ? "soma ao saldo"
-                      : "grava a diferença até o saldo contado"}
-                  </>
-                ) : (
-                  "a entrada soma ao saldo · inventário é do gerente"
-                )}
-              </span>
-            </div>
-
-            {aviso ? (
-              <span
-                className={cn(
-                  "text-xs font-medium",
-                  aviso.tipo === "erro" ? "text-destructive" : "text-foreground"
-                )}
-                role="status"
-              >
-                {aviso.texto}
-              </span>
-            ) : (
-              <span className="text-xs text-muted-foreground">
-                {gravando ? "gravando…" : "Busque o produto, Enter, quantidade, Enter"}
-              </span>
+                      </span>
+                    </div>
+                    <div className="mt-0.5 truncate text-muted-foreground">
+                      {movimento.descricao}
+                    </div>
+                    <div className="font-mono text-[10px] text-muted-foreground tabular-nums">
+                      {new Date(movimento.criadoEm).toLocaleString("pt-BR", {
+                        dateStyle: "short",
+                        timeStyle: "short",
+                      })}
+                      {movimento.vendaNumero ? ` · venda #${movimento.vendaNumero}` : ""}
+                    </div>
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
-        </section>
+        </aside>
+      </div>
+
+      <div className="border-t border-border px-5 py-2.5 text-xs text-muted-foreground">
+        Só consulta · <Kbd>Esc</Kbd> limpa a busca · o saldo é a soma dos movimentos,
+        não um número guardado
       </div>
     </main>
   )
