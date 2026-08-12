@@ -142,3 +142,25 @@ body {
     @apply font-sans;
   }
 }
+/**
+ * Campos de busca declarados como `type="search"`.
+ *
+ * O motivo não é estético: o AutoFill do Safari e os gerenciadores de senha
+ * classificam um `type="text"` solto como possível campo de login e abrem o menu
+ * de senhas sobre ele — na barra de comando do caixa isso cobre a lista de
+ * produtos justamente enquanto o operador digita. Campo de busca eles ignoram.
+ *
+ * Em troca, o WebKit acrescenta botão de limpar e desenho próprio; isto remove.
+ */
+input[type="search"] {
+  appearance: none;
+  -webkit-appearance: none;
+}
+input[type="search"]::-webkit-search-cancel-button,
+input[type="search"]::-webkit-search-decoration,
+input[type="search"]::-webkit-search-results-button,
+input[type="search"]::-webkit-search-results-decoration {
+  appearance: none;
+  -webkit-appearance: none;
+  display: none;
+}

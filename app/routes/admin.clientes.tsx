@@ -251,6 +251,7 @@ export default function AdminClientes({ loaderData }: Route.ComponentProps) {
           ref={campoBusca}
           value={busca}
           onChange={(e) => setBusca(e.target.value)}
+          type="search"
           placeholder="Buscar por nome, cidade ou CPF/CNPJ…"
           aria-label="Buscar cliente"
           autoComplete="off"

@@ -159,6 +159,7 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
           ref={campo}
           value={busca}
           onChange={(e) => setBusca(e.target.value)}
+          type="search"
           placeholder="Bipe o código ou digite a descrição para ver o saldo nas quatro lojas…"
           aria-label="Buscar produto"
           autoComplete="off"

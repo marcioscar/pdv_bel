@@ -69,8 +69,16 @@ export function BarraComando({
           placeholder={prompt.dica}
           aria-label={prompt.dica}
           inputMode={numerico ? "decimal" : "text"}
-          // Gerenciadores de senha ignoram `autocomplete="off"` e oferecem
-          // credencial neste campo. Cada um só respeita o atributo próprio.
+          /**
+           * `type="search"` não é detalhe: um `type="text"` solto é classificado
+           * pelo AutoFill do Safari como possível campo de login, e o menu
+           * "Senhas do iCloud" abre em cima da lista de produtos enquanto o
+           * operador digita. Campo de busca os gerenciadores deixam em paz.
+           *
+           * Os atributos abaixo cobrem os demais: cada gerenciador só respeita o
+           * seu, e `autocomplete="off"` sozinho é ignorado por todos.
+           */
+          type="search"
           autoComplete="off"
           autoCorrect="off"
           autoCapitalize="off"

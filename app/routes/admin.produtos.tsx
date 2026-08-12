@@ -179,6 +179,7 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
           ref={campoBusca}
           value={busca}
           onChange={(e) => setBusca(e.target.value)}
+          type="search"
           placeholder="Buscar por código ou descrição…"
           aria-label="Buscar produto"
           autoComplete="off"
