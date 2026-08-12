@@ -1,5 +1,6 @@
 import "~/lib/env.server"
 
+import { X509Certificate } from "node:crypto"
 import { readFileSync } from "node:fs"
 import { Agent } from "undici"
 
@@ -152,6 +153,40 @@ export function interConfigurado(conta: string) {
     return true
   } catch {
     return false
+  }
+}
+
+/**
+ * O que o certificado da conta diz sobre si: de quem é e até quando vale.
+ *
+ * Serve ao /saude, e existe porque certificado do Inter vale um ano e vence
+ * calado — a emissão simplesmente para de funcionar num dia qualquer, com a
+ * mensagem genérica de handshake. Melhor ver "vence em 12 dias" antes.
+ *
+ * Também confere o titular: cada conta é de um CNPJ diferente, e parear o
+ * certificado de uma empresa com as credenciais de outra dá 401.
+ */
+export function certificadoDaConta(conta: string) {
+  try {
+    // Lê o PEM direto, sem passar pela config completa: o certificado existir não
+    // depende de a credencial existir, e mostrar "null" só porque falta o
+    // client_id esconderia justamente o que já está pronto.
+    const cert = pemDeAmbiente(conta, "CERT")
+    if (!cert) return null
+
+    const x509 = new X509Certificate(cert)
+    const vence = new Date(x509.validTo)
+    const dias = Math.floor((vence.getTime() - Date.now()) / 86_400_000)
+
+    return {
+      titular: x509.subject.split("\n").find((l) => l.startsWith("CN="))?.slice(3) ?? null,
+      venceEm: vence.toISOString().slice(0, 10),
+      diasParaVencer: dias,
+      // Um mês é tempo suficiente para pedir outro no portal sem correria.
+      renovar: dias < 30,
+    }
+  } catch {
+    return null
   }
 }
 

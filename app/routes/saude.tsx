@@ -1,6 +1,10 @@
 import type { Route } from "./+types/saude"
 import { db } from "~/lib/db.server"
-import { chavePixConfigurada, interConfigurado } from "~/lib/inter.server"
+import {
+  certificadoDaConta,
+  chavePixConfigurada,
+  interConfigurado,
+} from "~/lib/inter.server"
 import { diagnosticoSessao } from "~/lib/sessao.server"
 
 /**
@@ -14,7 +18,15 @@ export async function loader(_: Route.LoaderArgs) {
   // Uma linha por conta: com três contas, "o Inter está configurado" deixou de ser
   // uma pergunta com resposta única. Sem isto, uma loja sem credencial só apareceria
   // quando a primeira venda a prazo falhasse no balcão.
-  let contas: Record<string, { credenciais: boolean; chavePix: boolean; lojas: string[] }> = {}
+  let contas: Record<
+    string,
+    {
+      credenciais: boolean
+      chavePix: boolean
+      lojas: string[]
+      certificado: ReturnType<typeof certificadoDaConta>
+    }
+  > = {}
   try {
     const lojas = await db.loja.findMany({
       where: { ativo: true },
@@ -24,6 +36,7 @@ export async function loader(_: Route.LoaderArgs) {
       contas[conta] ??= {
         credenciais: interConfigurado(conta),
         chavePix: chavePixConfigurada(conta),
+        certificado: certificadoDaConta(conta),
         lojas: [],
       }
       contas[conta].lojas.push(codigo)
@@ -53,6 +66,10 @@ export async function loader(_: Route.LoaderArgs) {
         alvo: process.env.INTER_BASE_URL?.includes("sandbox") ? "sandbox" : "producao",
         contas: Object.keys(contas).length,
         prontas: Object.values(contas).filter((c) => c.credenciais).length,
+        // Junta num só lugar o que exige ação: certificado perto de vencer.
+        certificadosARenovar: Object.entries(contas)
+          .filter(([, c]) => c.certificado?.renovar)
+          .map(([nome]) => nome),
       },
     },
     { headers: { "cache-control": "no-store" } }
