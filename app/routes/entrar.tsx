@@ -12,11 +12,12 @@ import {
   validarEmail,
   validarSenha,
 } from "~/lib/senha.server"
+import { lojaDaMaquina } from "~/lib/maquina.server"
 import {
   autenticar,
   contarUsuarios,
   criarSessao,
-  lojaUnica,
+  lojaParaEntrar,
   usuarioDaSessao,
 } from "~/lib/sessao.server"
 
@@ -68,17 +69,21 @@ export async function action({ request }: Route.ActionArgs) {
         senhaHash: await gerarHash(senha),
       },
     })
-    return criarSessao({ usuarioId: usuario.id, loja: await lojaUnica(usuario.id), destino })
+    return criarSessao({
+      usuarioId: usuario.id,
+      loja: await lojaParaEntrar(usuario.id, await lojaDaMaquina(request)),
+      destino,
+    })
   }
 
   const resultado = await autenticar(email, senha)
   if (!resultado.ok) return data({ erro: resultado.erro }, { status: 400 })
 
-  // Com uma loja só, entra direto. Com mais de uma, `criarSessao` manda escolher —
-  // e adivinhar seria gravar venda na loja errada.
+  // Entra direto na loja da máquina (ou na única liberada). Sem nenhuma das duas,
+  // `criarSessao` manda escolher — adivinhar seria gravar venda na loja errada.
   return criarSessao({
     usuarioId: resultado.usuarioId,
-    loja: await lojaUnica(resultado.usuarioId),
+    loja: await lojaParaEntrar(resultado.usuarioId, await lojaDaMaquina(request)),
     destino,
   })
 }

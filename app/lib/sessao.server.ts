@@ -47,6 +47,11 @@ export function diagnosticoSessao() {
   }
 }
 
+/** O mesmo segredo do cookie de sessão, para outros cookies assinados do app. */
+export function segredoDoCookie() {
+  return segredo()
+}
+
 function segredo() {
   const doAmbiente = process.env.SESSION_SECRET
   if (doAmbiente && doAmbiente.length >= 16) return doAmbiente
@@ -114,17 +119,27 @@ export async function criarSessao({
   })
 }
 
-/** Troca a loja da sessão sem pedir a senha de novo. */
+/**
+ * Troca a loja da sessão sem pedir a senha de novo.
+ *
+ * `cookiesExtra` existe para gravar o padrão da máquina na mesma resposta. Dois
+ * `set-cookie` exigem `Headers.append` — num objeto literal o segundo sobrescreve
+ * o primeiro, e o cookie de sessão se perderia.
+ */
 export async function definirLojaDaSessao(
   request: Request,
   loja: string,
-  destino = "/"
+  destino = "/",
+  cookiesExtra: string[] = []
 ) {
   const sessao = await armazem().getSession(request.headers.get("cookie"))
   sessao.set("loja", loja)
-  return redirect(destino, {
-    headers: { "set-cookie": await armazem().commitSession(sessao) },
-  })
+
+  const cabecalhos = new Headers()
+  cabecalhos.append("set-cookie", await armazem().commitSession(sessao))
+  for (const cookie of cookiesExtra) cabecalhos.append("set-cookie", cookie)
+
+  return redirect(destino, { headers: cabecalhos })
 }
 
 export async function encerrarSessao(request: Request) {
@@ -217,13 +232,21 @@ export async function exigirGerente(
 }
 
 /**
- * A loja do usuário quando não há escolha a fazer.
+ * A loja com que o usuário entra, sem precisar escolher.
  *
- * Devolve a loja quando ele só pode operar numa, e null quando pode em mais de
- * uma — aí a tela pergunta. Um funcionário que cobre turno em outra loja é o caso
- * comum aqui, e escolher errado grava a venda no lugar errado.
+ * Duas fontes, nesta ordem:
+ *
+ * 1. **o padrão da máquina** — o terminal da QNE está sempre na QNE, e os
+ *    vendedores revezam de loja. O lugar é mais confiável que a pessoa.
+ * 2. **a única loja liberada para ele** — quem só opera numa não tem o que escolher.
+ *
+ * Devolve null quando resta escolha de verdade; aí a tela pergunta, porque
+ * adivinhar grava venda na loja errada e isso não se descobre olhando a tela.
  */
-export async function lojaUnica(usuarioId: string): Promise<string | null> {
+export async function lojaParaEntrar(
+  usuarioId: string,
+  lojaDaMaquina: string | null
+): Promise<string | null> {
   const usuario = await db.usuario.findUnique({
     where: { id: usuarioId },
     select: { lojas: true },
@@ -233,6 +256,9 @@ export async function lojaUnica(usuarioId: string): Promise<string | null> {
   const todas = (await listarLojas()).map((l) => l.codigo)
   const permitidas =
     usuario.lojas.length === 0 ? todas : usuario.lojas.filter((c) => todas.includes(c))
+
+  // O padrão da máquina só vale se ele pode operar lá.
+  if (lojaDaMaquina && permitidas.includes(lojaDaMaquina)) return lojaDaMaquina
 
   return permitidas.length === 1 ? permitidas[0] : null
 }

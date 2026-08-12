@@ -1,3 +1,4 @@
+import { useState } from "react"
 import { data, Form, useNavigation } from "react-router"
 import { Store } from "lucide-react"
 
@@ -5,10 +6,8 @@ import type { Route } from "./+types/loja"
 import { Button } from "~/components/ui/button"
 import { Kbd } from "~/components/ui/kbd"
 import { listarLojas } from "~/lib/lojas.server"
-import {
-  definirLojaDaSessao,
-  usuarioDaSessao,
-} from "~/lib/sessao.server"
+import { cookieDaLojaDaMaquina, lojaDaMaquina } from "~/lib/maquina.server"
+import { definirLojaDaSessao, usuarioDaSessao } from "~/lib/sessao.server"
 import { cn } from "~/lib/utils"
 
 export function meta(_: Route.MetaArgs) {
@@ -41,7 +40,13 @@ export async function loader({ request }: Route.LoaderArgs) {
   const todas = await listarLojas()
   const lojas = todas.filter((l) => usuario.lojasPermitidas.includes(l.codigo))
 
-  return { nome: usuario.nome, atual: usuario.loja, lojas, destino }
+  return {
+    nome: usuario.nome,
+    atual: usuario.loja,
+    lojas,
+    destino,
+    daMaquina: await lojaDaMaquina(request),
+  }
 }
 
 export async function action({ request }: Route.ActionArgs) {
@@ -58,13 +63,26 @@ export async function action({ request }: Route.ActionArgs) {
     return data({ erro: "Você não tem acesso a essa loja" }, { status: 403 })
   }
 
-  return definirLojaDaSessao(request, escolhida, destino)
+  /**
+   * Gravar o padrão da máquina é OPCIONAL e desmarcado quando já existe um.
+   *
+   * Sem isso, um gerente que visita a QNE e troca de loja no terminal da QI
+   * deixaria aquele caixa apontando para a QNE — e o vendedor de segunda venderia
+   * na loja errada sem tocar em nada. O padrão do terminal só muda de propósito.
+   */
+  const cookies: string[] = []
+  if (String(form.get("padraoDaMaquina")) === "on") {
+    cookies.push(await cookieDaLojaDaMaquina(escolhida))
+  }
+
+  return definirLojaDaSessao(request, escolhida, destino, cookies)
 }
 
 export default function EscolherLoja({ loaderData, actionData }: Route.ComponentProps) {
-  const { nome, atual, lojas, destino } = loaderData
+  const { nome, atual, lojas, destino, daMaquina } = loaderData
   const navegacao = useNavigation()
   const enviando = navegacao.state !== "idle"
+  const [fixar, setFixar] = useState(false)
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-muted/30 p-6">
@@ -97,6 +115,14 @@ export default function EscolherLoja({ loaderData, actionData }: Route.Component
               <Form method="post" key={loja.codigo}>
                 <input type="hidden" name="destino" value={destino} />
                 <input type="hidden" name="loja" value={loja.codigo} />
+                {/* Sem padrão nenhum ainda, a primeira escolha vira o padrão do
+                    terminal — é o caso da instalação. Havendo padrão, só muda se
+                    a pessoa marcar a caixa abaixo. */}
+                {daMaquina === null ? (
+                  <input type="hidden" name="padraoDaMaquina" value="on" />
+                ) : (
+                  <input type="hidden" name="padraoDaMaquina" value={fixar ? "on" : "off"} />
+                )}
                 <Button
                   type="submit"
                   disabled={enviando}
@@ -108,13 +134,40 @@ export default function EscolherLoja({ loaderData, actionData }: Route.Component
                   <span className="text-sm font-normal text-muted-foreground">
                     {loja.nome !== loja.codigo ? loja.nome : ""}
                   </span>
-                  {loja.codigo === atual ? (
-                    <span className="ml-auto text-xs">atual</span>
-                  ) : null}
+                  <span className="ml-auto flex items-center gap-2 text-xs">
+                    {loja.codigo === daMaquina ? (
+                      <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                        deste caixa
+                      </span>
+                    ) : null}
+                    {loja.codigo === atual ? "atual" : null}
+                  </span>
                 </Button>
               </Form>
             ))}
           </div>
+        )}
+
+        {daMaquina === null ? (
+          <p className="mt-4 text-[11px] leading-relaxed text-muted-foreground">
+            A loja escolhida agora fica gravada como a deste computador. Nos próximos
+            turnos quem entrar aqui já cai nela, sem escolher.
+          </p>
+        ) : (
+          <label className="mt-4 flex cursor-pointer items-start gap-2 text-[11px] leading-relaxed text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={fixar}
+              onChange={(e) => setFixar(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span>
+              Este computador é o caixa da{" "}
+              <b className="font-semibold text-foreground">{daMaquina}</b>. Marque
+              para trocar o padrão do terminal — se você só está cobrindo um turno em
+              outra loja, deixe desmarcado.
+            </span>
+          </label>
         )}
 
         {actionData?.erro ? (
