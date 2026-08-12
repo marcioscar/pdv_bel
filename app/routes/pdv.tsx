@@ -17,6 +17,7 @@ import { db } from "~/lib/db.server"
 import { criarCliente, lerCliente, listarClientes } from "~/lib/clientes.server"
 import { emitirParaVenda, type CobrancaDaVenda } from "~/lib/cobranca.server"
 import { saldosPorProduto } from "~/lib/estoque.server"
+import { contaDaLoja } from "~/lib/lojas.server"
 import { SOMENTE_ATIVOS } from "~/lib/produtos.server"
 import { exigirUsuario } from "~/lib/sessao.server"
 import { lerPedido, precificar, registrarVenda } from "~/lib/vendas.server"
@@ -68,7 +69,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   // por tecla. Acima de ~5 mil produtos, trocar por busca no servidor.
   const [cadastro, saldos, clientes] = await Promise.all([
     db.produto.findMany({ where: SOMENTE_ATIVOS, orderBy: { descricao: "asc" } }),
-    saldosPorProduto(),
+    saldosPorProduto(eu.loja),
     listarClientes(),
   ])
 
@@ -154,10 +155,13 @@ export async function action({ request }: Route.ActionArgs) {
 
     try {
       const cobranca = await criarPixImediato({
+        // A chave Pix é da conta da loja: cobrar na conta errada põe o dinheiro
+        // no CNPJ errado.
+        conta: await contaDaLoja(eu.loja),
         txid: novoTxid(),
         valor: preco.total,
         expiracaoSegundos: 900,
-        solicitacao: `Caixa ${CAIXA} - BrasSaco Embalagens`,
+        solicitacao: `${eu.loja} caixa ${CAIXA} - BrasSaco Embalagens`,
       })
       return { ok: true as const, tipo: "pix" as const, cobranca, total: preco.total }
     } catch (erro) {
@@ -187,7 +191,7 @@ export async function action({ request }: Route.ActionArgs) {
       return data({ ok: false as const, tipo: "pixStatus" as const, erro: preco.erro }, { status: 400 })
     }
 
-    const pix = await consultarPixImediato(txid)
+    const pix = await consultarPixImediato(txid, await contaDaLoja(eu.loja))
     const confirmacao = confirmarPagamento(pix, preco.total)
 
     if (!confirmacao.pago) {
@@ -206,6 +210,7 @@ export async function action({ request }: Route.ActionArgs) {
       recebido: preco.total,
       pixTxid: txid,
       pixPagoEm: pix.pagoEm ? new Date(pix.pagoEm) : new Date(),
+      loja: eu.loja,
       caixa: CAIXA,
       operador: eu.nome,
     })
@@ -235,7 +240,12 @@ export async function action({ request }: Route.ActionArgs) {
     )
   }
 
-  const resultado = await registrarVenda({ ...pedido, caixa: CAIXA, operador: eu.nome })
+  const resultado = await registrarVenda({
+    ...pedido,
+    loja: eu.loja,
+    caixa: CAIXA,
+    operador: eu.nome,
+  })
   return resultado.ok
     ? { ...resultado, tipo: "venda" as const }
     : data({ ...resultado, tipo: "venda" as const }, { status: 400 })
@@ -909,6 +919,8 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
         caixa={CAIXA}
         operador={eu.nome}
         papel={eu.papel}
+        loja={eu.loja}
+        lojasPermitidas={eu.lojasPermitidas.length}
         relogio={relogio}
         escuro={escuro}
         onAlternarTema={alternarTema}

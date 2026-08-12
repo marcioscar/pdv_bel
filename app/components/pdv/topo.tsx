@@ -1,5 +1,5 @@
 import { Form, Link, useLocation } from "react-router"
-import { LogOut, Moon, Sun } from "lucide-react"
+import { LogOut, Moon, Store, Sun } from "lucide-react"
 
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
@@ -12,6 +12,10 @@ type Props = {
   operador: string
   /** Decide quais seções aparecem — mesma fonte que as guardas do servidor. */
   papel: string
+  /** Loja do turno. Fica em destaque: operar na loja errada não pode ser sutil. */
+  loja: string
+  /** Quantas lojas o usuário alcança — com uma só, não há o que trocar. */
+  lojasPermitidas?: number
   relogio: string | null
   escuro: boolean
   onAlternarTema: () => void
@@ -22,6 +26,8 @@ export function Topo({
   caixa,
   operador,
   papel,
+  loja,
+  lojasPermitidas = 1,
   relogio,
   escuro,
   onAlternarTema,
@@ -69,6 +75,29 @@ export function Topo({
             )
           })}
         </nav>
+
+        {/* A loja vem antes do caixa e com destaque: se o funcionário cobrir turno
+            em outra loja e a sessão estiver na dele, a venda vai para a loja errada
+            — e isso precisa ser visível no balcão, não no fechamento do mês. */}
+        <Button
+          render={<Link to={`/loja?destino=${encodeURIComponent(pathname)}`} />}
+          nativeButton={false}
+          tabIndex={-1}
+          variant="secondary"
+          size="sm"
+          className="rounded-lg font-mono font-semibold"
+          title={
+            lojasPermitidas > 1
+              ? "Trocar de loja"
+              : "Loja em que você está operando"
+          }
+        >
+          <Store className="size-3.5" aria-hidden />
+          {loja}
+          {lojasPermitidas > 1 ? (
+            <span className="text-[9px] font-normal text-muted-foreground">trocar</span>
+          ) : null}
+        </Button>
 
         {caixa ? (
           <Badge variant="secondary" className="font-mono">

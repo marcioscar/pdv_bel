@@ -42,6 +42,8 @@ function limpo(valor: string | null | undefined) {
  * de barras e o copia-e-cola aparecem depois, na consulta ou pelo callback.
  */
 export function emitirCobranca(entrada: {
+  /** Conta do Inter que emite — define o CNPJ beneficiário do boleto. */
+  conta: string
   seuNumero: string
   valor: number
   vencimento: Date
@@ -53,6 +55,7 @@ export function emitirCobranca(entrada: {
   const { seuNumero, valor, vencimento, pagador } = entrada
 
   return chamarInter<CobrancaEmitida>("/cobranca/v3/cobrancas", {
+    conta: entrada.conta,
     metodo: "POST",
     escopos: ["boleto-cobranca.write"],
     corpo: {
@@ -82,8 +85,9 @@ export function emitirCobranca(entrada: {
   })
 }
 
-export function consultarCobranca(codigoSolicitacao: string) {
+export function consultarCobranca(codigoSolicitacao: string, conta: string) {
   return chamarInter<CobrancaConsultada>(`/cobranca/v3/cobrancas/${codigoSolicitacao}`, {
+    conta,
     escopos: ["boleto-cobranca.read"],
   })
 }
@@ -94,18 +98,26 @@ export function consultarCobranca(codigoSolicitacao: string) {
  * O endpoint não responde com o binário: responde `{"pdf": "<base64>"}`. Tratar
  * a resposta como arquivo direto gera um PDF corrompido.
  */
-export async function pdfDaCobranca(codigoSolicitacao: string): Promise<Buffer> {
+export async function pdfDaCobranca(
+  codigoSolicitacao: string,
+  conta: string
+): Promise<Buffer> {
   const resposta = await chamarInter<{ pdf: string }>(
     `/cobranca/v3/cobrancas/${codigoSolicitacao}/pdf`,
-    { escopos: ["boleto-cobranca.read"] }
+    { conta, escopos: ["boleto-cobranca.read"] }
   )
 
   if (!resposta?.pdf) throw new Error("Resposta do PDF sem o campo pdf")
   return Buffer.from(resposta.pdf, "base64")
 }
 
-export function cancelarCobranca(codigoSolicitacao: string, motivo: string) {
+export function cancelarCobranca(
+  codigoSolicitacao: string,
+  conta: string,
+  motivo: string
+) {
   return chamarInter(`/cobranca/v3/cobrancas/${codigoSolicitacao}/cancelar`, {
+    conta,
     metodo: "POST",
     escopos: ["boleto-cobranca.write"],
     corpo: { motivoCancelamento: motivo },
@@ -123,12 +135,13 @@ export function cancelarCobranca(codigoSolicitacao: string, motivo: string) {
  */
 export async function aguardarEmissao(
   codigoSolicitacao: string,
+  conta: string,
   { tentativas = 8, intervaloMs = 1500 } = {}
 ): Promise<CobrancaConsultada> {
   let ultima: CobrancaConsultada | null = null
 
   for (let i = 0; i < tentativas; i++) {
-    ultima = await consultarCobranca(codigoSolicitacao)
+    ultima = await consultarCobranca(codigoSolicitacao, conta)
     if (ultima.boleto?.linhaDigitavel) return ultima
     await new Promise((r) => setTimeout(r, intervaloMs))
   }
@@ -145,6 +158,7 @@ import QRCode from "qrcode"
 
 import { db } from "~/lib/db.server"
 import { ErroInter } from "~/lib/inter.server"
+import { contaDaLoja } from "~/lib/lojas.server"
 import { condicaoPorId, parcelasDaCondicao, type Parcela } from "~/lib/pdv"
 
 export type CobrancaDaVenda = {
@@ -184,6 +198,7 @@ async function comQrCode(dados: Omit<CobrancaDaVenda, "pixQrCode">): Promise<Cob
 type VendaParaCobrar = {
   id: string
   numero: number
+  loja: string
   total: number
   criadaEm: Date
   vencimento: Date | null
@@ -206,9 +221,22 @@ function planoDaVenda(venda: VendaParaCobrar): Parcela[] {
   return [{ parcela: 1, valor: venda.total, vencimento: venda.vencimento }]
 }
 
-/** Identificador da parcela para o Inter — no máximo 15 caracteres. */
-function seuNumeroDaParcela(numeroDaVenda: number, parcela: number, parcelas: number) {
-  const base = `PDV${String(numeroDaVenda).padStart(6, "0")}`
+/**
+ * Identificador da parcela para o Inter — no máximo 15 caracteres.
+ *
+ * O código da loja entra no início e isso NÃO é cosmético: a numeração é por
+ * loja, então QI e QNE (que dividem a mesma conta no Inter) teriam ambas a venda
+ * #57. Sem o prefixo, as duas pediriam `PDV000057`, o Inter recusaria a segunda
+ * como duplicata e a rotina de recuperação adotaria a cobrança da OUTRA loja —
+ * boleto de um cliente colado na venda de outro.
+ */
+function seuNumeroDaParcela(
+  loja: string,
+  numeroDaVenda: number,
+  parcela: number,
+  parcelas: number
+) {
+  const base = `${loja}${String(numeroDaVenda).padStart(6, "0")}`
   return parcelas === 1 ? base : `${base}-${parcela}`
 }
 
@@ -228,6 +256,8 @@ export async function emitirParaVenda(vendaId: string): Promise<CobrancaDaVenda[
   if (venda.canceladaEm) throw new Error("Venda cancelada não gera boleto")
   if (!venda.clienteId) throw new Error("Venda sem cliente")
 
+  // A conta sai da loja da venda: QI e QNE na da matriz, NRT e SDS nas suas.
+  const conta = await contaDaLoja(venda.loja)
   const plano = planoDaVenda(venda)
   const existentes = await db.cobranca.findMany({ where: { vendaId } })
   const porParcela = new Map(existentes.map((c) => [c.parcela, c]))
@@ -255,7 +285,7 @@ export async function emitirParaVenda(vendaId: string): Promise<CobrancaDaVenda[
     }
     codigos.set(
       p.parcela,
-      await emitirUmaParcela(venda, cliente, p, plano.length)
+      await emitirUmaParcela(venda, conta, cliente, p, plano.length)
     )
   }
 
@@ -267,7 +297,7 @@ export async function emitirParaVenda(vendaId: string): Promise<CobrancaDaVenda[
       continue
     }
 
-    const detalhe = await aguardarEmissao(codigoSolicitacao)
+    const detalhe = await aguardarEmissao(codigoSolicitacao, conta)
     const dados = {
       situacao: detalhe.cobranca?.situacao ?? "EM_PROCESSAMENTO",
       linhaDigitavel: detalhe.boleto?.linhaDigitavel ?? null,
@@ -282,6 +312,8 @@ export async function emitirParaVenda(vendaId: string): Promise<CobrancaDaVenda[
       create: {
         vendaId,
         vendaNumero: venda.numero,
+        loja: venda.loja,
+        conta,
         parcela: p.parcela,
         parcelas: plano.length,
         codigoSolicitacao,
@@ -300,6 +332,7 @@ export async function emitirParaVenda(vendaId: string): Promise<CobrancaDaVenda[
 
 async function emitirUmaParcela(
   venda: VendaParaCobrar,
+  conta: string,
   cliente: PagadorInter,
   p: Parcela,
   parcelas: number
@@ -308,11 +341,12 @@ async function emitirUmaParcela(
 
   try {
     const emitida = await emitirCobranca({
-      seuNumero: seuNumeroDaParcela(venda.numero, p.parcela, parcelas),
+      conta,
+      seuNumero: seuNumeroDaParcela(venda.loja, venda.numero, p.parcela, parcelas),
       valor: p.valor,
       vencimento: p.vencimento,
       pagador: cliente,
-      mensagem: `Venda ${venda.numero}${sufixo} - BrasSaco Embalagens`,
+      mensagem: `Venda ${venda.loja} ${venda.numero}${sufixo} - BrasSaco Embalagens`,
     })
     return emitida.codigoSolicitacao
   } catch (erro) {
@@ -371,12 +405,13 @@ const CANCELAVEIS = ["A_RECEBER", "EM_PROCESSAMENTO", "ATRASADO"]
  */
 async function aguardarCancelamento(
   codigoSolicitacao: string,
+  conta: string,
   { tentativas = 4, intervaloMs = 1500 } = {}
 ): Promise<string | null> {
   for (let i = 0; i < tentativas; i++) {
     await new Promise((r) => setTimeout(r, intervaloMs))
     try {
-      const situacao = (await consultarCobranca(codigoSolicitacao)).cobranca?.situacao
+      const situacao = (await consultarCobranca(codigoSolicitacao, conta)).cobranca?.situacao
       if (situacao && !CANCELAVEIS.includes(situacao)) return situacao
     } catch {
       // Consulta falhou: tenta de novo. Desistir aqui marcaria como cancelado
@@ -410,12 +445,18 @@ export async function cancelarCobrancasDaVenda(
     return { ok: true, canceladas: 0, jaEstavam: 0, emAndamento: 0 }
   }
 
-  const atuais: { id: string; codigoSolicitacao: string; situacao: string; parcela: number }[] = []
+  const atuais: {
+    id: string
+    codigoSolicitacao: string
+    situacao: string
+    parcela: number
+    conta: string
+  }[] = []
 
   for (const c of cobrancas) {
     let situacao = c.situacao
     try {
-      const detalhe = await consultarCobranca(c.codigoSolicitacao)
+      const detalhe = await consultarCobranca(c.codigoSolicitacao, c.conta)
       situacao = detalhe.cobranca?.situacao ?? situacao
       if (situacao !== c.situacao) {
         await db.cobranca.update({ where: { id: c.id }, data: { situacao } })
@@ -424,7 +465,15 @@ export async function cancelarCobrancasDaVenda(
       // Sem resposta do Inter, seguimos com a situação conhecida: melhor tentar
       // cancelar e falhar do que deixar o boleto vivo por causa da consulta.
     }
-    atuais.push({ id: c.id, codigoSolicitacao: c.codigoSolicitacao, situacao, parcela: c.parcela })
+    atuais.push({
+      id: c.id,
+      codigoSolicitacao: c.codigoSolicitacao,
+      situacao,
+      parcela: c.parcela,
+      // A conta gravada na cobrança, não a da loja atual: cancelar na conta errada
+      // devolve 404 sobre uma cobrança que existe.
+      conta: c.conta,
+    })
   }
 
   const pagas = atuais.filter((c) => c.situacao === "RECEBIDO" || c.situacao === "PAGO")
@@ -446,7 +495,7 @@ export async function cancelarCobrancasDaVenda(
   // cancelamento é assíncrono, esperar um por um somaria a espera de cada parcela.
   for (const c of aCancelar) {
     try {
-      await cancelarCobranca(c.codigoSolicitacao, motivo)
+      await cancelarCobranca(c.codigoSolicitacao, c.conta, motivo)
     } catch (erro) {
       // Falha aqui é o caso perigoso: um boleto vivo numa venda desfeita. A venda
       // NÃO é cancelada, e o gerente recebe o motivo para resolver no banco.
@@ -463,7 +512,7 @@ export async function cancelarCobrancasDaVenda(
   let emAndamento = 0
 
   for (const c of aCancelar) {
-    const confirmada = await aguardarCancelamento(c.codigoSolicitacao)
+    const confirmada = await aguardarCancelamento(c.codigoSolicitacao, c.conta)
 
     if (confirmada === "CANCELADO") {
       await db.cobranca.update({ where: { id: c.id }, data: { situacao: "CANCELADO" } })
@@ -505,12 +554,14 @@ export async function cobrancasDaVenda(vendaId: string): Promise<CobrancaDaVenda
  */
 export async function simularPagamentoCobranca(
   codigoSolicitacao: string,
+  conta: string,
   pagarCom: "BOLETO" | "PIX" = "BOLETO"
 ) {
   if (!process.env.INTER_BASE_URL?.includes("sandbox")) {
     throw new Error("Pagamento simulado só existe no sandbox")
   }
   return chamarInter(`/cobranca/v3/cobrancas/${codigoSolicitacao}/pagar`, {
+    conta,
     metodo: "POST",
     escopos: ["boleto-cobranca.write"],
     corpo: { pagarCom },
@@ -518,9 +569,14 @@ export async function simularPagamentoCobranca(
 }
 
 /** Callbacks que o Inter tentou entregar — serve para ver o payload real. */
-export function callbacksEnviados(dataHoraInicio: string, dataHoraFim: string) {
+export function callbacksEnviados(
+  conta: string,
+  dataHoraInicio: string,
+  dataHoraFim: string
+) {
   const q = new URLSearchParams({ dataHoraInicio, dataHoraFim })
   return chamarInter<unknown>(`/cobranca/v3/cobrancas/webhook/callbacks?${q}`, {
+    conta,
     escopos: ["boleto-cobranca.read"],
   })
 }

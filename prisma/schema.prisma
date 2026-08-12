@@ -7,6 +7,46 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/// Conta bancária no Inter. São TRÊS para quatro lojas: QI e QNE são matriz e
+/// filial e compartilham a conta; NRT e SDS têm a sua.
+///
+/// Credenciais e certificado NÃO ficam aqui — ficam no ambiente, nomeados pelo
+/// código da conta (INTER_MATRIZ_CLIENT_ID, INTER_NRT_CERT, …). Chave privada em
+/// banco é chave privada em backup, em dump e em tela de administração.
+model ContaInter {
+  id       String  @id @default(auto()) @map("_id") @db.ObjectId
+  codigo   String  @unique
+  nome     String
+  cnpj     String
+  chavePix String?
+  ativo    Boolean @default(true)
+
+  @@map("contas_inter")
+}
+
+/// Loja da rede. O código (QI, QNE, NRT, SDS) é a chave usada em toda parte, e
+/// não um ObjectId: `"loja": "QI"` num documento é legível quando você precisa
+/// entender o que aconteceu, e o conjunto é pequeno e estável.
+model Loja {
+  id     String @id @default(auto()) @map("_id") @db.ObjectId
+  codigo String @unique
+  nome   String
+  cnpj   String @unique
+  /// Código da ContaInter que emite boleto e Pix desta loja.
+  conta  String
+
+  endereco String?
+  bairro   String?
+  cidade   String?
+  uf       String?
+  cep      String?
+  telefone String?
+
+  ativo Boolean @default(true)
+
+  @@map("lojas")
+}
+
 model Produto {
   id        String @id @default(auto()) @map("_id") @db.ObjectId
   codigo    String
@@ -30,6 +70,10 @@ model Usuario {
   /// app/lib/permissoes.ts. O padrão é o menor privilégio: quem for cadastrado
   /// sem papel explícito não ganha poder de cancelar venda nem criar usuário.
   papel         String    @default("operador")
+  /// Códigos das lojas onde pode operar. VAZIO significa a rede toda — é assim
+  /// que o dono entra em qualquer loja sem ser cadastrado quatro vezes.
+  /// Quem tem mais de uma escolhe a loja ao entrar.
+  lojas         String[]
   ativo         Boolean   @default(true)
   criadoEm      DateTime  @default(now())
   ultimoAcessoEm DateTime?
@@ -44,6 +88,11 @@ model Cobranca {
   id                String   @id @default(auto()) @map("_id") @db.ObjectId
   vendaId           String   @db.ObjectId
   vendaNumero       Int
+  /// Loja que vendeu e conta do Inter que emitiu. A conta fica gravada porque
+  /// consultar, baixar o PDF ou cancelar depois exige as MESMAS credenciais —
+  /// pedir na conta errada devolve 404 sobre uma cobrança que existe.
+  loja              String
+  conta             String
   /// Parcelamento: a condição 3× gera três boletos para a mesma venda, com
   /// vencimentos diferentes. Por isso `vendaId` não é mais único — a unicidade
   /// passou a ser o par (vendaId, parcela).
@@ -63,6 +112,7 @@ model Cobranca {
 
   @@unique([vendaId, parcela])
   @@index([vendaNumero])
+  @@index([loja])
   @@map("cobrancas")
 }
 
@@ -73,8 +123,12 @@ model Cobranca {
 model MovimentoEstoque {
   id         String   @id @default(auto()) @map("_id") @db.ObjectId
   produtoId  String   @db.ObjectId
+  /// Estoque é físico: existe numa loja. Sem este campo o saldo de quatro lojas
+  /// somaria num número que não corresponde a prateleira nenhuma.
+  loja       String
   criadoEm   DateTime @default(now())
   /// "venda" | "entrada" | "ajuste" | "estorno"
+  /// | "transferencia_saida" | "transferencia_entrada"
   tipo       String
   quantidade Float
   operador   String
@@ -82,8 +136,8 @@ model MovimentoEstoque {
   vendaNumero Int?
   observacao String?
 
-  @@index([produtoId])
-  @@index([criadoEm])
+  @@index([produtoId, loja])
+  @@index([loja, criadoEm])
   @@index([vendaId])
   @@map("movimentos_estoque")
 }
@@ -118,7 +172,10 @@ model Cliente {
 
 model Venda {
   id       String     @id @default(auto()) @map("_id") @db.ObjectId
-  numero   Int        @unique
+  /// Sequência POR LOJA: cada loja tem a sua numeração, como o comércio espera.
+  /// Antes era única global, o que faria QI e NRT disputarem o mesmo número.
+  numero   Int
+  loja     String
   criadaEm DateTime   @default(now())
   caixa    String
   operador String
@@ -153,7 +210,8 @@ model Venda {
   canceladaEm  DateTime?
   canceladaPor String?
 
-  @@index([criadaEm])
+  @@unique([loja, numero])
+  @@index([loja, criadaEm])
   @@index([pixTxid])
   @@map("vendas")
 }
@@ -171,8 +229,9 @@ type VendaItem {
   subtotal   Float
 }
 
-/// Sequência do número de venda. O incremento é atômico ($inc num único
-/// documento), então dois caixas simultâneos não pegam o mesmo número.
+/// Sequência do número de venda, uma por loja: `nome` é "venda:QI". O incremento
+/// é atômico ($inc num único documento), então dois caixas simultâneos da mesma
+/// loja não pegam o mesmo número.
 model Contador {
   id    String @id @default(auto()) @map("_id") @db.ObjectId
   nome  String @unique

@@ -18,7 +18,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     db.produto.count(),
     db.cliente.count(),
     db.usuario.count({ where: { ativo: true } }),
-    db.cobranca.count({ where: { situacao: "A_RECEBER" } }),
+    db.cobranca.count({ where: { situacao: "A_RECEBER", loja: eu.loja } }),
   ])
 
   return { eu, numeros: { produtos, clientes, usuarios, aReceber } }

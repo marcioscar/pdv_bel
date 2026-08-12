@@ -4,15 +4,25 @@ import { readFileSync } from "node:fs"
 import { Agent } from "undici"
 
 /**
- * Cliente da API do Banco Inter.
+ * Cliente da API do Banco Inter, **por conta**.
  *
- * Duas particularidades moldam este arquivo:
+ * A rede tem quatro lojas e TRÊS contas: QI e QNE são matriz e filial e
+ * compartilham a conta; NRT e SDS têm a sua. Cada conta é um par de credenciais e
+ * um certificado próprios — então config, agente mTLS e token são guardados por
+ * código de conta. Um cache global emitiria o boleto de uma loja na conta de
+ * outra, o que é erro de dinheiro, não de tela.
+ *
+ * Três particularidades moldam este arquivo:
  *
  * 1. A API exige mTLS. O `fetch` global do Node não aceita certificado de
  *    cliente por opção de request — é preciso passar um `dispatcher` do undici
  *    com o par certificado/chave.
  * 2. O endpoint de token aceita **5 chamadas por minuto** e o token vale 1 hora.
- *    Sem cache, um caixa movimentado seria bloqueado em segundos.
+ *    Sem cache, um caixa movimentado seria bloqueado em segundos. O limite é por
+ *    credencial, então cada conta tem o seu balde.
+ * 3. As variáveis são nomeadas pela conta: INTER_MATRIZ_CLIENT_ID, INTER_NRT_CERT…
+ *    A conta em INTER_CONTA_PADRAO aceita também os nomes sem prefixo, que é como
+ *    a instalação de loja única já está configurada.
  */
 
 export type EscopoInter =
@@ -35,8 +45,26 @@ type Config = {
   chavePix?: string
 }
 
-let configCache: Config | null = null
-let agenteCache: Agent | null = null
+const configPorConta = new Map<string, Config>()
+const agentePorConta = new Map<string, Agent>()
+
+/**
+ * A conta que aceita as variáveis sem prefixo (INTER_CLIENT_ID etc.).
+ *
+ * O fallback vale SÓ para ela, de propósito: se valesse para todas, uma conta sem
+ * configuração emitiria calada com as credenciais da matriz — boleto no CNPJ
+ * errado, descoberto pelo contador semanas depois. Faltando configuração, é erro.
+ */
+function contaPadrao() {
+  return process.env.INTER_CONTA_PADRAO || "MATRIZ"
+}
+
+/** Nome da variável de uma conta, com o nome sem prefixo como reserva. */
+function doAmbiente(conta: string, sufixo: string): string | undefined {
+  const especifica = process.env[`INTER_${conta}_${sufixo}`]
+  if (especifica) return especifica
+  return conta === contaPadrao() ? process.env[`INTER_${sufixo}`] : undefined
+}
 
 export class InterNaoConfigurado extends Error {}
 
@@ -55,8 +83,9 @@ export class ErroInter extends Error {
  * escapados) ou em base64 — painéis como o easypanel costumam estragar quebras de
  * linha, então base64 é o caminho seguro. Se nenhuma vier, cai no arquivo.
  */
-function pemDeAmbiente(varConteudo: string, varCaminho: string): Buffer | null {
-  const conteudo = process.env[varConteudo]
+function pemDeAmbiente(conta: string, sufixo: string): Buffer | null {
+  const varConteudo = `INTER_${conta}_${sufixo}`
+  const conteudo = doAmbiente(conta, sufixo)
 
   if (conteudo) {
     if (conteudo.includes("-----BEGIN")) {
@@ -69,67 +98,79 @@ function pemDeAmbiente(varConteudo: string, varCaminho: string): Buffer | null {
     return decodificado
   }
 
-  const caminho = process.env[varCaminho]
+  const caminho = doAmbiente(conta, `${sufixo}_PATH`)
   return caminho ? readFileSync(caminho) : null
 }
 
-function lerConfig(): Config {
-  if (configCache) return configCache
+function lerConfig(conta: string): Config {
+  const guardada = configPorConta.get(conta)
+  if (guardada) return guardada
 
+  // A base (sandbox ou produção) é do ambiente inteiro, não da conta: não faz
+  // sentido uma loja em teste e outra em produção no mesmo processo.
   const baseUrl = process.env.INTER_BASE_URL
-  const clientId = process.env.INTER_CLIENT_ID
-  const clientSecret = process.env.INTER_CLIENT_SECRET
+  const clientId = doAmbiente(conta, "CLIENT_ID")
+  const clientSecret = doAmbiente(conta, "CLIENT_SECRET")
   // Em produção o certificado vem por variável (o arquivo não entra na imagem,
   // por decisão: chave privada não pertence a uma layer do Docker). Em dev, o
   // caminho no disco é mais prático.
-  const cert = pemDeAmbiente("INTER_CERT", "INTER_CERT_PATH")
-  const key = pemDeAmbiente("INTER_KEY", "INTER_KEY_PATH")
+  const cert = pemDeAmbiente(conta, "CERT")
+  const key = pemDeAmbiente(conta, "KEY")
 
   const faltando = Object.entries({
     INTER_BASE_URL: baseUrl,
-    INTER_CLIENT_ID: clientId,
-    INTER_CLIENT_SECRET: clientSecret,
-    "INTER_CERT ou INTER_CERT_PATH": cert,
-    "INTER_KEY ou INTER_KEY_PATH": key,
+    [`INTER_${conta}_CLIENT_ID`]: clientId,
+    [`INTER_${conta}_CLIENT_SECRET`]: clientSecret,
+    [`INTER_${conta}_CERT`]: cert,
+    [`INTER_${conta}_KEY`]: key,
   })
     .filter(([, valor]) => !valor)
     .map(([nome]) => nome)
 
   if (faltando.length > 0) {
-    throw new InterNaoConfigurado(`Faltam variáveis: ${faltando.join(", ")}`)
+    throw new InterNaoConfigurado(
+      `Conta ${conta} não configurada. Faltam: ${faltando.join(", ")}`
+    )
   }
 
-  configCache = {
+  const config: Config = {
     baseUrl: baseUrl!.replace(/\/$/, ""),
     clientId: clientId!,
     clientSecret: clientSecret!,
     cert: cert!,
     key: key!,
-    contaCorrente: process.env.INTER_CONTA_CORRENTE || undefined,
-    chavePix: process.env.INTER_CHAVE_PIX || undefined,
+    contaCorrente: doAmbiente(conta, "CONTA_CORRENTE") || undefined,
+    chavePix: doAmbiente(conta, "CHAVE_PIX") || undefined,
   }
-
-  return configCache
+  configPorConta.set(conta, config)
+  return config
 }
 
-export function interConfigurado() {
+export function interConfigurado(conta: string) {
   try {
-    lerConfig()
+    lerConfig(conta)
     return true
   } catch {
     return false
   }
 }
 
-export function chavePixConfigurada() {
-  return Boolean(lerConfig().chavePix)
+export function chavePixConfigurada(conta: string) {
+  try {
+    return Boolean(lerConfig(conta).chavePix)
+  } catch {
+    return false
+  }
 }
 
-function agente() {
-  if (agenteCache) return agenteCache
-  const { cert, key } = lerConfig()
-  agenteCache = new Agent({ connect: { cert, key } })
-  return agenteCache
+function agente(conta: string) {
+  const guardado = agentePorConta.get(conta)
+  if (guardado) return guardado
+
+  const { cert, key } = lerConfig(conta)
+  const novo = new Agent({ connect: { cert, key } })
+  agentePorConta.set(conta, novo)
+  return novo
 }
 
 // ---------------------------------------------------------------------------
@@ -139,8 +180,10 @@ function agente() {
 
 type TokenCache = { valor: string; escopos: Set<EscopoInter>; expiraEm: number }
 
-let token: TokenCache | null = null
-let emVoo: Promise<string> | null = null
+// Por conta: o token de uma conta não vale na outra, e o limite de 5 chamadas por
+// minuto do endpoint de token é por credencial.
+const tokenPorConta = new Map<string, TokenCache>()
+const emVooPorConta = new Map<string, Promise<string>>()
 
 /**
  * Todos os escopos que o app usa. O token é pedido para o conjunto inteiro de uma
@@ -160,37 +203,40 @@ const ESCOPOS_DO_APP: EscopoInter[] = [
 ]
 
 /** Se algum escopo não estiver liberado, o pedido inteiro falha; aí pedimos só o necessário. */
-let usarConjuntoCompleto = true
+const conjuntoCompletoFalhou = new Set<string>()
 
 function cobre(cache: TokenCache, escopos: EscopoInter[]) {
   return escopos.every((escopo) => cache.escopos.has(escopo))
 }
 
-export async function obterToken(escopos: EscopoInter[]): Promise<string> {
-  if (token && cobre(token, escopos) && token.expiraEm > Date.now() + 60_000) {
-    return token.valor
+export async function obterToken(conta: string, escopos: EscopoInter[]): Promise<string> {
+  const guardado = tokenPorConta.get(conta)
+  if (guardado && cobre(guardado, escopos) && guardado.expiraEm > Date.now() + 60_000) {
+    return guardado.valor
   }
-  if (emVoo) return emVoo
+  const jaPedindo = emVooPorConta.get(conta)
+  if (jaPedindo) return jaPedindo
 
-  emVoo = (async () => {
-    if (!usarConjuntoCompleto) return pedirToken(escopos)
+  const pedido = (async () => {
+    if (conjuntoCompletoFalhou.has(conta)) return pedirToken(conta, escopos)
 
     try {
-      return await pedirToken(ESCOPOS_DO_APP)
+      return await pedirToken(conta, ESCOPOS_DO_APP)
     } catch (erro) {
       if (!(erro instanceof ErroInter) || erro.status !== 401) throw erro
-      usarConjuntoCompleto = false
-      return pedirToken(escopos)
+      conjuntoCompletoFalhou.add(conta)
+      return pedirToken(conta, escopos)
     }
   })().finally(() => {
-    emVoo = null
+    emVooPorConta.delete(conta)
   })
 
-  return emVoo
+  emVooPorConta.set(conta, pedido)
+  return pedido
 }
 
-async function pedirToken(escopos: EscopoInter[]): Promise<string> {
-  const { baseUrl, clientId, clientSecret } = lerConfig()
+async function pedirToken(conta: string, escopos: EscopoInter[]): Promise<string> {
+  const { baseUrl, clientId, clientSecret } = lerConfig(conta)
 
   const resposta = await fetch(`${baseUrl}/oauth/v2/token`, {
     method: "POST",
@@ -201,7 +247,7 @@ async function pedirToken(escopos: EscopoInter[]): Promise<string> {
       grant_type: "client_credentials",
       scope: [...escopos].sort().join(" "),
     }),
-    dispatcher: agente(),
+    dispatcher: agente(conta),
   } as RequestInit)
 
   const corpo = await resposta.text()
@@ -216,17 +262,18 @@ async function pedirToken(escopos: EscopoInter[]): Promise<string> {
   }
 
   const dados = JSON.parse(corpo) as { access_token: string; expires_in: number }
-  token = {
+  const novo: TokenCache = {
     valor: dados.access_token,
     escopos: new Set(escopos),
     expiraEm: Date.now() + dados.expires_in * 1000,
   }
-  return token.valor
+  tokenPorConta.set(conta, novo)
+  return novo.valor
 }
 
-/** Só para os testes: descarta o token guardado. */
+/** Só para os testes: descarta os tokens guardados. */
 export function esquecerToken() {
-  token = null
+  tokenPorConta.clear()
 }
 
 
@@ -238,6 +285,8 @@ type OpcoesChamada = {
   metodo?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
   corpo?: unknown
   escopos: EscopoInter[]
+  /** Código da ContaInter. Obrigatório: não existe chamada "da conta genérica". */
+  conta: string
   /** Alguns endpoints devolvem PDF/binário em vez de JSON. */
   bruto?: boolean
 }
@@ -263,12 +312,12 @@ export async function chamarInter<T = unknown>(
 
 async function chamarUmaVez<T>(
   caminho: string,
-  { metodo = "GET", corpo, escopos, bruto = false }: OpcoesChamada
+  { metodo = "GET", corpo, escopos, conta, bruto = false }: OpcoesChamada
 ): Promise<T> {
-  const { baseUrl, contaCorrente } = lerConfig()
+  const { baseUrl, contaCorrente } = lerConfig(conta)
   // Barra dupla no path faz o Inter responder 406, conforme a doc de erros.
   const rota = caminho.startsWith("/") ? caminho.replace(/\/{2,}/g, "/") : `/${caminho}`
-  const acesso = await obterToken(escopos)
+  const acesso = await obterToken(conta, escopos)
 
   const cabecalhos: Record<string, string> = {
     authorization: `Bearer ${acesso}`,
@@ -283,7 +332,7 @@ async function chamarUmaVez<T>(
     method: metodo,
     headers: cabecalhos,
     body: corpo === undefined ? undefined : JSON.stringify(corpo),
-    dispatcher: agente(),
+    dispatcher: agente(conta),
   } as RequestInit)
 
   if (bruto) {
@@ -343,9 +392,11 @@ function mensagemDeErro(status: number, dados: unknown): string {
   return PORTATUS[status] ?? `Inter respondeu ${status}`
 }
 
-export function chavePix() {
-  const { chavePix } = lerConfig()
-  if (!chavePix) throw new InterNaoConfigurado("INTER_CHAVE_PIX não configurada")
+export function chavePix(conta: string) {
+  const { chavePix } = lerConfig(conta)
+  if (!chavePix) {
+    throw new InterNaoConfigurado(`Conta ${conta} sem chave Pix (INTER_${conta}_CHAVE_PIX)`)
+  }
   return chavePix
 }
 
@@ -368,6 +419,7 @@ export function chavePix() {
  * consciente de quem chama.
  */
 export async function registrarWebhookCobranca(
+  conta: string,
   baseUrlPublica: string,
   { sobrescrever = false } = {}
 ) {
@@ -375,21 +427,24 @@ export async function registrarWebhookCobranca(
   if (!raiz.startsWith("https://")) {
     throw new Error("A URL do webhook precisa ser HTTPS")
   }
-  const desejada = `${raiz}/webhooks/inter/cobranca`
+  // Uma URL por conta: o log diz de qual conta veio o retorno, e um callback
+  // desviado não encosta nos dados de outra conta.
+  const desejada = `${raiz}/webhooks/inter/cobranca/${conta}`
 
   const atual = await chamarInter<{ webhookUrl?: string }>(
     "/cobranca/v3/cobrancas/webhook",
-    { escopos: ["boleto-cobranca.read"] }
+    { conta, escopos: ["boleto-cobranca.read"] }
   ).catch(() => null)
 
   if (atual?.webhookUrl && atual.webhookUrl !== desejada && !sobrescrever) {
     throw new Error(
-      `Já existe webhook de cobrança apontando para ${atual.webhookUrl}. ` +
+      `A conta ${conta} já tem webhook de cobrança apontando para ${atual.webhookUrl}. ` +
         "Se substituir é intencional, chame com { sobrescrever: true }."
     )
   }
 
   await chamarInter("/cobranca/v3/cobrancas/webhook", {
+    conta,
     metodo: "PUT",
     escopos: ["boleto-cobranca.write"],
     corpo: { webhookUrl: desejada },
@@ -399,14 +454,16 @@ export async function registrarWebhookCobranca(
 }
 
 /** Só leitura: útil para conferir sem risco de sobrescrever nada. */
-export async function consultarWebhooks() {
+export async function consultarWebhooks(conta: string) {
   const cobranca = await chamarInter("/cobranca/v3/cobrancas/webhook", {
+    conta,
     escopos: ["boleto-cobranca.read"],
   }).catch((e) => ({ erro: String(e?.message ?? e) }))
 
-  const pix = await chamarInter<Record<string, unknown>>(`/pix/v2/webhook/${chavePix()}`, {
-    escopos: ["webhook.read"],
-  }).catch((e) => ({ erro: String(e?.message ?? e) }))
+  const pix = await chamarInter<Record<string, unknown>>(
+    `/pix/v2/webhook/${chavePix(conta)}`,
+    { conta, escopos: ["webhook.read"] }
+  ).catch((e) => ({ erro: String(e?.message ?? e) }))
 
   // O de Pix aparece só para conferência — o PDV não o gerencia.
   return { cobranca, pix, pixGerenciadoPeloPdv: false }

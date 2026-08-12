@@ -1,6 +1,6 @@
 import type { Route } from "./+types/saude"
 import { db } from "~/lib/db.server"
-import { interConfigurado } from "~/lib/inter.server"
+import { chavePixConfigurada, interConfigurado } from "~/lib/inter.server"
 import { diagnosticoSessao } from "~/lib/sessao.server"
 
 /**
@@ -11,7 +11,26 @@ import { diagnosticoSessao } from "~/lib/sessao.server"
  * Não expõe segredo: só se a configuração existe e contra qual ambiente aponta.
  */
 export async function loader(_: Route.LoaderArgs) {
-  const inter = interConfigurado()
+  // Uma linha por conta: com três contas, "o Inter está configurado" deixou de ser
+  // uma pergunta com resposta única. Sem isto, uma loja sem credencial só apareceria
+  // quando a primeira venda a prazo falhasse no balcão.
+  let contas: Record<string, { credenciais: boolean; chavePix: boolean; lojas: string[] }> = {}
+  try {
+    const lojas = await db.loja.findMany({
+      where: { ativo: true },
+      select: { codigo: true, conta: true },
+    })
+    for (const { codigo, conta } of lojas) {
+      contas[conta] ??= {
+        credenciais: interConfigurado(conta),
+        chavePix: chavePixConfigurada(conta),
+        lojas: [],
+      }
+      contas[conta].lojas.push(codigo)
+    }
+  } catch {
+    contas = {}
+  }
 
   let banco: string
   try {
@@ -28,15 +47,12 @@ export async function loader(_: Route.LoaderArgs) {
       // Sem SESSION_SECRET nada que exige login funciona; melhor dizer aqui.
       sessao: diagnosticoSessao(),
       banco,
+      contasInter: contas,
       inter: {
-        configurado: inter,
         // sandbox ou produção — dá para ver de fora se alguém trocou sem avisar
-        alvo: process.env.INTER_BASE_URL?.includes("sandbox")
-          ? "sandbox"
-          : inter
-            ? "producao"
-            : null,
-        chavePix: Boolean(process.env.INTER_CHAVE_PIX),
+        alvo: process.env.INTER_BASE_URL?.includes("sandbox") ? "sandbox" : "producao",
+        contas: Object.keys(contas).length,
+        prontas: Object.values(contas).filter((c) => c.credenciais).length,
       },
     },
     { headers: { "cache-control": "no-store" } }

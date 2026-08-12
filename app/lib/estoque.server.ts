@@ -12,9 +12,10 @@ export type TipoMovimento = "venda" | "entrada" | "ajuste" | "estorno"
  * o caminho é materializar o saldo num campo mantido junto do movimento — sem
  * mudar o livro, que continua sendo a verdade.
  */
-export async function saldosPorProduto(): Promise<Map<string, number>> {
+export async function saldosPorProduto(loja: string): Promise<Map<string, number>> {
   const grupos = await db.movimentoEstoque.groupBy({
     by: ["produtoId"],
+    where: { loja },
     _sum: { quantidade: true },
   })
 
@@ -23,9 +24,30 @@ export async function saldosPorProduto(): Promise<Map<string, number>> {
   )
 }
 
-export async function saldoDoProduto(produtoId: string): Promise<number> {
+/**
+ * Saldo de cada produto em CADA loja, numa consulta só.
+ *
+ * É a base da consulta consolidada: `Map<produtoId, Map<loja, saldo>>`. Um banco
+ * único é o que torna isto uma agregação em vez de quatro conexões e uma junção
+ * na aplicação.
+ */
+export async function saldosPorProdutoELoja(): Promise<Map<string, Map<string, number>>> {
+  const grupos = await db.movimentoEstoque.groupBy({
+    by: ["produtoId", "loja"],
+    _sum: { quantidade: true },
+  })
+
+  const mapa = new Map<string, Map<string, number>>()
+  for (const grupo of grupos) {
+    if (!mapa.has(grupo.produtoId)) mapa.set(grupo.produtoId, new Map())
+    mapa.get(grupo.produtoId)!.set(grupo.loja, arredondar(grupo._sum.quantidade ?? 0))
+  }
+  return mapa
+}
+
+export async function saldoDoProduto(produtoId: string, loja: string): Promise<number> {
   const soma = await db.movimentoEstoque.aggregate({
-    where: { produtoId },
+    where: { produtoId, loja },
     _sum: { quantidade: true },
   })
   return arredondar(soma._sum.quantidade ?? 0)
@@ -42,11 +64,12 @@ export type MovimentoDeVenda = {
  */
 export function movimentosDeVenda(
   itens: MovimentoDeVenda[],
-  venda: { id: string; numero: number },
+  venda: { id: string; numero: number; loja: string },
   operador: string
 ) {
   return itens.map((item) => ({
     produtoId: item.produtoId,
+    loja: venda.loja,
     tipo: "venda" satisfies TipoMovimento,
     quantidade: -item.quantidade,
     operador,
@@ -70,10 +93,16 @@ export type ResultadoCancelamento =
  */
 export async function cancelarVenda(
   vendaId: string,
+  loja: string,
   operador: string
 ): Promise<ResultadoCancelamento> {
   const venda = await db.venda.findUnique({ where: { id: vendaId } })
   if (!venda) return { ok: false, erro: "Venda não encontrada" }
+  // Cancelar venda de outra loja mexeria em faturamento e estoque que não são
+  // desta operação. O id da venda é único na rede, então a checagem é necessária.
+  if (venda.loja !== loja) {
+    return { ok: false, erro: `Venda #${venda.numero} é da loja ${venda.loja}` }
+  }
   if (venda.canceladaEm) return { ok: false, erro: `Venda #${venda.numero} já cancelada` }
 
   const originais = await db.movimentoEstoque.findMany({
@@ -101,6 +130,9 @@ export async function cancelarVenda(
         await tx.movimentoEstoque.createMany({
           data: originais.map((movimento) => ({
             produtoId: movimento.produtoId,
+            // A mesma loja do movimento original: estorno em loja diferente
+            // criaria estoque numa e apagaria noutra.
+            loja: movimento.loja,
             tipo: "estorno" satisfies TipoMovimento,
             quantidade: -movimento.quantidade,
             operador,
@@ -124,6 +156,7 @@ export async function cancelarVenda(
 /** Entrada de mercadoria: soma ao saldo. */
 export async function registrarEntrada(
   produtoId: string,
+  loja: string,
   quantidade: number,
   operador: string,
   observacao?: string
@@ -131,6 +164,7 @@ export async function registrarEntrada(
   return db.movimentoEstoque.create({
     data: {
       produtoId,
+      loja,
       tipo: "entrada" satisfies TipoMovimento,
       quantidade: arredondar(quantidade),
       operador,
@@ -146,11 +180,12 @@ export async function registrarEntrada(
  */
 export async function registrarAjuste(
   produtoId: string,
+  loja: string,
   saldoContado: number,
   operador: string,
   observacao?: string
 ) {
-  const atual = await saldoDoProduto(produtoId)
+  const atual = await saldoDoProduto(produtoId, loja)
   const diferenca = arredondar(saldoContado - atual)
 
   if (diferenca === 0) return { movimento: null, diferenca: 0, saldo: atual }
@@ -158,6 +193,7 @@ export async function registrarAjuste(
   const movimento = await db.movimentoEstoque.create({
     data: {
       produtoId,
+      loja,
       tipo: "ajuste" satisfies TipoMovimento,
       quantidade: diferenca,
       operador,
@@ -169,8 +205,9 @@ export async function registrarAjuste(
 }
 
 /** Últimos lançamentos, para a tela de estoque mostrar o que acabou de entrar. */
-export async function movimentosRecentes(limite = 40) {
+export async function movimentosRecentes(loja: string, limite = 40) {
   const movimentos = await db.movimentoEstoque.findMany({
+    where: { loja },
     orderBy: { criadoEm: "desc" },
     take: limite,
   })

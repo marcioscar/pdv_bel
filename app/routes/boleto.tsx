@@ -8,7 +8,7 @@ import { exigirUsuario } from "~/lib/sessao.server"
  * O PDF é buscado no Inter na hora — assim nada de binário grande fica no Mongo.
  */
 export async function loader({ params, request }: Route.LoaderArgs) {
-  await exigirUsuario(request)
+  const eu = await exigirUsuario(request)
 
   // ?parcela=2 serve a segunda parcela do parcelamento; sem isso, a primeira.
   const pedida = Number(new URL(request.url).searchParams.get("parcela"))
@@ -19,8 +19,11 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     orderBy: { parcela: "asc" },
   })
   if (!cobranca) throw new Response("Cobrança não encontrada", { status: 404 })
+  if (cobranca.loja !== eu.loja) {
+    throw new Response(`Boleto da loja ${cobranca.loja}`, { status: 403 })
+  }
 
-  const pdf = await pdfDaCobranca(cobranca.codigoSolicitacao)
+  const pdf = await pdfDaCobranca(cobranca.codigoSolicitacao, cobranca.conta)
   const sufixo = cobranca.parcelas > 1 ? `-parcela-${cobranca.parcela}` : ""
 
   return new Response(new Uint8Array(pdf), {

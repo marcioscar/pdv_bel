@@ -28,16 +28,19 @@ export function meta(_: Route.MetaArgs) {
 export async function loader({ request }: Route.LoaderArgs) {
   // O layout de /admin já cobra o papel; aqui é explícito porque a action
   // também precisa, e é preço — dinheiro — que se edita nesta tela.
-  await exigirGerente(request, "editarProdutos")
+  const eu = await exigirGerente(request, "editarProdutos")
 
   // Aqui vêm os inativos também: esta é a tela que os reativa.
   const [cadastro, saldos, repetidos] = await Promise.all([
     db.produto.findMany({ orderBy: { descricao: "asc" } }),
-    saldosPorProduto(),
+    // O saldo mostrado é o da loja em que o gerente está — o catálogo é da rede,
+    // o estoque é da prateleira.
+    saldosPorProduto(eu.loja),
     codigosRepetidos(),
   ])
 
   return {
+    loja: eu.loja,
     produtos: cadastro.map((produto) => ({
       ...produto,
       estoque: saldos.get(produto.id) ?? 0,

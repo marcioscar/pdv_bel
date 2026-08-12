@@ -10,6 +10,7 @@ import {
   type AcaoDeGerente,
   type Papel,
 } from "~/lib/permissoes"
+import { listarLojas } from "~/lib/lojas.server"
 import { conferirSenha, normalizarEmail } from "~/lib/senha.server"
 
 export type UsuarioLogado = {
@@ -17,7 +18,14 @@ export type UsuarioLogado = {
   nome: string
   email: string
   papel: Papel
+  /** Loja em que está operando agora — escolhida ao entrar. */
+  loja: string
+  /** Lojas onde pode operar. Cadastro vazio significa a rede toda. */
+  lojasPermitidas: string[]
 }
+
+/** Usuário autenticado mas ainda sem loja escolhida na sessão. */
+export type UsuarioSemLoja = Omit<UsuarioLogado, "loja">
 
 /**
  * O segredo assina o cookie: sem ele qualquer um forjaria uma sessão. Em
@@ -51,7 +59,8 @@ function segredo() {
   return "segredo-de-desenvolvimento-nao-use-em-producao"
 }
 
-type Armazem = ReturnType<typeof createCookieSessionStorage<{ usuarioId: string }>>
+type Sessao = { usuarioId: string; loja: string }
+type Armazem = ReturnType<typeof createCookieSessionStorage<Sessao>>
 let armazemCache: Armazem | null = null
 
 /**
@@ -65,7 +74,7 @@ let armazemCache: Armazem | null = null
 function armazem(): Armazem {
   if (armazemCache) return armazemCache
 
-  armazemCache = createCookieSessionStorage<{ usuarioId: string }>({
+  armazemCache = createCookieSessionStorage<Sessao>({
     cookie: {
       name: "pdv_sessao",
       httpOnly: true,
@@ -80,10 +89,39 @@ function armazem(): Armazem {
   return armazemCache
 }
 
-export async function criarSessao(usuarioId: string, destino = "/") {
+/**
+ * Abre a sessão. Argumentos NOMEADOS de propósito: com `(id, loja, destino)`
+ * posicional, uma chamada antiga de dois argumentos passaria o destino como loja
+ * e o TypeScript aceitaria — os dois são string. Erro silencioso de loja é o pior
+ * tipo de erro neste sistema.
+ */
+export async function criarSessao({
+  usuarioId,
+  loja,
+  destino = "/",
+}: {
+  usuarioId: string
+  loja: string | null
+  destino?: string
+}) {
   const sessao = await armazem().getSession()
   sessao.set("usuarioId", usuarioId)
+  // Sem loja definida, o próximo `exigirUsuario` manda escolher.
+  if (loja) sessao.set("loja", loja)
 
+  return redirect(loja ? destino : `/loja?destino=${encodeURIComponent(destino)}`, {
+    headers: { "set-cookie": await armazem().commitSession(sessao) },
+  })
+}
+
+/** Troca a loja da sessão sem pedir a senha de novo. */
+export async function definirLojaDaSessao(
+  request: Request,
+  loja: string,
+  destino = "/"
+) {
+  const sessao = await armazem().getSession(request.headers.get("cookie"))
+  sessao.set("loja", loja)
   return redirect(destino, {
     headers: { "set-cookie": await armazem().commitSession(sessao) },
   })
@@ -96,8 +134,17 @@ export async function encerrarSessao(request: Request) {
   })
 }
 
-/** Devolve o usuário da sessão, ou null. Não redireciona. */
-export async function usuarioDaSessao(request: Request): Promise<UsuarioLogado | null> {
+/**
+ * O usuário do cookie, com as lojas que pode operar. Não redireciona.
+ *
+ * `loja` vem null quando o cookie ainda não tem loja escolhida OU quando a loja
+ * escolhida deixou de valer — funcionário remanejado, loja desativada. Revalidar
+ * a cada requisição, e não só no login, é o que faz a mudança de cadastro valer
+ * na hora, do mesmo jeito que `ativo` já valia.
+ */
+export async function usuarioDaSessao(
+  request: Request
+): Promise<(UsuarioSemLoja & { loja: string | null }) | null> {
   const sessao = await armazem().getSession(request.headers.get("cookie"))
   const usuarioId = sessao.get("usuarioId")
   if (!usuarioId) return null
@@ -106,6 +153,16 @@ export async function usuarioDaSessao(request: Request): Promise<UsuarioLogado |
   // Usuário desativado perde o acesso na próxima requisição, sem esperar o cookie expirar.
   if (!usuario || !usuario.ativo) return null
 
+  // Cadastro sem lojas significa a rede toda; resolvemos para a lista real para
+  // o resto do sistema nunca precisar interpretar "vazio".
+  const todas = (await listarLojas()).map((l) => l.codigo)
+  const permitidas =
+    usuario.lojas.length === 0
+      ? todas
+      : usuario.lojas.filter((codigo) => todas.includes(codigo))
+
+  const escolhida = sessao.get("loja")
+
   return {
     id: usuario.id,
     nome: usuario.nome,
@@ -113,20 +170,32 @@ export async function usuarioDaSessao(request: Request): Promise<UsuarioLogado |
     // Papel desconhecido no banco cai no menor privilégio, não no maior: um valor
     // digitado errado não pode virar promoção.
     papel: papelValido(usuario.papel) ? usuario.papel : PAPEL_PADRAO,
+    lojasPermitidas: permitidas,
+    loja: escolhida && permitidas.includes(escolhida) ? escolhida : null,
   }
 }
 
 /**
- * Exige sessão. Guarda o destino em `?destino=` para devolver o operador à tela
- * que ele tentou abrir depois do login.
+ * Exige sessão COM loja. Devolver `loja` sempre preenchido é o que permite tornar
+ * o escopo obrigatório nas funções de servidor: quem tem o usuário tem a loja, e
+ * o TypeScript cobra o resto.
+ *
+ * Sem loja válida, manda escolher em vez de adivinhar. Adivinhar seria gravar
+ * venda na loja errada, e isso não se descobre olhando a tela.
  */
 export async function exigirUsuario(request: Request): Promise<UsuarioLogado> {
   const usuario = await usuarioDaSessao(request)
-  if (usuario) return usuario
-
   const url = new URL(request.url)
   const destino = url.pathname + url.search
-  throw redirect(`/entrar?destino=${encodeURIComponent(destino)}`)
+
+  if (!usuario) {
+    throw redirect(`/entrar?destino=${encodeURIComponent(destino)}`)
+  }
+  if (!usuario.loja) {
+    throw redirect(`/loja?destino=${encodeURIComponent(destino)}`)
+  }
+
+  return { ...usuario, loja: usuario.loja }
 }
 
 /**
@@ -145,6 +214,27 @@ export async function exigirGerente(
   if (ehGerente(usuario.papel)) return usuario
 
   throw new Response(ACOES_DE_GERENTE[acao], { status: 403 })
+}
+
+/**
+ * A loja do usuário quando não há escolha a fazer.
+ *
+ * Devolve a loja quando ele só pode operar numa, e null quando pode em mais de
+ * uma — aí a tela pergunta. Um funcionário que cobre turno em outra loja é o caso
+ * comum aqui, e escolher errado grava a venda no lugar errado.
+ */
+export async function lojaUnica(usuarioId: string): Promise<string | null> {
+  const usuario = await db.usuario.findUnique({
+    where: { id: usuarioId },
+    select: { lojas: true },
+  })
+  if (!usuario) return null
+
+  const todas = (await listarLojas()).map((l) => l.codigo)
+  const permitidas =
+    usuario.lojas.length === 0 ? todas : usuario.lojas.filter((c) => todas.includes(c))
+
+  return permitidas.length === 1 ? permitidas[0] : null
 }
 
 export async function contarUsuarios() {

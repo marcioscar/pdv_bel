@@ -12,7 +12,12 @@ import {
 
 export type ItemRecebido = { produtoId: string; quantidade: number }
 
-export type PedidoVenda = {
+/**
+ * O que o navegador manda. Note que loja, caixa e operador NÃO estão aqui: eles
+ * vêm da sessão, na rota. Se estivessem no payload, daria para escolher em que
+ * loja gravar a venda — e a separação entre lojas viraria sugestão.
+ */
+export type PedidoRecebido = {
   itens: ItemRecebido[]
   desconto: number
   forma: string
@@ -29,6 +34,11 @@ export type PedidoVenda = {
   /** Pix imediato: comprovante do pagamento já confirmado. */
   pixTxid?: string | null
   pixPagoEm?: Date | null
+}
+
+/** O pedido completo: o que veio da tela mais o que só o servidor sabe. */
+export type PedidoVenda = PedidoRecebido & {
+  loja: string
   caixa: string
   operador: string
 }
@@ -52,7 +62,7 @@ export type ResultadoVenda =
 const OBJECT_ID = /^[0-9a-fA-F]{24}$/
 
 /** Só aceita o que o formato do payload garante; o resto é rejeitado. */
-export function lerPedido(bruto: unknown): PedidoVenda | null {
+export function lerPedido(bruto: unknown): PedidoRecebido | null {
   if (typeof bruto !== "object" || bruto === null) return null
   const corpo = bruto as Record<string, unknown>
 
@@ -94,8 +104,6 @@ export function lerPedido(bruto: unknown): PedidoVenda | null {
     recebido,
     clienteId,
     condicao: typeof corpo.condicao === "string" ? corpo.condicao : null,
-    caixa: typeof corpo.caixa === "string" ? corpo.caixa : "01",
-    operador: typeof corpo.operador === "string" ? corpo.operador : "—",
   }
 }
 
@@ -152,6 +160,7 @@ export async function registrarVenda(pedido: PedidoVenda): Promise<ResultadoVend
   if (!FORMAS_PAGAMENTO.some((f) => f.id === pedido.forma)) {
     return { ok: false, erro: "Forma de pagamento inválida" }
   }
+  if (!pedido.loja) return { ok: false, erro: "Venda sem loja" }
 
   const preco = await precificar(pedido.itens, pedido.desconto)
   if (!preco.ok) return { ok: false, erro: preco.erro }
@@ -252,9 +261,13 @@ async function gravar(
     // O $inc fica FORA da transação de propósito: dentro dela, o rollback de uma
     // colisão devolveria o contador e a tentativa seguinte repetiria o mesmo
     // número para sempre. O custo é um número queimado quando a gravação falha.
-    const contador = await db.contador.update({
-      where: { nome: "venda" },
-      data: { valor: { increment: 1 } },
+    // Um contador por loja: "venda:QI". Com um contador global, as quatro lojas
+    // disputariam a mesma sequência e o número deixaria de significar algo para
+    // quem confere o caixa de uma loja.
+    const contador = await db.contador.upsert({
+      where: { nome: `venda:${pedido.loja}` },
+      update: { valor: { increment: 1 } },
+      create: { nome: `venda:${pedido.loja}`, valor: 1 },
     })
 
     try {
@@ -285,6 +298,7 @@ async function gravarUmaVez(
     const venda = await tx.venda.create({
       data: {
         numero,
+        loja: pedido.loja,
         caixa: pedido.caixa,
         operador: pedido.operador,
         itens,

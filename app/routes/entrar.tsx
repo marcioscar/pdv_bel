@@ -16,6 +16,7 @@ import {
   autenticar,
   contarUsuarios,
   criarSessao,
+  lojaUnica,
   usuarioDaSessao,
 } from "~/lib/sessao.server"
 
@@ -62,16 +63,24 @@ export async function action({ request }: Route.ActionArgs) {
         nome,
         email: normalizarEmail(email),
         papel: "gerente",
+        // Sem lojas = a rede toda. Quem cria o primeiro acesso é o dono.
+        lojas: [],
         senhaHash: await gerarHash(senha),
       },
     })
-    return criarSessao(usuario.id, destino)
+    return criarSessao({ usuarioId: usuario.id, loja: await lojaUnica(usuario.id), destino })
   }
 
   const resultado = await autenticar(email, senha)
   if (!resultado.ok) return data({ erro: resultado.erro }, { status: 400 })
 
-  return criarSessao(resultado.usuarioId, destino)
+  // Com uma loja só, entra direto. Com mais de uma, `criarSessao` manda escolher —
+  // e adivinhar seria gravar venda na loja errada.
+  return criarSessao({
+    usuarioId: resultado.usuarioId,
+    loja: await lojaUnica(resultado.usuarioId),
+    destino,
+  })
 }
 
 export default function Entrar({ loaderData, actionData }: Route.ComponentProps) {

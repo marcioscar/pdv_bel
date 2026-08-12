@@ -64,6 +64,8 @@ async function paraSaida(dados: CobRespostaInter): Promise<PixImediato> {
  * justamente para "compra em loja física".
  */
 export async function criarPixImediato(entrada: {
+  /** Conta do Inter da loja que está vendendo — cada uma tem a sua chave Pix. */
+  conta: string
   txid: string
   valor: number
   expiracaoSegundos?: number
@@ -71,12 +73,13 @@ export async function criarPixImediato(entrada: {
   devedor?: { nome: string; cpf?: string; cnpj?: string }
 }): Promise<PixImediato> {
   const resposta = await chamarInter<CobRespostaInter>(`/pix/v2/cob/${entrada.txid}`, {
+    conta: entrada.conta,
     metodo: "PUT",
     escopos: ["cob.write"],
     corpo: {
       calendario: { expiracao: entrada.expiracaoSegundos ?? 900 },
       valor: { original: entrada.valor.toFixed(2) },
-      chave: chavePix(),
+      chave: chavePix(entrada.conta),
       ...(entrada.solicitacao
         ? { solicitacaoPagador: entrada.solicitacao.slice(0, 140) }
         : {}),
@@ -87,8 +90,12 @@ export async function criarPixImediato(entrada: {
   return paraSaida(resposta)
 }
 
-export async function consultarPixImediato(txid: string): Promise<PixImediato> {
+export async function consultarPixImediato(
+  txid: string,
+  conta: string
+): Promise<PixImediato> {
   const resposta = await chamarInter<CobRespostaInter>(`/pix/v2/cob/${txid}`, {
+    conta,
     escopos: ["cob.read"],
   })
   return paraSaida(resposta)
@@ -140,23 +147,25 @@ export function pixFoiPago(pix: PixImediato) {
  * txid (`/cob/pagar/{txid}`) andou devolvendo 500 do lado do Inter, então este
  * serve de caminho B para validar o fluxo.
  */
-export async function simularPagamentoPorQrCode(qrCode: string, valor: number) {
+export async function simularPagamentoPorQrCode(conta: string, qrCode: string, valor: number) {
   if (!process.env.INTER_BASE_URL?.includes("sandbox")) {
     throw new Error("Simulação de pagamento só existe no sandbox")
   }
   return chamarInter(`/pix/v2/sandbox/cob/pagamento`, {
+    conta,
     metodo: "POST",
     escopos: ["pix.write"],
     corpo: { qrCode, valor },
   })
 }
 
-export async function simularPagamentoPix(txid: string, valor: number) {
+export async function simularPagamentoPix(conta: string, txid: string, valor: number) {
   if (!process.env.INTER_BASE_URL?.includes("sandbox")) {
     throw new Error("Simulação de pagamento só existe no sandbox")
   }
   // Pede escopo pix.write (não cob.write) e o corpo com o valor pago.
   return chamarInter<{ e2e: string }>(`/pix/v2/cob/pagar/${txid}`, {
+    conta,
     metodo: "POST",
     escopos: ["pix.write"],
     corpo: { valor },

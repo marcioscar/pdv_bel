@@ -35,7 +35,7 @@ const NAO_CANCELADA = {
 type ItemVendido = { _id: string; quantidade: number; total: number }
 
 export async function loader({ request }: Route.LoaderArgs) {
-  await exigirGerente(request, "verRelatorios")
+  const eu = await exigirGerente(request, "verRelatorios")
 
   const url = new URL(request.url)
   const pedido = Number(url.searchParams.get("dias"))
@@ -45,7 +45,17 @@ export async function loader({ request }: Route.LoaderArgs) {
   inicio.setDate(inicio.getDate() - (dias - 1))
   inicio.setHours(0, 0, 0, 0)
 
-  const noPeriodo = { criadaEm: { gte: inicio } }
+  // Uma loja por padrão. `?loja=rede` consolida, e só quem tem acesso a mais de
+  // uma loja pode pedir — senão o operador de QI veria o faturamento da rede.
+  const pedidoLoja = url.searchParams.get("loja")
+  const rede = pedidoLoja === "rede" && eu.lojasPermitidas.length > 1
+  const lojaEscolhida =
+    pedidoLoja && pedidoLoja !== "rede" && eu.lojasPermitidas.includes(pedidoLoja)
+      ? pedidoLoja
+      : eu.loja
+
+  const filtroLoja = rede ? { loja: { in: eu.lojasPermitidas } } : { loja: lojaEscolhida }
+  const noPeriodo = { criadaEm: { gte: inicio }, ...filtroLoja }
 
   const [porForma, canceladas, porSituacao, maisVendidos] = await Promise.all([
     db.venda.groupBy({
@@ -58,6 +68,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     // Contas a receber não são do período: o que está em aberto está em aberto.
     db.cobranca.groupBy({
       by: ["situacao"],
+      where: filtroLoja,
       _sum: { valor: true },
       _count: { _all: true },
     }),
@@ -69,6 +80,7 @@ export async function loader({ request }: Route.LoaderArgs) {
           $match: {
             criadaEm: { $gte: { $date: inicio.toISOString() } },
             canceladaEm: null,
+            ...(rede ? { loja: { $in: eu.lojasPermitidas } } : { loja: lojaEscolhida }),
           },
         },
         { $unwind: "$itens" },
@@ -90,6 +102,9 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   return {
     dias,
+    rede,
+    loja: lojaEscolhida,
+    lojasPermitidas: eu.lojasPermitidas,
     inicio: inicio.toISOString(),
     resumo: {
       vendas,

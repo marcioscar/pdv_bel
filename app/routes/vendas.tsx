@@ -33,7 +33,11 @@ export function meta(_: Route.MetaArgs) {
 export async function loader({ request }: Route.LoaderArgs) {
   const eu = await exigirUsuario(request)
 
+  // Só as vendas DESTA loja. O TypeScript não cobra filtro em consulta direta,
+  // então este é um dos poucos lugares que dependem de leitura atenta — e é por
+  // isso que quase todo acesso passa por app/lib/*.server.ts.
   const vendas = await db.venda.findMany({
+    where: { loja: eu.loja },
     orderBy: { numero: "desc" },
     take: 100,
   })
@@ -91,8 +95,14 @@ export async function action({ request }: Route.ActionArgs) {
     try {
       const venda = await db.venda.findUnique({
         where: { id: vendaId },
-        select: { canceladaEm: true },
+        select: { canceladaEm: true, loja: true },
       })
+      if (venda && venda.loja !== eu.loja) {
+        return data(
+          { ok: false as const, tipo: "cobranca" as const, erro: `Venda de outra loja (${venda.loja})` },
+          { status: 400 }
+        )
+      }
 
       return {
         ok: true as const,
@@ -128,7 +138,7 @@ export async function action({ request }: Route.ActionArgs) {
     )
   }
 
-  const resultado = await cancelarVenda(vendaId, eu.nome)
+  const resultado = await cancelarVenda(vendaId, eu.loja, eu.nome)
   if (!resultado.ok) {
     return data({ ...resultado, tipo: "cancelamento" as const }, { status: 400 })
   }
@@ -400,6 +410,8 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
       <Topo
         operador={eu.nome}
         papel={eu.papel}
+        loja={eu.loja}
+        lojasPermitidas={eu.lojasPermitidas.length}
         relogio={relogio}
         escuro={escuro}
         onAlternarTema={alternar}

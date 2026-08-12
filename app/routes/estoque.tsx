@@ -27,8 +27,8 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   const [cadastro, saldos, movimentos] = await Promise.all([
     db.produto.findMany({ where: SOMENTE_ATIVOS, orderBy: { descricao: "asc" } }),
-    saldosPorProduto(),
-    movimentosRecentes(),
+    saldosPorProduto(eu.loja),
+    movimentosRecentes(eu.loja),
   ])
 
   const produtos = cadastro.map((produto) => ({
@@ -94,6 +94,8 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
       <Topo
         operador={eu.nome}
         papel={eu.papel}
+        loja={eu.loja}
+        lojasPermitidas={eu.lojasPermitidas.length}
         relogio={relogio}
         escuro={escuro}
         onAlternarTema={alternar}

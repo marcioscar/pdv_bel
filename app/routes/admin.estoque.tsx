@@ -38,8 +38,8 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   const [cadastro, saldos, movimentos] = await Promise.all([
     db.produto.findMany({ where: SOMENTE_ATIVOS, orderBy: { descricao: "asc" } }),
-    saldosPorProduto(),
-    movimentosRecentes(),
+    saldosPorProduto(eu.loja),
+    movimentosRecentes(eu.loja),
   ])
 
   return {
@@ -85,7 +85,7 @@ export async function action({ request }: Route.ActionArgs) {
     if (valor <= 0) {
       return data({ ok: false as const, erro: "A entrada deve ser positiva" }, { status: 400 })
     }
-    await registrarEntrada(produtoId, valor, eu.nome)
+    await registrarEntrada(produtoId, eu.loja, valor, eu.nome)
     return {
       ok: true as const,
       mensagem: `Entrada de ${valor} ${produto.unidade} · ${produto.descricao}`,
@@ -96,7 +96,7 @@ export async function action({ request }: Route.ActionArgs) {
     return data({ ok: false as const, erro: "O saldo contado não pode ser negativo" }, { status: 400 })
   }
 
-  const { diferenca } = await registrarAjuste(produtoId, valor, eu.nome)
+  const { diferenca } = await registrarAjuste(produtoId, eu.loja, valor, eu.nome)
   return {
     ok: true as const,
     mensagem:

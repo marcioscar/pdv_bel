@@ -12,6 +12,7 @@ import {
   validarEmail,
   validarSenha,
 } from "~/lib/senha.server"
+import { listarLojas } from "~/lib/lojas.server"
 import { contarGerentesAtivos, exigirGerente } from "~/lib/sessao.server"
 import {
   ehGerente,
@@ -32,20 +33,24 @@ const OBJECT_ID = /^[0-9a-fA-F]{24}$/
 export async function loader({ request }: Route.LoaderArgs) {
   const eu = await exigirGerente(request, "gerenciarUsuarios")
 
-  const usuarios = await db.usuario.findMany({
-    orderBy: { nome: "asc" },
-    select: {
-      id: true,
-      nome: true,
-      email: true,
-      papel: true,
-      ativo: true,
-      criadoEm: true,
-      ultimoAcessoEm: true,
-    },
-  })
+  const [usuarios, lojas] = await Promise.all([
+    db.usuario.findMany({
+      orderBy: { nome: "asc" },
+      select: {
+        id: true,
+        nome: true,
+        email: true,
+        papel: true,
+        lojas: true,
+        ativo: true,
+        criadoEm: true,
+        ultimoAcessoEm: true,
+      },
+    }),
+    listarLojas(),
+  ])
 
-  return { eu, usuarios }
+  return { eu, usuarios, lojas }
 }
 
 /**
@@ -66,6 +71,24 @@ export async function action({ request }: Route.ActionArgs) {
   const eu = await exigirGerente(request, "gerenciarUsuarios")
   const form = await request.formData()
   const acao = String(form.get("acao") ?? "criar")
+
+  if (acao === "lojas") {
+    const id = String(form.get("id") ?? "")
+    if (!OBJECT_ID.test(id)) return data({ erro: "Usuário inválido" }, { status: 400 })
+
+    const codigos = (await listarLojas()).map((l) => l.codigo)
+    // Só códigos que existem: lixo no formulário não vira loja fantasma no cadastro.
+    const escolhidas = form.getAll("loja").map(String).filter((c) => codigos.includes(c))
+
+    const alvo = await db.usuario.update({
+      where: { id },
+      // Todas marcadas é o mesmo que rede toda; guardamos vazio para o usuário
+      // acompanhar automaticamente uma loja nova que a rede abrir.
+      data: { lojas: escolhidas.length === codigos.length ? [] : escolhidas },
+    })
+    const quantas = escolhidas.length === codigos.length ? "todas as lojas" : escolhidas.join(", ") || "nenhuma loja"
+    return { mensagem: `${alvo.nome}: ${quantas}` }
+  }
 
   if (acao === "alternar" || acao === "papel") {
     const id = String(form.get("id") ?? "")
@@ -135,7 +158,7 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Usuarios({ loaderData, actionData }: Route.ComponentProps) {
-  const { eu, usuarios } = loaderData
+  const { eu, usuarios, lojas } = loaderData
   const navegacao = useNavigation()
   const enviando = navegacao.state !== "idle"
   const ativos = usuarios.filter((u) => u.ativo).length
@@ -213,6 +236,7 @@ export default function Usuarios({ loaderData, actionData }: Route.ComponentProp
                 <th scope="col" className="py-2.5 text-left font-semibold">Nome</th>
                 <th scope="col" className="py-2.5 text-left font-semibold">E-mail</th>
                 <th scope="col" className="py-2.5 text-left font-semibold">Papel</th>
+                <th scope="col" className="py-2.5 text-left font-semibold">Lojas</th>
                 <th scope="col" className="py-2.5 text-left font-semibold">Último acesso</th>
                 <th scope="col" className="py-2.5 text-left font-semibold">Situação</th>
                 <th scope="col" className="py-2.5 text-right font-semibold" />
@@ -240,6 +264,43 @@ export default function Usuarios({ loaderData, actionData }: Route.ComponentProp
                     >
                       {rotuloDoPapel(usuario.papel)}
                     </Badge>
+                  </td>
+                  {/* As lojas onde ele pode operar. Marcar todas equivale a "rede",
+                      e é assim que ele acompanha uma loja nova sem novo cadastro. */}
+                  <td className="py-2.5">
+                    <Form method="post" className="flex flex-wrap items-center gap-1">
+                      <input type="hidden" name="acao" value="lojas" />
+                      <input type="hidden" name="id" value={usuario.id} />
+                      {lojas.map((loja) => {
+                        const marcada =
+                          usuario.lojas.length === 0 || usuario.lojas.includes(loja.codigo)
+                        return (
+                          <label
+                            key={loja.codigo}
+                            className={cn(
+                              "cursor-pointer rounded px-1.5 py-0.5 font-mono text-[10px]",
+                              marcada
+                                ? "bg-primary text-primary-foreground"
+                                : "bg-muted text-muted-foreground"
+                            )}
+                            title={loja.nome}
+                          >
+                            <input
+                              type="checkbox"
+                              name="loja"
+                              value={loja.codigo}
+                              defaultChecked={marcada}
+                              className="sr-only"
+                              onChange={(e) => e.currentTarget.form?.requestSubmit()}
+                            />
+                            {loja.codigo}
+                          </label>
+                        )
+                      })}
+                      {usuario.lojas.length === 0 ? (
+                        <span className="text-[10px] text-muted-foreground">rede</span>
+                      ) : null}
+                    </Form>
                   </td>
                   <td className="py-2.5 font-mono text-xs text-muted-foreground tabular-nums">
                     {usuario.ultimoAcessoEm
@@ -299,7 +360,8 @@ export default function Usuarios({ loaderData, actionData }: Route.ComponentProp
             A senha é guardada como hash scrypt com sal — não há como recuperá-la, só
             cadastrar outra. Desativar bloqueia o acesso na requisição seguinte, sem
             esperar o cookie expirar. Sempre precisa sobrar um gerente ativo, e
-            ninguém muda o próprio papel.
+            ninguém muda o próprio papel. Clique nos códigos de loja para vincular
+            ou desvincular — quem tem mais de uma escolhe ao entrar.
           </p>
         </div>
       </div>
