@@ -14,6 +14,7 @@ import {
   registrarEntrada,
   saldosPorProduto,
 } from "~/lib/estoque.server"
+import { SOMENTE_ATIVOS } from "~/lib/produtos.server"
 import { exigirGerente, exigirUsuario } from "~/lib/sessao.server"
 import { interpretarValor, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { ACOES_DE_GERENTE, ehGerente } from "~/lib/permissoes"
@@ -36,7 +37,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   const eu = await exigirUsuario(request)
 
   const [cadastro, saldos, movimentos] = await Promise.all([
-    db.produto.findMany({ orderBy: { descricao: "asc" } }),
+    db.produto.findMany({ where: SOMENTE_ATIVOS, orderBy: { descricao: "asc" } }),
     saldosPorProduto(),
     movimentosRecentes(),
   ])

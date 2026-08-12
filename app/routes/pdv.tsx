@@ -17,6 +17,7 @@ import { db } from "~/lib/db.server"
 import { criarCliente, lerCliente, listarClientes } from "~/lib/clientes.server"
 import { emitirParaVenda, type CobrancaDaVenda } from "~/lib/cobranca.server"
 import { saldosPorProduto } from "~/lib/estoque.server"
+import { SOMENTE_ATIVOS } from "~/lib/produtos.server"
 import { exigirUsuario } from "~/lib/sessao.server"
 import { lerPedido, precificar, registrarVenda } from "~/lib/vendas.server"
 import {
@@ -66,7 +67,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   // O catálogo inteiro vai para o cliente para a busca responder sem latência
   // por tecla. Acima de ~5 mil produtos, trocar por busca no servidor.
   const [cadastro, saldos, clientes] = await Promise.all([
-    db.produto.findMany({ orderBy: { descricao: "asc" } }),
+    db.produto.findMany({ where: SOMENTE_ATIVOS, orderBy: { descricao: "asc" } }),
     saldosPorProduto(),
     listarClientes(),
   ])

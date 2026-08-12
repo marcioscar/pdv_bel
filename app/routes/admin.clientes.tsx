@@ -8,6 +8,7 @@ import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { Kbd } from "~/components/ui/kbd"
 import {
+  alternarCliente,
   atualizarCliente,
   criarCliente,
   lerCliente,
@@ -32,7 +33,8 @@ export async function loader({ request }: Route.LoaderArgs) {
   // Cadastrar cliente é tarefa de operador — o boleto precisa do pagador, e quem
   // atende é quem tem os dados na mão.
   await exigirUsuario(request)
-  return { clientes: await listarClientes() }
+  // Inclui inativos: é esta a tela que os reativa.
+  return { clientes: await listarClientes({ incluirInativos: true }) }
 }
 
 export async function action({ request }: Route.ActionArgs) {
@@ -40,6 +42,14 @@ export async function action({ request }: Route.ActionArgs) {
 
   const form = await request.formData()
   const id = String(form.get("id") ?? "")
+
+  if (String(form.get("acao")) === "alternar") {
+    const resultado = await alternarCliente(id)
+    return resultado.ok
+      ? { ok: true as const, mensagem: resultado.mensagem }
+      : data({ ok: false as const, erro: resultado.erro, campo: null }, { status: 400 })
+  }
+
   const entrada = lerCliente(form)
 
   const resultado = id
@@ -122,6 +132,7 @@ export default function AdminClientes({ loaderData }: Route.ComponentProps) {
   const { clientes } = loaderData
 
   const [busca, setBusca] = useState("")
+  const [mostrarInativos, setMostrarInativos] = useState(false)
   const [form, setForm] = useState<Formulario | null>(null)
   const [aviso, setAviso] = useState<{ texto: string; tipo: "erro" | "sucesso" } | null>(null)
 
@@ -135,18 +146,24 @@ export default function AdminClientes({ loaderData }: Route.ComponentProps) {
   const buscaCep = useFetcher<EnderecoDoCep | { erro: string }>()
   const buscandoCep = buscaCep.state !== "idle"
 
+  const visiveis = useMemo(
+    () => (mostrarInativos ? clientes : clientes.filter((c) => c.ativo)),
+    [clientes, mostrarInativos]
+  )
+  const inativos = clientes.length - clientes.filter((c) => c.ativo).length
+
   const encontrados = useMemo(() => {
     const termo = normalizar(busca)
     const digitos = busca.replace(/\D/g, "")
-    if (!termo) return clientes
+    if (!termo) return visiveis
 
-    return clientes.filter(
+    return visiveis.filter(
       (c) =>
         normalizar(c.nome).includes(termo) ||
         normalizar(c.cidade).includes(termo) ||
         (digitos.length >= 3 && c.cpfCnpj.includes(digitos))
     )
-  }, [busca, clientes])
+  }, [busca, visiveis])
 
   useEffect(() => {
     if (form) primeiroCampo.current?.focus()
@@ -241,8 +258,20 @@ export default function AdminClientes({ loaderData }: Route.ComponentProps) {
           className="h-9 max-w-md rounded-lg"
         />
         <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
-          {clientes.length} {clientes.length === 1 ? "cadastrado" : "cadastrados"}
+          {visiveis.length} {visiveis.length === 1 ? "cadastrado" : "cadastrados"}
         </span>
+        {inativos > 0 ? (
+          <Button
+            type="button"
+            variant={mostrarInativos ? "secondary" : "ghost"}
+            size="sm"
+            onClick={() => setMostrarInativos((v) => !v)}
+            className="shrink-0 rounded-lg"
+          >
+            {mostrarInativos ? "Ocultar" : "Mostrar"} {inativos}{" "}
+            {inativos === 1 ? "inativo" : "inativos"}
+          </Button>
+        ) : null}
         <Button
           type="button"
           size="sm"
@@ -414,7 +443,8 @@ export default function AdminClientes({ loaderData }: Route.ComponentProps) {
                   key={cliente.id}
                   className={cn(
                     "border-b border-border",
-                    form?.id === cliente.id && "bg-accent"
+                    form?.id === cliente.id && "bg-accent",
+                    !cliente.ativo && "opacity-60"
                   )}
                 >
                   <td className="px-5 py-2 font-medium">
@@ -422,6 +452,11 @@ export default function AdminClientes({ loaderData }: Route.ComponentProps) {
                     <Badge variant="outline" className="ml-2 text-[9px]">
                       {cliente.tipoPessoa === "JURIDICA" ? "PJ" : "PF"}
                     </Badge>
+                    {!cliente.ativo ? (
+                      <Badge variant="destructive" className="ml-1.5 text-[9px]">
+                        inativo
+                      </Badge>
+                    ) : null}
                   </td>
                   <td className="px-2 py-2 font-mono text-xs text-muted-foreground tabular-nums">
                     {formatarCpfCnpj(cliente.cpfCnpj)}
@@ -434,7 +469,7 @@ export default function AdminClientes({ loaderData }: Route.ComponentProps) {
                   <td className="px-2 py-2 text-xs">
                     {cliente.cidade}/{cliente.uf}
                   </td>
-                  <td className="px-5 py-2 text-right">
+                  <td className="whitespace-nowrap px-5 py-2 text-right">
                     <Button
                       type="button"
                       variant="ghost"
@@ -442,6 +477,26 @@ export default function AdminClientes({ loaderData }: Route.ComponentProps) {
                       onClick={() => abrir(cliente)}
                     >
                       Editar
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      disabled={gravando}
+                      title={
+                        cliente.ativo
+                          ? "Sai do F6 do caixa; vendas antigas continuam intactas"
+                          : "Volta a aparecer no caixa"
+                      }
+                      onClick={() =>
+                        fetcher.submit(
+                          { acao: "alternar", id: cliente.id },
+                          { method: "post" }
+                        )
+                      }
+                      className={cn(cliente.ativo && "text-destructive")}
+                    >
+                      {cliente.ativo ? "Desativar" : "Reativar"}
                     </Button>
                   </td>
                 </tr>
@@ -454,7 +509,7 @@ export default function AdminClientes({ loaderData }: Route.ComponentProps) {
       <div className="flex items-center justify-between border-t border-border px-5 py-2.5 text-xs">
         <span className="text-muted-foreground">
           O endereço aqui é o que vai no boleto — endereço incompleto faz o Inter
-          recusar a cobrança
+          recusar a cobrança · cliente não é apagado, é desativado
         </span>
         {aviso ? (
           <span

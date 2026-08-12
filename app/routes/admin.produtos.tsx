@@ -12,6 +12,7 @@ import { saldosPorProduto } from "~/lib/estoque.server"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { buscarProdutos, criarIndice } from "~/lib/pdv"
 import {
+  alternarProduto,
   atualizarProduto,
   codigosRepetidos,
   criarProduto,
@@ -29,6 +30,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   // também precisa, e é preço — dinheiro — que se edita nesta tela.
   await exigirGerente(request, "editarProdutos")
 
+  // Aqui vêm os inativos também: esta é a tela que os reativa.
   const [cadastro, saldos, repetidos] = await Promise.all([
     db.produto.findMany({ orderBy: { descricao: "asc" } }),
     saldosPorProduto(),
@@ -48,6 +50,14 @@ export async function action({ request }: Route.ActionArgs) {
   await exigirGerente(request, "editarProdutos")
 
   const form = await request.formData()
+
+  if (String(form.get("acao")) === "alternar") {
+    const resultado = await alternarProduto(String(form.get("id") ?? ""))
+    return resultado.ok
+      ? { ok: true as const, mensagem: resultado.mensagem, id: null }
+      : data({ ok: false as const, erro: resultado.erro }, { status: 400 })
+  }
+
   const lido = lerProduto(form)
   if ("erro" in lido) {
     return data({ ok: false as const, erro: lido.erro }, { status: 400 })
@@ -81,6 +91,7 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
   const { produtos } = loaderData
 
   const [busca, setBusca] = useState("")
+  const [mostrarInativos, setMostrarInativos] = useState(false)
   const [edicao, setEdicao] = useState<EmEdicao | null>(null)
   const [aviso, setAviso] = useState<{ texto: string; tipo: "erro" | "sucesso" } | null>(null)
 
@@ -90,15 +101,21 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
   const fetcher = useFetcher<typeof action>()
   const gravando = fetcher.state !== "idle"
 
-  const indice = useMemo(() => criarIndice(produtos), [produtos])
+  const visiveis = useMemo(
+    () => (mostrarInativos ? produtos : produtos.filter((p) => p.ativo)),
+    [mostrarInativos, produtos]
+  )
+  const indice = useMemo(() => criarIndice(visiveis), [visiveis])
 
   const encontrados = useMemo(() => {
-    if (!busca.trim()) return produtos.slice(0, 50)
+    if (!busca.trim()) return visiveis.slice(0, 50)
     // O índice devolve ProdutoCatalogo; recuperamos a linha completa pelo id.
     const achados = buscarProdutos(indice, busca, 50)
-    const porId = new Map(produtos.map((p) => [p.id, p]))
+    const porId = new Map(visiveis.map((p) => [p.id, p]))
     return achados.map((a) => porId.get(a.id)!).filter(Boolean)
-  }, [busca, indice, produtos])
+  }, [busca, indice, visiveis])
+
+  const inativos = produtos.length - produtos.filter((p) => p.ativo).length
 
   useEffect(() => {
     if (edicao) primeiroCampo.current?.focus()
@@ -166,8 +183,20 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
           className="h-9 max-w-md rounded-lg"
         />
         <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
-          {produtos.length.toLocaleString("pt-BR")} no catálogo
+          {visiveis.length.toLocaleString("pt-BR")} no catálogo
         </span>
+        {inativos > 0 ? (
+          <Button
+            type="button"
+            variant={mostrarInativos ? "secondary" : "ghost"}
+            size="sm"
+            onClick={() => setMostrarInativos((v) => !v)}
+            className="shrink-0 rounded-lg"
+          >
+            {mostrarInativos ? "Ocultar" : "Mostrar"} {inativos}{" "}
+            {inativos === 1 ? "inativo" : "inativos"}
+          </Button>
+        ) : null}
         <Button
           type="button"
           size="sm"
@@ -272,11 +301,17 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
                   key={produto.id}
                   className={cn(
                     "border-b border-border",
-                    edicao?.id === produto.id && "bg-accent"
+                    edicao?.id === produto.id && "bg-accent",
+                    !produto.ativo && "opacity-60"
                   )}
                 >
                   <td className="px-5 py-2 font-mono text-xs tabular-nums">
                     {produto.codigo}
+                    {!produto.ativo ? (
+                      <Badge variant="destructive" className="ml-1.5 text-[9px]">
+                        inativo
+                      </Badge>
+                    ) : null}
                     {produto.codigoRepetido ? (
                       <Badge
                         variant="outline"
@@ -304,7 +339,7 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
                   >
                     {produto.estoque <= 0 ? "0" : formatarQuantidade(produto.estoque)}
                   </td>
-                  <td className="px-5 py-2 text-right">
+                  <td className="whitespace-nowrap px-5 py-2 text-right">
                     <Button
                       type="button"
                       variant="ghost"
@@ -322,6 +357,26 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
                     >
                       Editar
                     </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      disabled={gravando}
+                      title={
+                        produto.ativo
+                          ? "Sai do caixa e das buscas; o histórico continua"
+                          : "Volta a aparecer no caixa"
+                      }
+                      onClick={() =>
+                        fetcher.submit(
+                          { acao: "alternar", id: produto.id },
+                          { method: "post" }
+                        )
+                      }
+                      className={cn(produto.ativo && "text-destructive")}
+                    >
+                      {produto.ativo ? "Desativar" : "Reativar"}
+                    </Button>
                   </td>
                 </tr>
               ))
@@ -333,7 +388,8 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
       <div className="flex items-center justify-between border-t border-border px-5 py-2.5 text-xs">
         <span className="text-muted-foreground">
           Mostrando {encontrados.length} · <Kbd>Esc</Kbd> cancela a edição · alterar o
-          preço aqui não muda venda já registrada
+          preço aqui não muda venda já registrada · produto não é apagado, é
+          desativado — o histórico depende dele
         </span>
         {aviso ? (
           <span

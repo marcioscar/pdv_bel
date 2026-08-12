@@ -13,6 +13,9 @@ model Produto {
   descricao String
   unidade   String
   preco     Float
+  /// Produto não é apagado: sai das buscas e do caixa, e o histórico das vendas
+  /// que o incluem continua íntegro. Apagar deixaria itens órfãos no relatório.
+  ativo     Boolean @default(true)
 
   @@map("produtos")
 }
@@ -104,6 +107,9 @@ model Cliente {
   email       String?
   ddd         String?
   telefone    String?
+  /// Mesma ideia do produto: sai das listas sem sumir do histórico. Uma venda
+  /// guarda nome e documento copiados, então desativar não reescreve o passado.
+  ativo       Boolean  @default(true)
   criadoEm    DateTime @default(now())
 
   @@index([nome])

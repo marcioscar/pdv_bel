@@ -13,6 +13,7 @@ import { movimentosRecentes, saldosPorProduto } from "~/lib/estoque.server"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { useAtalhosDeSecao } from "~/lib/navegacao"
 import { buscarProdutos, criarIndice } from "~/lib/pdv"
+import { SOMENTE_ATIVOS } from "~/lib/produtos.server"
 import { exigirUsuario } from "~/lib/sessao.server"
 import { useRelogio, useTema } from "~/lib/tema"
 import { cn } from "~/lib/utils"
@@ -25,7 +26,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   const eu = await exigirUsuario(request)
 
   const [cadastro, saldos, movimentos] = await Promise.all([
-    db.produto.findMany({ orderBy: { descricao: "asc" } }),
+    db.produto.findMany({ where: SOMENTE_ATIVOS, orderBy: { descricao: "asc" } }),
     saldosPorProduto(),
     movimentosRecentes(),
   ])

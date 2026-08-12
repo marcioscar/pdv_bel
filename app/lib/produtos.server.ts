@@ -8,6 +8,17 @@ export type ProdutoEntrada = {
   preco: number
 }
 
+/**
+ * Só produto ativo aparece no caixa e nas buscas.
+ *
+ * Repare onde este filtro **não** entra: `precificar` (em vendas.server) busca por
+ * id sem olhar `ativo`, de propósito. Desativar um produto com o carrinho aberto
+ * não pode fazer a venda falhar no fechamento — desativar tira das buscas, não
+ * invalida o que já está lançado. E `emitirParaVenda` idem, para venda antiga
+ * continuar podendo emitir boleto.
+ */
+export const SOMENTE_ATIVOS = { ativo: true } as const
+
 export type ResultadoProduto =
   | { ok: true; produto: { id: string; codigo: string; descricao: string } }
   | { ok: false; erro: string }
@@ -65,8 +76,30 @@ export async function atualizarProduto(
 export async function codigosRepetidos(): Promise<Set<string>> {
   const grupos = await db.produto.groupBy({
     by: ["codigo"],
+    where: SOMENTE_ATIVOS,
     _count: { _all: true },
     having: { codigo: { _count: { gt: 1 } } },
   })
   return new Set(grupos.map((g) => g.codigo))
+}
+
+/**
+ * Desativa ou reativa. Não existe apagar: o item da venda guarda descrição e
+ * preço copiados, mas o relatório e o estoque referenciam o produtoId — apagar
+ * deixaria movimento de estoque apontando para o nada.
+ */
+export async function alternarProduto(id: string) {
+  if (!OBJECT_ID.test(id)) return { ok: false as const, erro: "Produto inválido" }
+
+  const produto = await db.produto.findUnique({ where: { id } })
+  if (!produto) return { ok: false as const, erro: "Produto não encontrado" }
+
+  const atualizado = await db.produto.update({
+    where: { id },
+    data: { ativo: !produto.ativo },
+  })
+  return {
+    ok: true as const,
+    mensagem: `${atualizado.descricao} ${atualizado.ativo ? "reativado" : "desativado"}`,
+  }
 }

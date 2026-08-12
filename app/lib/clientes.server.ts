@@ -108,8 +108,35 @@ export async function criarCliente(entrada: ClienteEntrada): Promise<ResultadoCl
   return { ok: true, cliente }
 }
 
-export function listarClientes() {
-  return db.cliente.findMany({ orderBy: { nome: "asc" } })
+/**
+ * Clientes ativos — é o que o caixa oferece no F6.
+ *
+ * `emitirParaVenda` busca o pagador por id sem este filtro, de propósito: uma
+ * venda a prazo antiga precisa continuar podendo emitir o boleto mesmo que o
+ * cadastro tenha sido desativado depois.
+ */
+export function listarClientes({ incluirInativos = false } = {}) {
+  return db.cliente.findMany({
+    where: incluirInativos ? {} : { ativo: true },
+    orderBy: { nome: "asc" },
+  })
+}
+
+/** Desativa ou reativa. Não existe apagar: vendas referenciam o clienteId. */
+export async function alternarCliente(id: string) {
+  if (!OBJECT_ID.test(id)) return { ok: false as const, erro: "Cliente inválido" }
+
+  const cliente = await db.cliente.findUnique({ where: { id } })
+  if (!cliente) return { ok: false as const, erro: "Cliente não encontrado" }
+
+  const atualizado = await db.cliente.update({
+    where: { id },
+    data: { ativo: !cliente.ativo },
+  })
+  return {
+    ok: true as const,
+    mensagem: `${atualizado.nome} ${atualizado.ativo ? "reativado" : "desativado"}`,
+  }
 }
 
 const OBJECT_ID = /^[0-9a-fA-F]{24}$/
