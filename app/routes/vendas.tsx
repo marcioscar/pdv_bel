@@ -141,6 +141,12 @@ export async function action({ request }: Route.ActionArgs) {
       `${cobrancas.canceladas} ${cobrancas.canceladas === 1 ? "boleto cancelado" : "boletos cancelados"} no Inter`
     )
   }
+  // Só o que o Inter confirmou é dito como cancelado; o resto é dito como o que é.
+  if (cobrancas.emAndamento > 0) {
+    partes.push(
+      `${cobrancas.emAndamento} ${cobrancas.emAndamento === 1 ? "boleto" : "boletos"} em cancelamento no Inter — confira em instantes`
+    )
+  }
 
   return {
     ok: true as const,

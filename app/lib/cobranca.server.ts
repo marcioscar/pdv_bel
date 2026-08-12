@@ -355,11 +355,36 @@ function paraSaida(
 }
 
 export type ResultadoCancelamentoCobrancas =
-  | { ok: true; canceladas: number; jaEstavam: number }
+  | { ok: true; canceladas: number; jaEstavam: number; emAndamento: number }
   | { ok: false; erro: string }
 
 /** Situações em que ainda há o que cancelar no Inter. */
 const CANCELAVEIS = ["A_RECEBER", "EM_PROCESSAMENTO", "ATRASADO"]
+
+/**
+ * Espera o cancelamento sair. O endpoint responde **202**: aceito, não concluído —
+ * medido em produção, a cobrança continuava "A_RECEBER" segundos depois.
+ *
+ * Sem esta confirmação, o registro local dizia CANCELADO na hora, e a tela
+ * afirmaria que o boleto morreu sem ninguém ter verificado. Devolve a situação
+ * confirmada, ou null se não deu tempo — e null NÃO é tratado como sucesso.
+ */
+async function aguardarCancelamento(
+  codigoSolicitacao: string,
+  { tentativas = 4, intervaloMs = 1500 } = {}
+): Promise<string | null> {
+  for (let i = 0; i < tentativas; i++) {
+    await new Promise((r) => setTimeout(r, intervaloMs))
+    try {
+      const situacao = (await consultarCobranca(codigoSolicitacao)).cobranca?.situacao
+      if (situacao && !CANCELAVEIS.includes(situacao)) return situacao
+    } catch {
+      // Consulta falhou: tenta de novo. Desistir aqui marcaria como cancelado
+      // algo que talvez não esteja.
+    }
+  }
+  return null
+}
 
 /**
  * Cancela no Inter as cobranças de uma venda.
@@ -381,7 +406,9 @@ export async function cancelarCobrancasDaVenda(
     where: { vendaId },
     orderBy: { parcela: "asc" },
   })
-  if (cobrancas.length === 0) return { ok: true, canceladas: 0, jaEstavam: 0 }
+  if (cobrancas.length === 0) {
+    return { ok: true, canceladas: 0, jaEstavam: 0, emAndamento: 0 }
+  }
 
   const atuais: { id: string; codigoSolicitacao: string; situacao: string; parcela: number }[] = []
 
@@ -412,18 +439,14 @@ export async function cancelarCobrancasDaVenda(
     }
   }
 
-  let canceladas = 0
-  let jaEstavam = 0
+  const jaEstavam = atuais.filter((c) => !CANCELAVEIS.includes(c.situacao)).length
+  const aCancelar = atuais.filter((c) => CANCELAVEIS.includes(c.situacao))
 
-  for (const c of atuais) {
-    if (!CANCELAVEIS.includes(c.situacao)) {
-      jaEstavam++
-      continue
-    }
+  // Manda todos os pedidos antes de esperar qualquer confirmação: como o
+  // cancelamento é assíncrono, esperar um por um somaria a espera de cada parcela.
+  for (const c of aCancelar) {
     try {
       await cancelarCobranca(c.codigoSolicitacao, motivo)
-      await db.cobranca.update({ where: { id: c.id }, data: { situacao: "CANCELADO" } })
-      canceladas++
     } catch (erro) {
       // Falha aqui é o caso perigoso: um boleto vivo numa venda desfeita. A venda
       // NÃO é cancelada, e o gerente recebe o motivo para resolver no banco.
@@ -436,7 +459,34 @@ export async function cancelarCobrancasDaVenda(
     }
   }
 
-  return { ok: true, canceladas, jaEstavam }
+  let canceladas = 0
+  let emAndamento = 0
+
+  for (const c of aCancelar) {
+    const confirmada = await aguardarCancelamento(c.codigoSolicitacao)
+
+    if (confirmada === "CANCELADO") {
+      await db.cobranca.update({ where: { id: c.id }, data: { situacao: "CANCELADO" } })
+      canceladas++
+      continue
+    }
+
+    // Pagou no meio do caminho: raro, mas é dinheiro que entrou. Recusa tudo em
+    // vez de seguir cancelando a venda.
+    if (confirmada === "RECEBIDO" || confirmada === "PAGO") {
+      await db.cobranca.update({ where: { id: c.id }, data: { situacao: confirmada } })
+      return {
+        ok: false,
+        erro: `A ${c.parcela}ª parcela foi paga durante o cancelamento — faça a devolução`,
+      }
+    }
+
+    // Aceito pelo Inter (202) mas ainda não concluído. A venda é cancelada, e a
+    // situação local segue a real — o webhook atualiza quando sair.
+    emAndamento++
+  }
+
+  return { ok: true, canceladas, jaEstavam, emAndamento }
 }
 
 /** As cobranças já emitidas, sem chamar o Inter. Vazio quando não há nenhuma. */
