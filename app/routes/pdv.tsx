@@ -916,7 +916,6 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   return (
     <main className="relative flex h-screen flex-col overflow-hidden bg-card text-foreground">
       <Topo
-        caixa={CAIXA}
         operador={eu.nome}
         papel={eu.papel}
         loja={eu.loja}
@@ -924,9 +923,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
         relogio={relogio}
         escuro={escuro}
         onAlternarTema={alternarTema}
-      >
-        <span>{produtos.length.toLocaleString("pt-BR")} produtos</span>
-      </Topo>
+      />
 
       <div className="flex min-h-0 flex-1">
         <section className="flex min-w-0 flex-1 flex-col">

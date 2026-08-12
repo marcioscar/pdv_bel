@@ -34,6 +34,9 @@ model Loja {
   cnpj   String @unique
   /// Código da ContaInter que emite boleto e Pix desta loja.
   conta  String
+  /// Ordem de exibição. Existe porque alfabética põe NRT antes de QI, e quem lê a
+  /// tabela pensa na rede como matriz, filial e depois as outras.
+  ordem  Int    @default(0)
 
   endereco String?
   bairro   String?

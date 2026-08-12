@@ -275,9 +275,7 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
         <h1 className="text-base font-semibold">
           {podeInventariar ? "Entradas e inventário" : "Entrada de mercadoria"}
         </h1>
-        <span className="text-xs text-muted-foreground">
-          {produtos.length.toLocaleString("pt-BR")} produtos no catálogo
-        </span>
+
       </div>
 
       <div className="flex min-h-0 flex-1">

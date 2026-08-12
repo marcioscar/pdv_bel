@@ -6,11 +6,11 @@ export type LojaResumo = {
   conta: string
 }
 
-/** Lojas ativas, em ordem de código. São quatro: o custo é irrelevante. */
+/** Lojas ativas, na ordem do negócio (matriz, filial, depois as outras). */
 export async function listarLojas(): Promise<LojaResumo[]> {
   const lojas = await db.loja.findMany({
     where: { ativo: true },
-    orderBy: { codigo: "asc" },
+    orderBy: [{ ordem: "asc" }, { codigo: "asc" }],
     select: { codigo: true, nome: true, conta: true },
   })
   return lojas

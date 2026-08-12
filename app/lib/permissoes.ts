@@ -49,7 +49,7 @@ export const SECOES = [
   { para: "/", rotulo: "Caixa", tecla: "F1", somenteGerente: false },
   { para: "/estoque", rotulo: "Estoque", tecla: "F2", somenteGerente: false },
   { para: "/vendas", rotulo: "Vendas", tecla: "F3", somenteGerente: false },
-  { para: "/admin", rotulo: "Administração", tecla: null, somenteGerente: false },
+  { para: "/admin", rotulo: "Adm", tecla: null, somenteGerente: false },
 ] as const
 
 export function secoesDoPapel(papel: string) {
