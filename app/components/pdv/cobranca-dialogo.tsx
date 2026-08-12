@@ -129,9 +129,10 @@ async function imprimirBoleto(vendaId: string, parcela: number): Promise<string 
   try {
     const resposta = await fetch(url)
     if (!resposta.ok) {
-      return resposta.status === 403
-        ? "Boleto de outra loja"
-        : `Não foi possível buscar o boleto (${resposta.status})`
+      // O servidor manda o motivo no corpo (certificado do ambiente errado, conta
+      // sem credencial). Mostrar "erro 503" no lugar dele esconderia a solução.
+      const motivo = (await resposta.text().catch(() => "")).trim()
+      return motivo || `Não foi possível buscar o boleto (${resposta.status})`
     }
     endereco = URL.createObjectURL(await resposta.blob())
   } catch {

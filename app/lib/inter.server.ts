@@ -1,6 +1,6 @@
 import "~/lib/env.server"
 
-import { X509Certificate } from "node:crypto"
+import { createPrivateKey, X509Certificate } from "node:crypto"
 import { readFileSync } from "node:fs"
 import { Agent } from "undici"
 
@@ -103,6 +103,29 @@ function pemDeAmbiente(conta: string, sufixo: string): Buffer | null {
   return caminho ? readFileSync(caminho) : null
 }
 
+/**
+ * O certificado é do ambiente certo?
+ *
+ * Sandbox e produção são autoridades certificadoras DIFERENTES — "UAT Partners
+ * CDPJ Certificate Authority" contra "API Intermediate Certificate Authority" — e
+ * cada host só confia na sua. Cruzar os dois faz o Inter derrubar o handshake com
+ * `tlsv1 alert unknown ca`, um erro de OpenSSL que não diz nada sobre a causa.
+ *
+ * Vale conferir aqui porque a situação é comum: a conta da matriz tem certificado
+ * de sandbox para desenvolvimento, mas NRT e SDS só têm o de produção. Rodar local
+ * apontando para o sandbox e mexer numa venda dessas lojas cai exatamente nisso.
+ */
+function ambienteDoCertificado(cert: Buffer): "sandbox" | "producao" | null {
+  try {
+    const emissor = new X509Certificate(cert).issuer
+    if (/UAT/i.test(emissor)) return "sandbox"
+    if (/API Intermediate/i.test(emissor)) return "producao"
+    return null
+  } catch {
+    return null
+  }
+}
+
 function lerConfig(conta: string): Config {
   const guardada = configPorConta.get(conta)
   if (guardada) return guardada
@@ -131,6 +154,18 @@ function lerConfig(conta: string): Config {
   if (faltando.length > 0) {
     throw new InterNaoConfigurado(
       `Conta ${conta} não configurada. Faltam: ${faltando.join(", ")}`
+    )
+  }
+
+  const alvo = baseUrl!.includes("sandbox") || baseUrl!.includes("uatinter")
+    ? "sandbox"
+    : "producao"
+  const doCert = ambienteDoCertificado(cert!)
+  if (doCert && doCert !== alvo) {
+    throw new InterNaoConfigurado(
+      `A conta ${conta} tem certificado de ${doCert.toUpperCase()} e INTER_BASE_URL ` +
+        `aponta para ${alvo.toUpperCase()}. O Inter recusaria o handshake com ` +
+        `"unknown ca". Use o certificado do ambiente, ou troque a INTER_BASE_URL.`
     )
   }
 
@@ -174,9 +209,14 @@ export function certificadoDaConta(conta: string) {
     const cert = pemDeAmbiente(conta, "CERT")
     if (!cert) return null
 
+    const key = pemDeAmbiente(conta, "KEY")
     const x509 = new X509Certificate(cert)
     const vence = new Date(x509.validTo)
     const dias = Math.floor((vence.getTime() - Date.now()) / 86_400_000)
+
+    const base = process.env.INTER_BASE_URL ?? ""
+    const alvo = base.includes("sandbox") || base.includes("uatinter") ? "sandbox" : "producao"
+    const ambiente = ambienteDoCertificado(cert)
 
     return {
       titular: x509.subject.split("\n").find((l) => l.startsWith("CN="))?.slice(3) ?? null,
@@ -184,6 +224,10 @@ export function certificadoDaConta(conta: string) {
       diasParaVencer: dias,
       // Um mês é tempo suficiente para pedir outro no portal sem correria.
       renovar: dias < 30,
+      ambiente,
+      // Os três motivos pelos quais um certificado correto ainda não serve.
+      ambienteConfere: ambiente === null || ambiente === alvo,
+      chaveCombina: key ? x509.checkPrivateKey(createPrivateKey(key)) : null,
     }
   } catch {
     return null
@@ -339,10 +383,33 @@ export async function chamarInter<T = unknown>(
     } catch (erro) {
       const espera =
         erro instanceof ErroInter && erro.status === 429 ? ESPERAS_429[tentativa] : undefined
-      if (espera === undefined) throw erro
+      if (espera === undefined) throw traduzirErroDeTls(erro, opcoes.conta)
       await new Promise((r) => setTimeout(r, espera))
     }
   }
+}
+
+/**
+ * Erro de TLS chega como código do OpenSSL, ilegível para quem opera. Vira frase.
+ * A checagem em `lerConfig` deve pegar o caso comum antes; isto é a rede embaixo.
+ */
+function traduzirErroDeTls(erro: unknown, conta: string): unknown {
+  const codigo =
+    (erro as { code?: string })?.code ??
+    ((erro as { cause?: { code?: string } })?.cause?.code ?? "")
+
+  if (codigo === "ERR_SSL_TLSV1_ALERT_UNKNOWN_CA") {
+    return new InterNaoConfigurado(
+      `O Inter recusou o certificado da conta ${conta} ("unknown ca"). ` +
+        "Quase sempre é certificado de um ambiente com INTER_BASE_URL do outro."
+    )
+  }
+  if (codigo === "ERR_SSL_SSLV3_ALERT_CERTIFICATE_EXPIRED") {
+    return new InterNaoConfigurado(
+      `O certificado da conta ${conta} está expirado — emita outro no portal do Inter.`
+    )
+  }
+  return erro
 }
 
 async function chamarUmaVez<T>(

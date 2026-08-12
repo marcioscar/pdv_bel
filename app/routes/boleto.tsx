@@ -23,7 +23,20 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     throw new Response(`Boleto da loja ${cobranca.loja}`, { status: 403 })
   }
 
-  const pdf = await pdfDaCobranca(cobranca.codigoSolicitacao, cobranca.conta)
+  let pdf: Buffer
+  try {
+    pdf = await pdfDaCobranca(cobranca.codigoSolicitacao, cobranca.conta)
+  } catch (erro) {
+    // A mensagem precisa chegar à tela: `InterNaoConfigurado` explica exatamente o
+    // que está errado (certificado do ambiente errado, conta sem credencial), e o
+    // ErrorBoundary só mostra `message` em desenvolvimento. Como Response, aparece
+    // em produção também — e é orientação de configuração, não dado sensível.
+    throw new Response(
+      erro instanceof Error ? erro.message : "Falha ao buscar o boleto no Inter",
+      { status: 503 }
+    )
+  }
+
   const sufixo = cobranca.parcelas > 1 ? `-parcela-${cobranca.parcela}` : ""
 
   return new Response(new Uint8Array(pdf), {

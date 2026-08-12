@@ -70,6 +70,15 @@ export async function loader(_: Route.LoaderArgs) {
         certificadosARenovar: Object.entries(contas)
           .filter(([, c]) => c.certificado?.renovar)
           .map(([nome]) => nome),
+        // Certificado do ambiente errado, ou chave que não é do certificado: as
+        // duas falham no handshake com erro de OpenSSL que não explica nada.
+        contasIncompativeis: Object.entries(contas)
+          .filter(
+            ([, c]) =>
+              c.certificado &&
+              (!c.certificado.ambienteConfere || c.certificado.chaveCombina === false)
+          )
+          .map(([nome]) => nome),
       },
     },
     { headers: { "cache-control": "no-store" } }
