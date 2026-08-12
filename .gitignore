@@ -8,3 +8,6 @@
 
 # Certificados e chaves privadas (Inter) — nunca versionar
 /certificados/
+
+# Dumps feitos antes de apagar dados
+/backups
