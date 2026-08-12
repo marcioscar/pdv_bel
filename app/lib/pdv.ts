@@ -239,7 +239,6 @@ export type FormaPagamento = (typeof FORMAS_PAGAMENTO)[number]["id"]
 
 /** Venda a prazo vira boleto: exige cliente com endereço e respeita o mínimo do Inter. */
 export const VALOR_MINIMO_BOLETO = 2.5
-export const DIAS_VENCIMENTO_PADRAO = 30
 
 /**
  * Condições de pagamento a prazo. Fixas de propósito: deixar o vendedor digitar
@@ -290,38 +289,26 @@ export function condicaoCabeNoTotal(condicao: CondicaoPagamento, total: number) 
   )
 }
 
+export type Parcela = { parcela: number; valor: number; vencimento: Date }
+
 /**
- * Aceita o que o operador digita no vencimento: um número de dias ("30") ou uma
- * data ("15/09/2026"). Devolve o dia, ao meio-dia, para fuso não empurrar a data.
+ * O plano de parcelas de uma condição: quanto e para quando.
+ *
+ * Uma função só, usada pela tela (para mostrar antes de fechar) e pelo servidor
+ * (para emitir). Se fossem dois cálculos, o operador poderia prometer ao cliente
+ * um valor ou uma data diferentes dos que sairiam no boleto.
  */
-export function interpretarVencimento(entrada: string, hoje = new Date()): Date | null {
-  const bruto = entrada.trim()
-  if (!bruto) return null
+export function parcelasDaCondicao(
+  condicao: CondicaoPagamento,
+  total: number,
+  base = new Date()
+): Parcela[] {
+  const valores = dividirParcelas(total, condicao.dias.length)
+  const vencimentos = vencimentosDaCondicao(condicao, base)
 
-  if (/^\d{1,3}$/.test(bruto)) {
-    const dias = Number(bruto)
-    if (dias < 1 || dias > 999) return null
-    const data = new Date(hoje)
-    data.setDate(data.getDate() + dias)
-    data.setHours(12, 0, 0, 0)
-    return data
-  }
-
-  const comBarras = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/.exec(bruto)
-  if (!comBarras) return null
-
-  const [, dia, mes, anoBruto] = comBarras
-  const ano = anoBruto.length === 2 ? 2000 + Number(anoBruto) : Number(anoBruto)
-  const data = new Date(ano, Number(mes) - 1, Number(dia), 12, 0, 0, 0)
-
-  // Rejeita 31/02: o Date rola para março e o dia deixa de bater.
-  if (
-    data.getFullYear() !== ano ||
-    data.getMonth() !== Number(mes) - 1 ||
-    data.getDate() !== Number(dia)
-  ) {
-    return null
-  }
-
-  return data
+  return condicao.dias.map((_, i) => ({
+    parcela: i + 1,
+    valor: valores[i],
+    vencimento: vencimentos[i],
+  }))
 }

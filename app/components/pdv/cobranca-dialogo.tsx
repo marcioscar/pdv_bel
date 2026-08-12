@@ -11,6 +11,8 @@ import { cn } from "~/lib/utils"
 export type CobrancaExibida = {
   codigoSolicitacao: string
   situacao: string
+  parcela: number
+  parcelas: number
   valor: number
   vencimento: string
   linhaDigitavel: string | null
@@ -24,7 +26,7 @@ export type CobrancaExibida = {
 type Props = {
   vendaNumero: number
   vendaId: string
-  cobranca: CobrancaExibida | null
+  cobrancas: CobrancaExibida[]
   erro: string | null
   emitindo: boolean
   onFechar: () => void
@@ -37,7 +39,15 @@ function agruparLinha(linha: string) {
   return `${d.slice(0, 5)}.${d.slice(5, 10)} ${d.slice(10, 15)}.${d.slice(15, 21)} ${d.slice(21, 26)}.${d.slice(26, 32)} ${d.slice(32, 33)} ${d.slice(33)}`
 }
 
-function BotaoCopiar({ texto, rotulo }: { texto: string; rotulo: string }) {
+function BotaoCopiar({
+  texto,
+  rotulo,
+  copiado: rotuloCopiado = "Copiado",
+}: {
+  texto: string
+  rotulo: string
+  copiado?: string
+}) {
   const [copiado, setCopiado] = useState(false)
 
   return (
@@ -58,19 +68,121 @@ function BotaoCopiar({ texto, rotulo }: { texto: string; rotulo: string }) {
       }}
     >
       {copiado ? <Check className="size-4" /> : <Copy className="size-4" />}
-      {copiado ? "Copiado" : rotulo}
+      {copiado ? rotuloCopiado : rotulo}
     </Button>
+  )
+}
+
+function BotaoPdf({
+  vendaId,
+  parcela,
+  rotulo,
+}: {
+  vendaId: string
+  parcela: number
+  rotulo: string
+}) {
+  return (
+    <Button
+      type="button"
+      tabIndex={-1}
+      variant="outline"
+      size="sm"
+      className="rounded-lg"
+      nativeButton={false}
+      render={
+        <a
+          href={`/vendas/${vendaId}/boleto.pdf?parcela=${parcela}`}
+          target="_blank"
+          rel="noreferrer"
+        />
+      }
+    >
+      <FileText className="size-4" />
+      {rotulo}
+    </Button>
+  )
+}
+
+function EtiquetaSituacao({ situacao }: { situacao: string }) {
+  return (
+    <Badge
+      variant={
+        situacao === "RECEBIDO"
+          ? "default"
+          : situacao === "CANCELADO" || situacao === "EXPIRADO"
+            ? "destructive"
+            : "secondary"
+      }
+      className="font-mono text-[10px]"
+    >
+      {situacao}
+    </Badge>
+  )
+}
+
+/** Uma parcela do parcelamento: valor, data, linha digitável e os botões. */
+function LinhaParcela({
+  cobranca,
+  vendaId,
+}: {
+  cobranca: CobrancaExibida
+  vendaId: string
+}) {
+  return (
+    <li className="rounded-lg border border-border p-3">
+      <div className="flex items-baseline gap-2">
+        <span className="font-mono text-sm font-semibold tabular-nums">
+          {cobranca.parcela}ª de {cobranca.parcelas}
+        </span>
+        <span className="font-mono text-base font-bold tabular-nums">
+          {moeda(cobranca.valor)}
+        </span>
+        <span className="text-xs text-muted-foreground">
+          vence {new Date(cobranca.vencimento).toLocaleDateString("pt-BR")}
+        </span>
+        <span className="ml-auto">
+          <EtiquetaSituacao situacao={cobranca.situacao} />
+        </span>
+      </div>
+
+      {cobranca.linhaDigitavel ? (
+        <>
+          <div className="mt-2 overflow-x-auto rounded-lg border border-border bg-muted/40 px-3 py-1.5">
+            <span className="whitespace-nowrap font-mono text-xs tabular-nums">
+              {agruparLinha(cobranca.linhaDigitavel)}
+            </span>
+          </div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <BotaoCopiar texto={cobranca.linhaDigitavel} rotulo="Copiar linha" />
+            <BotaoPdf vendaId={vendaId} parcela={cobranca.parcela} rotulo="PDF" />
+            {cobranca.pixCopiaECola ? (
+              <BotaoCopiar texto={cobranca.pixCopiaECola} rotulo="Copiar Pix" />
+            ) : null}
+          </div>
+        </>
+      ) : (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Ainda em processamento no Inter — a linha digitável aparece na tela de
+          Vendas quando ficar pronta.
+        </p>
+      )}
+    </li>
   )
 }
 
 export function CobrancaDialogo({
   vendaNumero,
   vendaId,
-  cobranca,
+  cobrancas,
   erro,
   emitindo,
   onFechar,
 }: Props) {
+  const parcelada = cobrancas.length > 1
+  const unica = cobrancas.length === 1 ? cobrancas[0] : null
+  const totalCobrado = cobrancas.reduce((acc, c) => acc + c.valor, 0)
+
   return (
     <div
       role="dialog"
@@ -80,13 +192,10 @@ export function CobrancaDialogo({
     >
       <div className="w-full max-w-3xl rounded-xl border border-border bg-card p-6 shadow-xl">
         <div className="flex items-baseline justify-between">
-          <h2 className="text-base font-semibold">
-            Venda #{vendaNumero} · cobrança{" "}
-            {cobranca ? (
-              <Badge variant="secondary" className="ml-1 font-mono text-[10px]">
-                {cobranca.situacao}
-              </Badge>
-            ) : null}
+          <h2 className="flex items-baseline gap-2 text-base font-semibold">
+            Venda #{vendaNumero} ·{" "}
+            {parcelada ? `${cobrancas.length} boletos` : "cobrança"}
+            {unica ? <EtiquetaSituacao situacao={unica.situacao} /> : null}
           </h2>
           <span className="text-xs text-muted-foreground">
             <Kbd>Esc</Kbd> ou <Kbd>Enter</Kbd> fecha
@@ -99,10 +208,10 @@ export function CobrancaDialogo({
           <div className="flex flex-col items-center gap-3 py-14 text-center">
             <Loader2 className="size-8 animate-spin text-muted-foreground" aria-hidden />
             <p className="text-sm text-muted-foreground">
-              Emitindo o boleto no Banco Inter…
+              Emitindo no Banco Inter…
             </p>
             <p className="text-xs text-muted-foreground">
-              A emissão é assíncrona e leva alguns segundos.
+              A emissão é assíncrona e leva alguns segundos por boleto.
             </p>
           </div>
         ) : erro ? (
@@ -113,7 +222,22 @@ export function CobrancaDialogo({
               de novo pela tela de Vendas.
             </p>
           </div>
-        ) : cobranca ? (
+        ) : parcelada ? (
+          <>
+            <div className="mb-3 font-mono text-sm text-muted-foreground tabular-nums">
+              {moeda(totalCobrado)} em {cobrancas.length} parcelas
+            </div>
+            <ul className="space-y-2">
+              {cobrancas.map((cobranca) => (
+                <LinhaParcela
+                  key={cobranca.codigoSolicitacao}
+                  cobranca={cobranca}
+                  vendaId={vendaId}
+                />
+              ))}
+            </ul>
+          </>
+        ) : unica ? (
           <div className="grid grid-cols-5 gap-6">
             <div className="col-span-3 space-y-4">
               <div>
@@ -121,14 +245,14 @@ export function CobrancaDialogo({
                   Valor · vencimento
                 </div>
                 <div className="mt-0.5 font-mono text-2xl font-bold tabular-nums">
-                  {moeda(cobranca.valor)}
+                  {moeda(unica.valor)}
                   <span className="ml-2 text-sm font-medium text-muted-foreground">
-                    vence {new Date(cobranca.vencimento).toLocaleDateString("pt-BR")}
+                    vence {new Date(unica.vencimento).toLocaleDateString("pt-BR")}
                   </span>
                 </div>
               </div>
 
-              {cobranca.linhaDigitavel ? (
+              {unica.linhaDigitavel ? (
                 <div>
                   <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                     <Barcode className="size-3.5" aria-hidden />
@@ -137,29 +261,16 @@ export function CobrancaDialogo({
                   {/* Uma linha só: o operador lê em voz alta ou digita. */}
                   <div className="overflow-x-auto rounded-lg border border-border bg-muted/40 px-3 py-2">
                     <span className="whitespace-nowrap font-mono text-xs tabular-nums">
-                      {agruparLinha(cobranca.linhaDigitavel)}
+                      {agruparLinha(unica.linhaDigitavel)}
                     </span>
                   </div>
                   <div className="mt-2 flex gap-2">
-                    <BotaoCopiar texto={cobranca.linhaDigitavel} rotulo="Copiar linha" />
-                    <Button
-                      type="button"
-                      tabIndex={-1}
-                      variant="outline"
-                      size="sm"
-                      className="rounded-lg"
-                      nativeButton={false}
-                      render={
-                        <a
-                          href={`/vendas/${vendaId}/boleto.pdf`}
-                          target="_blank"
-                          rel="noreferrer"
-                        />
-                      }
-                    >
-                      <FileText className="size-4" />
-                      Abrir boleto (PDF)
-                    </Button>
+                    <BotaoCopiar texto={unica.linhaDigitavel} rotulo="Copiar linha" />
+                    <BotaoPdf
+                      vendaId={vendaId}
+                      parcela={unica.parcela}
+                      rotulo="Abrir boleto (PDF)"
+                    />
                   </div>
                 </div>
               ) : (
@@ -169,9 +280,9 @@ export function CobrancaDialogo({
                 </p>
               )}
 
-              {cobranca.nossoNumero ? (
+              {unica.nossoNumero ? (
                 <div className="font-mono text-[11px] text-muted-foreground">
-                  nosso número {cobranca.nossoNumero}
+                  nosso número {unica.nossoNumero}
                 </div>
               ) : null}
             </div>
@@ -180,20 +291,20 @@ export function CobrancaDialogo({
               <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                 Pix do boleto
               </div>
-              {cobranca.pixQrCode ? (
+              {unica.pixQrCode ? (
                 <>
                   <img
-                    src={cobranca.pixQrCode}
+                    src={unica.pixQrCode}
                     alt="QR Code Pix da cobrança"
                     className={cn(
                       // Fundo branco sempre: QR escuro sobre fundo escuro não lê.
                       "w-full rounded-lg border border-border bg-white p-2"
                     )}
                   />
-                  {cobranca.pixCopiaECola ? (
+                  {unica.pixCopiaECola ? (
                     <div className="mt-2">
                       <BotaoCopiar
-                        texto={cobranca.pixCopiaECola}
+                        texto={unica.pixCopiaECola}
                         rotulo="Copiar Pix copia e cola"
                       />
                     </div>
@@ -206,7 +317,11 @@ export function CobrancaDialogo({
               )}
             </div>
           </div>
-        ) : null}
+        ) : (
+          <p className="py-10 text-center text-sm text-muted-foreground">
+            Nenhuma cobrança emitida para esta venda.
+          </p>
+        )}
 
         <Separator className="my-4" />
 

@@ -10,19 +10,23 @@ import { exigirUsuario } from "~/lib/sessao.server"
 export async function loader({ params, request }: Route.LoaderArgs) {
   await exigirUsuario(request)
 
-  // Sem parcela na URL, serve a primeira.
+  // ?parcela=2 serve a segunda parcela do parcelamento; sem isso, a primeira.
+  const pedida = Number(new URL(request.url).searchParams.get("parcela"))
+  const parcela = Number.isInteger(pedida) && pedida > 0 ? pedida : null
+
   const cobranca = await db.cobranca.findFirst({
-    where: { vendaId: params.vendaId },
+    where: { vendaId: params.vendaId, ...(parcela ? { parcela } : {}) },
     orderBy: { parcela: "asc" },
   })
   if (!cobranca) throw new Response("Cobrança não encontrada", { status: 404 })
 
   const pdf = await pdfDaCobranca(cobranca.codigoSolicitacao)
+  const sufixo = cobranca.parcelas > 1 ? `-parcela-${cobranca.parcela}` : ""
 
   return new Response(new Uint8Array(pdf), {
     headers: {
       "content-type": "application/pdf",
-      "content-disposition": `inline; filename="boleto-venda-${cobranca.vendaNumero}.pdf"`,
+      "content-disposition": `inline; filename="boleto-venda-${cobranca.vendaNumero}${sufixo}.pdf"`,
       "cache-control": "private, max-age=300",
     },
   })

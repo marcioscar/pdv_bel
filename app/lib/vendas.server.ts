@@ -1,7 +1,14 @@
 import { db } from "~/lib/db.server"
 import { movimentosDeVenda } from "~/lib/estoque.server"
 import { arredondar, moeda } from "~/lib/moeda"
-import { FORMAS_PAGAMENTO, VALOR_MINIMO_BOLETO } from "~/lib/pdv"
+import {
+  condicaoCabeNoTotal,
+  condicaoPorId,
+  dividirParcelas,
+  FORMAS_PAGAMENTO,
+  parcelasDaCondicao,
+  VALOR_MINIMO_BOLETO,
+} from "~/lib/pdv"
 
 export type ItemRecebido = { produtoId: string; quantidade: number }
 
@@ -11,8 +18,14 @@ export type PedidoVenda = {
   forma: string
   recebido: number | null
   clienteId: string | null
-  /** ISO date; só usado na venda a prazo. */
-  vencimento: string | null
+  /**
+   * Id de uma condição de CONDICOES_PAGAMENTO; só usado na venda a prazo.
+   *
+   * A tela manda a condição escolhida, não as datas: os vencimentos são
+   * calculados aqui. Aceitar datas do navegador deixaria o prazo combinado com o
+   * cliente fora da política da empresa sem deixar rastro.
+   */
+  condicao: string | null
   /** Pix imediato: comprovante do pagamento já confirmado. */
   pixTxid?: string | null
   pixPagoEm?: Date | null
@@ -80,7 +93,7 @@ export function lerPedido(bruto: unknown): PedidoVenda | null {
     forma: typeof corpo.forma === "string" ? corpo.forma : "",
     recebido,
     clienteId,
-    vencimento: typeof corpo.vencimento === "string" ? corpo.vencimento : null,
+    condicao: typeof corpo.condicao === "string" ? corpo.condicao : null,
     caixa: typeof corpo.caixa === "string" ? corpo.caixa : "01",
     operador: typeof corpo.operador === "string" ? corpo.operador : "—",
   }
@@ -153,30 +166,31 @@ export async function registrarVenda(pedido: PedidoVenda): Promise<ResultadoVend
   // valor nominal mínimo. Recusar aqui evita gravar venda que não pode ser cobrada.
   let cliente = null
   let vencimento: Date | null = null
+  let condicaoId: string | null = null
 
   if (pedido.forma === "prazo") {
     if (!pedido.clienteId) {
       return { ok: false, erro: "Venda a prazo exige cliente (F6 para vincular)" }
     }
-    if (total < VALOR_MINIMO_BOLETO) {
+
+    const condicao = condicaoPorId(pedido.condicao ?? "")
+    if (!condicao) return { ok: false, erro: "Escolha a condição de pagamento" }
+
+    // O mínimo do Inter vale por boleto, então o que decide é a menor parcela,
+    // não o total: R$ 6,00 em 3× daria três boletos de R$ 2,00, todos recusados.
+    if (!condicaoCabeNoTotal(condicao, total)) {
+      const menor = Math.min(...dividirParcelas(total, condicao.dias.length))
       return {
         ok: false,
-        erro: `Boleto exige no mínimo ${moeda(VALOR_MINIMO_BOLETO)}`,
+        erro: `${condicao.rotulo} daria parcela de ${moeda(menor)} — o boleto exige no mínimo ${moeda(VALOR_MINIMO_BOLETO)}`,
       }
     }
 
     cliente = await db.cliente.findUnique({ where: { id: pedido.clienteId } })
     if (!cliente) return { ok: false, erro: "Cliente não encontrado" }
 
-    if (!pedido.vencimento) return { ok: false, erro: "Informe o vencimento" }
-    const data = new Date(pedido.vencimento)
-    if (Number.isNaN(data.getTime())) return { ok: false, erro: "Vencimento inválido" }
-
-    const amanha = new Date()
-    amanha.setHours(0, 0, 0, 0)
-    if (data < amanha) return { ok: false, erro: "Vencimento não pode ser no passado" }
-
-    vencimento = data
+    condicaoId = condicao.id
+    vencimento = parcelasDaCondicao(condicao, total)[0].vencimento
   } else if (pedido.clienteId) {
     // Cliente também pode ser vinculado numa venda à vista, só não é obrigatório.
     cliente = await db.cliente.findUnique({ where: { id: pedido.clienteId } })
@@ -189,7 +203,7 @@ export async function registrarVenda(pedido: PedidoVenda): Promise<ResultadoVend
   try {
     return {
       ok: true,
-      ...(await gravar(pedido, itens, subtotal, total, troco, cliente, vencimento)),
+      ...(await gravar(pedido, itens, subtotal, total, troco, cliente, vencimento, condicaoId)),
       total,
       troco,
     }
@@ -231,7 +245,8 @@ async function gravar(
   total: number,
   troco: number,
   cliente: { id: string; nome: string; cpfCnpj: string } | null,
-  vencimento: Date | null
+  vencimento: Date | null,
+  condicao: string | null
 ): Promise<{ numero: number; vendaId: string }> {
   for (let tentativa = 0; tentativa < 25; tentativa++) {
     // O $inc fica FORA da transação de propósito: dentro dela, o rollback de uma
@@ -244,7 +259,7 @@ async function gravar(
 
     try {
       return await gravarUmaVez(
-        contador.valor, pedido, itens, subtotal, total, troco, cliente, vencimento
+        contador.valor, pedido, itens, subtotal, total, troco, cliente, vencimento, condicao
       )
     } catch (erro) {
       if (!ehColisaoDeNumero(erro)) throw erro
@@ -261,7 +276,8 @@ async function gravarUmaVez(
   total: number,
   troco: number,
   cliente: { id: string; nome: string; cpfCnpj: string } | null,
-  vencimento: Date | null
+  vencimento: Date | null,
+  condicao: string | null
 ): Promise<{ numero: number; vendaId: string }> {
   // A venda e as baixas de estoque caem juntas ou não caem: uma venda gravada
   // sem seus movimentos deixaria o saldo derivado errado para sempre.
@@ -282,6 +298,7 @@ async function gravarUmaVez(
         clienteNome: cliente?.nome ?? null,
         clienteCpfCnpj: cliente?.cpfCnpj ?? null,
         vencimento,
+        condicao,
         pixTxid: pedido.pixTxid ?? null,
         pixPagoEm: pedido.pixPagoEm ?? null,
       },

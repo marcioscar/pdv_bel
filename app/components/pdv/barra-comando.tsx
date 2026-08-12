@@ -7,12 +7,7 @@ import { cn } from "~/lib/utils"
 import { moeda, quantidade } from "~/lib/moeda"
 import type { ProdutoCatalogo } from "~/lib/pdv"
 
-export type ModoComando =
-  | "busca"
-  | "quantidade"
-  | "desconto"
-  | "recebido"
-  | "vencimento"
+export type ModoComando = "busca" | "quantidade" | "desconto" | "recebido"
 
 const PROMPTS: Record<ModoComando, { rotulo: string | null; dica: string }> = {
   busca: {
@@ -22,10 +17,6 @@ const PROMPTS: Record<ModoComando, { rotulo: string | null; dica: string }> = {
   quantidade: { rotulo: "Quantidade", dica: "Nova quantidade do item ativo" },
   desconto: { rotulo: "Desconto R$", dica: "Valor de desconto sobre o subtotal" },
   recebido: { rotulo: "Recebido R$", dica: "Valor entregue pelo cliente" },
-  vencimento: {
-    rotulo: "Vencimento",
-    dica: "Dias (30) ou data (15/09/2026) — Enter usa o padrão",
-  },
 }
 
 type Props = {

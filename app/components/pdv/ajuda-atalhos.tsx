@@ -29,7 +29,7 @@ const GRUPOS = [
     itens: [
       { tecla: "F8", texto: "alterna a forma de pagamento" },
       { tecla: "⇧F1 … ⇧F5", texto: "escolhe a forma direto" },
-      { tecla: "⇧F5", texto: "a prazo — pede cliente e vencimento" },
+      { tecla: "⇧F5", texto: "a prazo — pede cliente e a condição (7, 21, 28 ou 3×)" },
       { tecla: "F10", texto: "abre o pagamento e conclui" },
       { tecla: "F2", texto: "volta o foco para a busca" },
     ],

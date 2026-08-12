@@ -7,8 +7,9 @@ import { cn } from "~/lib/utils"
 import { formatarCpfCnpj } from "~/lib/documento"
 import { moeda } from "~/lib/moeda"
 import {
-  DIAS_VENCIMENTO_PADRAO,
   FORMAS_PAGAMENTO,
+  parcelasDaCondicao,
+  type CondicaoPagamento,
   type FormaPagamento,
 } from "~/lib/pdv"
 
@@ -32,7 +33,7 @@ type Props = {
   finalizando: boolean
   gravando: boolean
   cliente: { nome: string; cpfCnpj: string } | null
-  vencimento: Date | null
+  condicao: CondicaoPagamento | null
 }
 
 export function PainelPagamento({
@@ -47,7 +48,7 @@ export function PainelPagamento({
   finalizando,
   gravando,
   cliente,
-  vencimento,
+  condicao,
 }: Props) {
   const troco = recebido === null ? null : recebido - total
   const insuficiente = troco !== null && troco < 0
@@ -151,15 +152,30 @@ export function PainelPagamento({
           )}
 
           {aPrazo ? (
-            <div className="mt-2.5 flex items-baseline justify-between border-t border-border pt-2.5">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Vencimento
-              </span>
-              <span className="font-mono text-sm font-semibold tabular-nums">
-                {vencimento
-                  ? vencimento.toLocaleDateString("pt-BR")
-                  : `${DIAS_VENCIMENTO_PADRAO} dias`}
-              </span>
+            <div className="mt-2.5 border-t border-border pt-2.5">
+              <div className="flex items-baseline justify-between">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Prazo
+                </span>
+                <span className="text-sm font-semibold">
+                  {condicao ? condicao.rotulo : "escolhe no F10"}
+                </span>
+              </div>
+              {/* As parcelas aparecem aqui porque é o que o vendedor precisa
+                  dizer ao cliente — e são as mesmas que virarão boletos. */}
+              {condicao && condicao.dias.length > 1 ? (
+                <ul className="mt-1.5 space-y-0.5">
+                  {parcelasDaCondicao(condicao, total).map((p) => (
+                    <li
+                      key={p.parcela}
+                      className="flex justify-between font-mono text-[11px] text-muted-foreground tabular-nums"
+                    >
+                      <span>{p.parcela}ª · {p.vencimento.toLocaleDateString("pt-BR")}</span>
+                      <span className="font-semibold text-foreground">{moeda(p.valor)}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
             </div>
           ) : null}
         </div>

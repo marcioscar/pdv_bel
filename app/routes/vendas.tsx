@@ -9,7 +9,7 @@ import { Button } from "~/components/ui/button"
 import { Kbd } from "~/components/ui/kbd"
 import { db } from "~/lib/db.server"
 import { CobrancaDialogo } from "~/components/pdv/cobranca-dialogo"
-import { cobrancaDaVenda, emitirParaVenda, type CobrancaDaVenda } from "~/lib/cobranca.server"
+import { cobrancasDaVenda, emitirParaVenda, type CobrancaDaVenda } from "~/lib/cobranca.server"
 import { cancelarVenda } from "~/lib/estoque.server"
 import { exigirUsuario } from "~/lib/sessao.server"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
@@ -32,11 +32,18 @@ export async function loader({ request }: Route.LoaderArgs) {
     take: 100,
   })
 
+  // Uma venda parcelada tem uma cobrança por parcela, então é lista, não par.
   const cobrancas = await db.cobranca.findMany({
     where: { vendaId: { in: vendas.map((v) => v.id) } },
-    select: { vendaId: true, situacao: true, linhaDigitavel: true },
+    orderBy: { parcela: "asc" },
+    select: { vendaId: true, parcela: true, parcelas: true, situacao: true },
   })
-  const porVenda = new Map(cobrancas.map((c) => [c.vendaId, c]))
+  const porVenda = new Map<string, typeof cobrancas>()
+  for (const cobranca of cobrancas) {
+    const lista = porVenda.get(cobranca.vendaId) ?? []
+    lista.push(cobranca)
+    porVenda.set(cobranca.vendaId, lista)
+  }
 
   const validas = vendas.filter((venda) => !venda.canceladaEm)
 
@@ -44,7 +51,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     eu,
     vendas: vendas.map((venda) => ({
       ...venda,
-      cobranca: porVenda.get(venda.id) ?? null,
+      cobrancas: porVenda.get(venda.id) ?? [],
     })),
     resumo: {
       quantidade: validas.length,
@@ -69,11 +76,20 @@ export async function action({ request }: Route.ActionArgs) {
   // Ver/emitir a cobrança de uma venda a prazo.
   if (String(form.get("acao")) === "cobranca") {
     try {
-      const existente = await cobrancaDaVenda(vendaId)
+      const venda = await db.venda.findUnique({
+        where: { id: vendaId },
+        select: { canceladaEm: true },
+      })
+
       return {
         ok: true as const,
         tipo: "cobranca" as const,
-        cobranca: existente ?? (await emitirParaVenda(vendaId)),
+        // `emitirParaVenda` é idempotente: devolve o que já existe sem chamar o
+        // Inter e emite só o que falta — o que cobre um parcelamento cuja emissão
+        // parou no meio. Venda cancelada não emite, mas ver o que já saiu vale.
+        cobrancas: venda?.canceladaEm
+          ? await cobrancasDaVenda(vendaId)
+          : await emitirParaVenda(vendaId),
       }
     } catch (erro) {
       return data(
@@ -101,6 +117,47 @@ export async function action({ request }: Route.ActionArgs) {
   }
 }
 
+/**
+ * Situação da venda a prazo. Com parcelamento não há uma situação só: mostra a
+ * das parcelas quando coincidem e, quando não, quantas já foram recebidas — o
+ * que o operador precisa saber é se o cliente ainda deve algo.
+ */
+function SituacaoCobrancas({
+  cobrancas,
+}: {
+  cobrancas: { parcela: number; parcelas: number; situacao: string }[]
+}) {
+  if (cobrancas.length === 0) {
+    return <span className="text-xs text-destructive">sem boleto</span>
+  }
+
+  const recebidas = cobrancas.filter((c) => c.situacao === "RECEBIDO").length
+  const situacoes = new Set(cobrancas.map((c) => c.situacao))
+  const comum = situacoes.size === 1 ? cobrancas[0].situacao : "PARCIAL"
+
+  return (
+    <span className="flex items-center gap-1.5">
+      <Badge
+        variant={
+          recebidas === cobrancas.length
+            ? "default"
+            : comum === "CANCELADO" || comum === "EXPIRADO"
+              ? "destructive"
+              : "secondary"
+        }
+        className="font-mono text-[10px]"
+      >
+        {comum}
+      </Badge>
+      {cobrancas.length > 1 ? (
+        <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
+          {recebidas}/{cobrancas.length} pagas
+        </span>
+      ) : null}
+    </span>
+  )
+}
+
 export default function Vendas({ loaderData }: Route.ComponentProps) {
   const { eu, vendas, resumo } = loaderData
 
@@ -109,7 +166,7 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
   const [comprovante, setComprovante] = useState<{
     vendaNumero: number
     vendaId: string
-    cobranca: CobrancaDaVenda | null
+    cobrancas: CobrancaDaVenda[]
     erro: string | null
     emitindo: boolean
   } | null>(null)
@@ -176,8 +233,8 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
     // A cobrança pertence ao comprovante; o cancelamento, à barra de status.
     if (resposta.tipo === "cobranca") {
       const atualizacao = resposta.ok
-        ? { cobranca: resposta.cobranca, erro: null, emitindo: false }
-        : { cobranca: null, erro: resposta.erro, emitindo: false }
+        ? { cobrancas: resposta.cobrancas, erro: null, emitindo: false }
+        : { cobrancas: [], erro: resposta.erro, emitindo: false }
       setComprovante((atual) => (atual === null ? null : { ...atual, ...atualizacao }))
       return
     }
@@ -197,14 +254,14 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
     }
     // Emitir boleto de venda cancelada cobraria o cliente por algo desfeito.
     // Ver uma cobrança que já existe continua liberado.
-    if (ativa.canceladaEm && !ativa.cobranca) {
+    if (ativa.canceladaEm && ativa.cobrancas.length === 0) {
       avisar(`Venda #${ativa.numero} está cancelada`, "erro")
       return
     }
     setComprovante({
       vendaNumero: ativa.numero,
       vendaId: ativa.id,
-      cobranca: null,
+      cobrancas: [],
       erro: null,
       // Sem cobrança ainda, o action emite; com cobrança, só devolve a existente.
       emitindo: true,
@@ -430,21 +487,8 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                             )
                           ) : venda.forma !== "prazo" ? (
                             <span className="text-xs text-muted-foreground">—</span>
-                          ) : venda.cobranca ? (
-                            <Badge
-                              variant={
-                                venda.cobranca.situacao === "RECEBIDO"
-                                  ? "default"
-                                  : venda.cobranca.situacao === "CANCELADO"
-                                    ? "destructive"
-                                    : "secondary"
-                              }
-                              className="font-mono text-[10px]"
-                            >
-                              {venda.cobranca.situacao}
-                            </Badge>
                           ) : (
-                            <span className="text-xs text-destructive">sem boleto</span>
+                            <SituacaoCobrancas cobrancas={venda.cobrancas} />
                           )}
                         </td>
                         <td className="px-5 py-2.5">
@@ -476,13 +520,17 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                   !ativa ||
                   ativa.forma !== "prazo" ||
                   cancelando ||
-                  Boolean(ativa.canceladaEm && !ativa.cobranca)
+                  Boolean(ativa.canceladaEm && ativa.cobrancas.length === 0)
                 }
                 onClick={verCobranca}
                 className="rounded-lg"
               >
                 <Kbd>F8</Kbd>
-                {ativa?.cobranca ? "Ver boleto" : "Emitir boleto"}
+                {!ativa || ativa.cobrancas.length === 0
+                  ? "Emitir boleto"
+                  : ativa.cobrancas.length > 1
+                    ? `Ver ${ativa.cobrancas.length} boletos`
+                    : "Ver boleto"}
               </Button>
               <Button
                 type="button"
@@ -525,7 +573,7 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
         <CobrancaDialogo
           vendaNumero={comprovante.vendaNumero}
           vendaId={comprovante.vendaId}
-          cobranca={comprovante.cobranca}
+          cobrancas={comprovante.cobrancas}
           erro={comprovante.erro}
           emitindo={comprovante.emitindo}
           onFechar={() => setComprovante(null)}
@@ -560,24 +608,6 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                 className="rounded-lg"
               >
                 <Kbd>Esc</Kbd> Voltar
-              </Button>
-              <Button
-                type="button"
-                tabIndex={-1}
-                variant="outline"
-                size="sm"
-                // Espelha a guarda de verCobranca: não oferecer o que será recusado.
-                disabled={
-                  !ativa ||
-                  ativa.forma !== "prazo" ||
-                  cancelando ||
-                  Boolean(ativa.canceladaEm && !ativa.cobranca)
-                }
-                onClick={verCobranca}
-                className="rounded-lg"
-              >
-                <Kbd>F8</Kbd>
-                {ativa?.cobranca ? "Ver boleto" : "Emitir boleto"}
               </Button>
               <Button
                 type="button"

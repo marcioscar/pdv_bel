@@ -5,6 +5,7 @@ import type { Route } from "./+types/pdv"
 import { AjudaAtalhos } from "~/components/pdv/ajuda-atalhos"
 import { ClienteDialogo, type ClienteResumo } from "~/components/pdv/cliente-dialogo"
 import { CobrancaDialogo } from "~/components/pdv/cobranca-dialogo"
+import { CondicaoDialogo } from "~/components/pdv/condicao-dialogo"
 import { BarraAtalhos, type Atalho } from "~/components/pdv/barra-atalhos"
 import { BarraComando, type ModoComando } from "~/components/pdv/barra-comando"
 import { ListaItens } from "~/components/pdv/lista-itens"
@@ -35,15 +36,17 @@ import { useRelogio, useTema } from "~/lib/tema"
 import { cn } from "~/lib/utils"
 import {
   buscarProdutos,
+  condicaoCabeNoTotal,
+  CONDICOES_PAGAMENTO,
   criarIndice,
-  DIAS_VENCIMENTO_PADRAO,
   FORMAS_PAGAMENTO,
-  interpretarVencimento,
+  VALOR_MINIMO_BOLETO,
   interpretarComando,
   produtosPorCodigo,
   reduzirVenda,
   totaisDaVenda,
   vendaVazia,
+  type CondicaoPagamento,
   type FormaPagamento,
   type ProdutoCatalogo,
 } from "~/lib/pdv"
@@ -121,7 +124,7 @@ export async function action({ request }: Route.ActionArgs) {
       return {
         ok: true as const,
         tipo: "cobranca" as const,
-        cobranca: await emitirParaVenda(vendaId),
+        cobrancas: await emitirParaVenda(vendaId),
         vendaId,
       }
     } catch (erro) {
@@ -262,7 +265,10 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   // Clientes criados nesta sessão: o loader não revalida (shouldRevalidate=false)
   // para não reenviar o catálogo inteiro, então mantemos os novos aqui.
   const [novosClientes, setNovosClientes] = useState<ClienteResumo[]>([])
-  const [vencimento, setVencimento] = useState<Date | null>(null)
+  // Condição escolhida na venda a prazo. Fica guardada para o painel mostrar o
+  // prazo enquanto a venda é fechada; o servidor recalcula as datas na gravação.
+  const [condicao, setCondicao] = useState<CondicaoPagamento | null>(null)
+  const [condicaoAberta, setCondicaoAberta] = useState(false)
   const [pix, setPix] = useState<{
     cobranca: PixNoBalcao | null
     criando: boolean
@@ -273,7 +279,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   const [comprovante, setComprovante] = useState<{
     vendaNumero: number
     vendaId: string
-    cobranca: CobrancaDaVenda | null
+    cobrancas: CobrancaDaVenda[]
     erro: string | null
     emitindo: boolean
   } | null>(null)
@@ -327,15 +333,15 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   const focar = useCallback(() => campo.current?.focus(), [])
 
   useEffect(() => {
-    if (!ajudaAberta && !clienteAberto && !comprovante && !pix) focar()
-  }, [ajudaAberta, clienteAberto, comprovante, pix, modo, focar])
+    if (!ajudaAberta && !clienteAberto && !comprovante && !pix && !condicaoAberta) focar()
+  }, [ajudaAberta, clienteAberto, comprovante, pix, condicaoAberta, modo, focar])
 
   // Clicar num botão de atalho tira o foco do campo; devolvemos no frame seguinte
   // para que a próxima tecla continue caindo na barra de comando.
   const devolverFoco = useCallback(() => {
-    if (ajudaAberta || clienteAberto) return
+    if (ajudaAberta || clienteAberto || condicaoAberta) return
     requestAnimationFrame(focar)
-  }, [ajudaAberta, clienteAberto, focar])
+  }, [ajudaAberta, clienteAberto, condicaoAberta, focar])
 
   const voltarParaBusca = useCallback(() => {
     setModo("busca")
@@ -365,7 +371,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   )
 
   const concluir = useCallback(
-    (valorRecebido: number | null, vencimentoEscolhido: Date | null = null) => {
+    (valorRecebido: number | null, condicaoEscolhida: CondicaoPagamento | null = null) => {
       if (gravando) return
 
       fetcher.submit(
@@ -379,7 +385,9 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           forma,
           recebido: valorRecebido,
           clienteId: cliente?.id ?? null,
-          vencimento: vencimentoEscolhido ? vencimentoEscolhido.toISOString() : null,
+          // Vai o id da condição, não as datas: os vencimentos são calculados no
+          // servidor, para o prazo gravado ser sempre um dos que a empresa pratica.
+          condicao: condicaoEscolhida?.id ?? null,
         },
         { method: "post", encType: "application/json" }
       )
@@ -426,8 +434,8 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     // não à barra de status — a venda já está gravada.
     if (resposta.tipo === "cobranca") {
       const atualizacao = resposta.ok
-        ? { cobranca: resposta.cobranca, erro: null, emitindo: false }
-        : { cobranca: null, erro: resposta.erro, emitindo: false }
+        ? { cobrancas: resposta.cobrancas, erro: null, emitindo: false }
+        : { cobrancas: [], erro: resposta.erro, emitindo: false }
 
       setComprovante((atual) => (atual === null ? null : { ...atual, ...atualizacao }))
       return
@@ -443,12 +451,12 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
 
     const { numero, troco } = resposta
 
-    // Venda a prazo: abre o comprovante e emite o boleto em seguida.
+    // Venda a prazo: abre o comprovante e emite os boletos em seguida.
     if (forma === "prazo") {
       setComprovante({
         vendaNumero: numero,
         vendaId: resposta.vendaId,
-        cobranca: null,
+        cobrancas: [],
         erro: null,
         emitindo: true,
       })
@@ -463,7 +471,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     setModo("busca")
     setEntrada("")
     setCliente(null)
-    setVencimento(null)
+    setCondicao(null)
     avisar(
       troco > 0
         ? `Venda #${numero} registrada · troco ${moeda(troco)}`
@@ -567,19 +575,24 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       return
     }
 
-    // A prazo vira boleto: precisa do pagador e de uma data de vencimento.
+    // A prazo vira boleto: precisa do pagador e de uma das condições fixas.
     if (forma === "prazo") {
       if (!cliente) {
         setClienteAberto(true)
         avisar("Venda a prazo exige cliente", "erro")
         return
       }
-      setModo("vencimento")
+      // Nenhuma condição serve: nem o boleto de uma parcela chega ao mínimo.
+      if (!CONDICOES_PAGAMENTO.some((c) => condicaoCabeNoTotal(c, totais.total))) {
+        avisar(`Venda a prazo exige no mínimo ${moeda(VALOR_MINIMO_BOLETO)}`, "erro")
+        return
+      }
+      setCondicaoAberta(true)
       setEntrada("")
       return
     }
     concluir(null)
-  }, [avisar, cliente, concluir, fetcher, forma, totais.desconto, venda.itens])
+  }, [avisar, cliente, concluir, fetcher, forma, totais.desconto, totais.total, venda.itens])
 
   const confirmar = useCallback(() => {
     if (modo === "busca") {
@@ -609,15 +622,12 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       return
     }
 
-    // O vencimento aceita dias ou data, então não passa por interpretarValor.
-    if (modo !== "vencimento") {
-      const valorTeste = interpretarValor(entrada)
-      if (valorTeste === null) {
-        avisar("Valor inválido", "erro")
-        return
-      }
+    const valorTeste = interpretarValor(entrada)
+    if (valorTeste === null) {
+      avisar("Valor inválido", "erro")
+      return
     }
-    const valor = interpretarValor(entrada) ?? 0
+    const valor = valorTeste
 
     if (modo === "quantidade") {
       despachar({ tipo: "definirQuantidade", indice: venda.indiceAtivo, quantidade: valor })
@@ -632,22 +642,6 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       }
       despachar({ tipo: "definirDesconto", valor })
       voltarParaBusca()
-      return
-    }
-
-    if (modo === "vencimento") {
-      // Enter vazio usa o padrão de 30 dias.
-      const data =
-        entrada.trim() === ""
-          ? interpretarVencimento(String(DIAS_VENCIMENTO_PADRAO))
-          : interpretarVencimento(entrada)
-
-      if (!data) {
-        avisar("Vencimento inválido — use dias (30) ou data (15/09/2026)", "erro")
-        return
-      }
-      setVencimento(data)
-      concluir(null, data)
       return
     }
 
@@ -729,8 +723,8 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
         return
       }
 
-      // O diálogo de cliente tem o próprio handler em captura; aqui só saímos.
-      if (clienteAberto) return
+      // Cliente e condição têm handler próprio em captura; aqui só saímos.
+      if (clienteAberto || condicaoAberta) return
 
       if (ajudaAberta) {
         if (key === "Escape" || key === "F1" || key === "?") {
@@ -856,6 +850,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   }, [
     ajudaAberta,
     clienteAberto,
+    condicaoAberta,
     comprovante,
     pix,
     alternarTema,
@@ -977,12 +972,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           finalizando={modo === "recebido"}
           gravando={gravando}
           cliente={cliente}
-          // O vencimento acompanha a digitação, como o troco.
-          vencimento={
-            modo === "vencimento"
-              ? (interpretarVencimento(entrada) ?? vencimento)
-              : vencimento
-          }
+          condicao={condicao}
         />
       </div>
 
@@ -1007,6 +997,22 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
             fetcher.submit(dados, { method: "post" })
           }}
           onFechar={() => setClienteAberto(false)}
+        />
+      ) : null}
+
+      {condicaoAberta && cliente ? (
+        <CondicaoDialogo
+          total={totais.total}
+          cliente={cliente}
+          onEscolher={(escolhida) => {
+            setCondicao(escolhida)
+            setCondicaoAberta(false)
+            concluir(null, escolhida)
+          }}
+          onFechar={() => {
+            setCondicaoAberta(false)
+            avisar("Venda a prazo cancelada — escolha a condição para fechar", "erro")
+          }}
         />
       ) : null}
 
@@ -1036,7 +1042,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
         <CobrancaDialogo
           vendaNumero={comprovante.vendaNumero}
           vendaId={comprovante.vendaId}
-          cobranca={comprovante.cobranca}
+          cobrancas={comprovante.cobrancas}
           erro={comprovante.erro}
           emitindo={comprovante.emitindo}
           onFechar={() => setComprovante(null)}

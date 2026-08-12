@@ -115,6 +115,11 @@ export function cancelarCobranca(codigoSolicitacao: string, motivo: string) {
 /**
  * Espera a emissão assíncrona terminar. A cobrança nasce "EM_PROCESSAMENTO" e só
  * depois ganha código de barras e copia-e-cola.
+ *
+ * Sai na linha digitável, sem esperar pelo Pix: medido, o copia-e-cola chega na
+ * MESMA consulta que a linha. Quando ele não vem, é porque o Inter não emitiu Pix
+ * para aquela cobrança (visto em valores baixos) — e aí esperar mais só atrasa o
+ * caixa. A tela de Vendas mostra o Pix se ele aparecer depois.
  */
 export async function aguardarEmissao(
   codigoSolicitacao: string,
@@ -140,10 +145,13 @@ import QRCode from "qrcode"
 
 import { db } from "~/lib/db.server"
 import { ErroInter } from "~/lib/inter.server"
+import { condicaoPorId, parcelasDaCondicao, type Parcela } from "~/lib/pdv"
 
 export type CobrancaDaVenda = {
   codigoSolicitacao: string
   situacao: string
+  parcela: number
+  parcelas: number
   valor: number
   vencimento: string
   linhaDigitavel: string | null
@@ -173,90 +181,169 @@ async function comQrCode(dados: Omit<CobrancaDaVenda, "pixQrCode">): Promise<Cob
   return { ...dados, pixQrCode }
 }
 
-/**
- * Emite (ou recupera) a cobrança de uma venda a prazo e guarda o resultado.
- *
- * Duas proteções contra emissão duplicada: o registro local por `vendaId` e o
- * próprio Inter, que recusa cobranças iguais emitidas em sequência e informa o
- * código da que já existe — nesse caso adotamos aquela em vez de falhar.
- */
-export async function emitirParaVenda(vendaId: string): Promise<CobrancaDaVenda> {
-  // Com parcelamento há mais de uma cobrança por venda; aqui olhamos a 1ª.
-  const existente = await db.cobranca.findFirst({ where: { vendaId, parcela: 1 } })
-  if (existente?.linhaDigitavel) return comQrCode(paraSaida(existente))
+type VendaParaCobrar = {
+  id: string
+  numero: number
+  total: number
+  criadaEm: Date
+  vencimento: Date | null
+  condicao: string | null
+}
 
+/**
+ * As parcelas de uma venda: quanto e para quando, recalculado da condição.
+ *
+ * Derivar em vez de guardar mantém uma fonte da verdade só — o id da condição na
+ * venda. `criadaEm` é a base, não a data de hoje: reemitir um boleto na semana
+ * seguinte não pode empurrar o vencimento que o cliente combinou.
+ */
+function planoDaVenda(venda: VendaParaCobrar): Parcela[] {
+  const condicao = condicaoPorId(venda.condicao ?? "")
+  if (condicao) return parcelasDaCondicao(condicao, venda.total, venda.criadaEm)
+
+  // Vendas gravadas antes das condições fixas só têm o vencimento avulso.
+  if (!venda.vencimento) throw new Error("Venda sem condição nem vencimento")
+  return [{ parcela: 1, valor: venda.total, vencimento: venda.vencimento }]
+}
+
+/** Identificador da parcela para o Inter — no máximo 15 caracteres. */
+function seuNumeroDaParcela(numeroDaVenda: number, parcela: number, parcelas: number) {
+  const base = `PDV${String(numeroDaVenda).padStart(6, "0")}`
+  return parcelas === 1 ? base : `${base}-${parcela}`
+}
+
+/**
+ * Emite (ou recupera) as cobranças de uma venda a prazo e guarda o resultado.
+ *
+ * Uma venda em 3× são três boletos, com valores e vencimentos próprios. Três
+ * proteções contra emissão duplicada: o registro local por (vendaId, parcela), o
+ * `seuNumero` distinto por parcela, e o próprio Inter, que recusa cobranças
+ * iguais em sequência e informa o código da que já existe — nesse caso adotamos
+ * aquela em vez de falhar.
+ */
+export async function emitirParaVenda(vendaId: string): Promise<CobrancaDaVenda[]> {
   const venda = await db.venda.findUnique({ where: { id: vendaId } })
   if (!venda) throw new Error("Venda não encontrada")
   if (venda.forma !== "prazo") throw new Error("Só venda a prazo gera boleto")
   if (venda.canceladaEm) throw new Error("Venda cancelada não gera boleto")
-  if (!venda.clienteId || !venda.vencimento) throw new Error("Venda sem cliente ou vencimento")
+  if (!venda.clienteId) throw new Error("Venda sem cliente")
+
+  const plano = planoDaVenda(venda)
+  const existentes = await db.cobranca.findMany({ where: { vendaId } })
+  const porParcela = new Map(existentes.map((c) => [c.parcela, c]))
+
+  // Tudo já emitido: devolve sem tocar no Inter.
+  if (plano.every((p) => porParcela.get(p.parcela)?.linhaDigitavel)) {
+    return Promise.all(
+      plano.map((p) => comQrCode(paraSaida(porParcela.get(p.parcela)!, plano.length)))
+    )
+  }
 
   const cliente = await db.cliente.findUnique({ where: { id: venda.clienteId } })
   if (!cliente) throw new Error("Cliente não encontrado")
 
-  let codigoSolicitacao = existente?.codigoSolicitacao ?? null
-
-  if (!codigoSolicitacao) {
-    try {
-      const emitida = await emitirCobranca({
-        seuNumero: `PDV${String(venda.numero).padStart(6, "0")}`,
-        valor: venda.total,
-        vencimento: venda.vencimento,
-        pagador: cliente,
-        mensagem: `Venda ${venda.numero} - BrasSaco Embalagens`,
-      })
-      codigoSolicitacao = emitida.codigoSolicitacao
-    } catch (erro) {
-      const duplicada = codigoDaDuplicata(erro)
-      if (!duplicada) throw erro
-      codigoSolicitacao = duplicada
+  // Duas voltas de propósito. A emissão é assíncrona: mandar os três POSTs antes
+  // de esperar o primeiro ficar pronto poupa a espera de uma parcela na outra —
+  // com espera em série, três boletos passariam do tempo da requisição.
+  const codigos = new Map<number, string>()
+  for (const p of plano) {
+    const existente = porParcela.get(p.parcela)
+    if (existente?.linhaDigitavel) continue
+    if (existente?.codigoSolicitacao) {
+      codigos.set(p.parcela, existente.codigoSolicitacao)
+      continue
     }
+    codigos.set(
+      p.parcela,
+      await emitirUmaParcela(venda, cliente, p, plano.length)
+    )
   }
 
-  const detalhe = await aguardarEmissao(codigoSolicitacao)
+  const saida: CobrancaDaVenda[] = []
+  for (const p of plano) {
+    const codigoSolicitacao = codigos.get(p.parcela)
+    if (!codigoSolicitacao) {
+      saida.push(await comQrCode(paraSaida(porParcela.get(p.parcela)!, plano.length)))
+      continue
+    }
 
-  const gravada = await db.cobranca.upsert({
-    where: { vendaId_parcela: { vendaId, parcela: 1 } },
-    create: {
-      vendaId,
-      vendaNumero: venda.numero,
-      codigoSolicitacao,
-      situacao: detalhe.cobranca?.situacao ?? "EM_PROCESSAMENTO",
-      valor: venda.total,
-      vencimento: venda.vencimento,
-      linhaDigitavel: detalhe.boleto?.linhaDigitavel ?? null,
-      codigoBarras: detalhe.boleto?.codigoBarras ?? null,
-      nossoNumero: detalhe.boleto?.nossoNumero ?? null,
-      txid: detalhe.pix?.txid ?? null,
-      pixCopiaECola: detalhe.pix?.pixCopiaECola ?? null,
-    },
-    update: {
+    const detalhe = await aguardarEmissao(codigoSolicitacao)
+    const dados = {
       situacao: detalhe.cobranca?.situacao ?? "EM_PROCESSAMENTO",
       linhaDigitavel: detalhe.boleto?.linhaDigitavel ?? null,
       codigoBarras: detalhe.boleto?.codigoBarras ?? null,
       nossoNumero: detalhe.boleto?.nossoNumero ?? null,
       txid: detalhe.pix?.txid ?? null,
       pixCopiaECola: detalhe.pix?.pixCopiaECola ?? null,
-    },
-  })
+    }
 
-  return comQrCode(paraSaida(gravada))
+    const gravada = await db.cobranca.upsert({
+      where: { vendaId_parcela: { vendaId, parcela: p.parcela } },
+      create: {
+        vendaId,
+        vendaNumero: venda.numero,
+        parcela: p.parcela,
+        parcelas: plano.length,
+        codigoSolicitacao,
+        valor: p.valor,
+        vencimento: p.vencimento,
+        ...dados,
+      },
+      update: dados,
+    })
+
+    saida.push(await comQrCode(paraSaida(gravada, plano.length)))
+  }
+
+  return saida
 }
 
-function paraSaida(c: {
-  codigoSolicitacao: string
-  situacao: string
-  valor: number
-  vencimento: Date
-  linhaDigitavel: string | null
-  codigoBarras: string | null
-  nossoNumero: string | null
-  txid: string | null
-  pixCopiaECola: string | null
-}): Omit<CobrancaDaVenda, "pixQrCode"> {
+async function emitirUmaParcela(
+  venda: VendaParaCobrar,
+  cliente: PagadorInter,
+  p: Parcela,
+  parcelas: number
+): Promise<string> {
+  const sufixo = parcelas === 1 ? "" : ` - parcela ${p.parcela}/${parcelas}`
+
+  try {
+    const emitida = await emitirCobranca({
+      seuNumero: seuNumeroDaParcela(venda.numero, p.parcela, parcelas),
+      valor: p.valor,
+      vencimento: p.vencimento,
+      pagador: cliente,
+      mensagem: `Venda ${venda.numero}${sufixo} - BrasSaco Embalagens`,
+    })
+    return emitida.codigoSolicitacao
+  } catch (erro) {
+    const duplicada = codigoDaDuplicata(erro)
+    if (!duplicada) throw erro
+    return duplicada
+  }
+}
+
+function paraSaida(
+  c: {
+    codigoSolicitacao: string
+    situacao: string
+    parcela: number
+    parcelas: number
+    valor: number
+    vencimento: Date
+    linhaDigitavel: string | null
+    codigoBarras: string | null
+    nossoNumero: string | null
+    txid: string | null
+    pixCopiaECola: string | null
+  },
+  /** O total de parcelas do plano vence o gravado: a venda é quem manda. */
+  parcelas = c.parcelas
+): Omit<CobrancaDaVenda, "pixQrCode"> {
   return {
     codigoSolicitacao: c.codigoSolicitacao,
     situacao: c.situacao,
+    parcela: c.parcela,
+    parcelas,
     valor: c.valor,
     vencimento: c.vencimento.toISOString(),
     linhaDigitavel: c.linhaDigitavel,
@@ -267,9 +354,13 @@ function paraSaida(c: {
   }
 }
 
-export async function cobrancaDaVenda(vendaId: string) {
-  const c = await db.cobranca.findFirst({ where: { vendaId }, orderBy: { parcela: "asc" } })
-  return c ? comQrCode(paraSaida(c)) : null
+/** As cobranças já emitidas, sem chamar o Inter. Vazio quando não há nenhuma. */
+export async function cobrancasDaVenda(vendaId: string): Promise<CobrancaDaVenda[]> {
+  const cobrancas = await db.cobranca.findMany({
+    where: { vendaId },
+    orderBy: { parcela: "asc" },
+  })
+  return Promise.all(cobrancas.map((c) => comQrCode(paraSaida(c))))
 }
 
 /**
