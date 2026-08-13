@@ -12,6 +12,7 @@ export default [
   route("estoque", "routes/estoque.tsx"),
   route("vendas", "routes/vendas.tsx"),
   route("vendas/:vendaId/boleto.pdf", "routes/boleto.tsx"),
+  route("vendas/:vendaId/cupom", "routes/cupom.tsx"),
 
   // Escritório: o layout de admin cobra a permissão declarada em lib/permissoes.
   ...prefix("admin", [

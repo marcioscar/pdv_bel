@@ -5,6 +5,7 @@ import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
 import { Kbd } from "~/components/ui/kbd"
 import { Separator } from "~/components/ui/separator"
+import { imprimirDocumento } from "~/lib/impressao"
 import { moeda } from "~/lib/moeda"
 import { cn } from "~/lib/utils"
 
@@ -31,6 +32,9 @@ type Props = {
   emitindo: boolean
   onFechar: () => void
 }
+
+const urlDoBoleto = (vendaId: string, parcela: number) =>
+  `/vendas/${vendaId}/boleto.pdf?parcela=${parcela}`
 
 /** Agrupa a linha digitável de 47 dígitos como no boleto impresso. */
 function agruparLinha(linha: string) {
@@ -104,77 +108,6 @@ function BotaoPdf({
   )
 }
 
-/**
- * Manda o boleto para a impressora sem passar por outra aba.
- *
- * O PDF é baixado como blob e posto num iframe oculto, cujo `print()` abre a
- * caixa de impressão do navegador. Um link `target="_blank"` obrigaria o operador
- * a achar a aba, apertar Ctrl+P e fechá-la — três passos com cliente esperando.
- *
- * Dois detalhes que fazem isso funcionar:
- *
- * - o iframe NÃO pode ser removido logo depois: remover cancela a impressão que
- *   ainda está na tela. Ele sai um minuto depois, junto com o blob.
- * - o foco precisa VOLTAR. Focar o iframe é necessário para o `print()` sair, mas
- *   o foco fica lá dentro: medido em Chrome, depois de imprimir o Enter parava de
- *   fechar o diálogo e o teclado do operador ficava morto. Como `print()` bloqueia
- *   até a caixa ser fechada, devolver o foco na linha seguinte funciona.
- * - se o `print()` falhar (navegador que não imprime PDF em iframe), cai em abrir
- *   numa aba, que é o comportamento antigo — melhor um passo extra do que nada.
- */
-async function imprimirBoleto(vendaId: string, parcela: number): Promise<string | null> {
-  const url = `/vendas/${vendaId}/boleto.pdf?parcela=${parcela}`
-
-  let endereco: string
-  try {
-    const resposta = await fetch(url)
-    if (!resposta.ok) {
-      // O servidor manda o motivo no corpo (certificado do ambiente errado, conta
-      // sem credencial). Mostrar "erro 503" no lugar dele esconderia a solução.
-      const motivo = (await resposta.text().catch(() => "")).trim()
-      return motivo || `Não foi possível buscar o boleto (${resposta.status})`
-    }
-    endereco = URL.createObjectURL(await resposta.blob())
-  } catch {
-    return "Falha ao buscar o boleto"
-  }
-
-  const quadro = document.createElement("iframe")
-  quadro.setAttribute("aria-hidden", "true")
-  quadro.style.cssText = "position:fixed;width:0;height:0;border:0;visibility:hidden"
-  quadro.src = endereco
-
-  const limpar = () => {
-    setTimeout(() => {
-      quadro.remove()
-      URL.revokeObjectURL(endereco)
-    }, 60_000)
-  }
-
-  quadro.onload = () => {
-    const focoAnterior = document.activeElement as HTMLElement | null
-
-    try {
-      quadro.contentWindow?.focus()
-      quadro.contentWindow?.print()
-    } catch {
-      window.open(endereco, "_blank", "noreferrer")
-    } finally {
-      // Depois da caixa de impressão, o teclado tem de voltar para a tela.
-      window.focus()
-      focoAnterior?.focus?.()
-    }
-    limpar()
-  }
-  quadro.onerror = () => {
-    window.open(endereco, "_blank", "noreferrer")
-    limpar()
-  }
-
-  document.body.appendChild(quadro)
-  return null
-}
-
 function BotaoImprimir({
   vendaId,
   parcela,
@@ -197,7 +130,7 @@ function BotaoImprimir({
       className="rounded-lg"
       onClick={async () => {
         setBuscando(true)
-        const erro = await imprimirBoleto(vendaId, parcela)
+        const erro = await imprimirDocumento(urlDoBoleto(vendaId, parcela))
         setBuscando(false)
         if (erro) onErro(erro)
       }}
@@ -313,7 +246,7 @@ export function CobrancaDialogo({
       if (!alvo) return
 
       evento.preventDefault()
-      const problema = await imprimirBoleto(vendaId, alvo.parcela)
+      const problema = await imprimirDocumento(urlDoBoleto(vendaId, alvo.parcela))
       if (problema) setErroImpressao(problema)
     }
     window.addEventListener("keydown", aoTeclar, true)

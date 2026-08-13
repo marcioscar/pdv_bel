@@ -1,0 +1,339 @@
+import { useEffect, useRef } from "react"
+import {
+  Banknote,
+  CalendarClock,
+  CreditCard,
+  FileText,
+  Printer,
+  QrCode,
+  User,
+  Wallet,
+} from "lucide-react"
+
+import { Badge } from "~/components/ui/badge"
+import { Button } from "~/components/ui/button"
+import { Input } from "~/components/ui/input"
+import { Kbd } from "~/components/ui/kbd"
+import { Separator } from "~/components/ui/separator"
+import { formatarCpfCnpj } from "~/lib/documento"
+import { interpretarValor, moeda } from "~/lib/moeda"
+import { FORMAS_PAGAMENTO, type FormaPagamento } from "~/lib/pdv"
+import { cn } from "~/lib/utils"
+
+const ICONES: Record<FormaPagamento, React.ComponentType<{ className?: string }>> = {
+  dinheiro: Banknote,
+  credito: CreditCard,
+  debito: Wallet,
+  pix: QrCode,
+  prazo: CalendarClock,
+}
+
+type Props = {
+  total: number
+  volumes: number
+  itens: number
+  forma: FormaPagamento
+  onFormaChange: (forma: FormaPagamento) => void
+  recebido: string
+  onRecebidoChange: (valor: string) => void
+  cliente: { nome: string; cpfCnpj: string } | null
+  onEscolherCliente: () => void
+  imprimir: boolean
+  onImprimirChange: (imprimir: boolean) => void
+  gravando: boolean
+  erro: string | null
+  onConfirmar: () => void
+  onFechar: () => void
+  /** Enquanto outro diálogo está por cima, este não escuta o teclado. */
+  pausado?: boolean
+}
+
+/**
+ * Conferência antes de gravar a venda.
+ *
+ * Abre com **tudo já decidido** — forma, cliente e impressão vêm preenchidos — e
+ * o Enter fecha a venda. Isso é o que separa esta tela de um formulário: a venda
+ * rápida continua rápida (dinheiro segue em F10 → valor → Enter), e cada item é
+ * alterável com uma tecla só para quem precisar.
+ *
+ * A forma de pagamento mora AQUI, e não também no painel lateral: dois lugares
+ * decidindo o mesmo dado é como se grava venda em dinheiro marcada como cartão.
+ */
+export function FinalizarDialogo({
+  total,
+  volumes,
+  itens,
+  forma,
+  onFormaChange,
+  recebido,
+  onRecebidoChange,
+  cliente,
+  onEscolherCliente,
+  imprimir,
+  onImprimirChange,
+  gravando,
+  erro,
+  onConfirmar,
+  onFechar,
+  pausado = false,
+}: Props) {
+  const campoRecebido = useRef<HTMLInputElement>(null)
+
+  const emDinheiro = forma === "dinheiro"
+  const aPrazo = forma === "prazo"
+  const valorRecebido = interpretarValor(recebido)
+  const troco = valorRecebido === null ? null : valorRecebido - total
+  const faltaDinheiro = emDinheiro && (valorRecebido === null || troco === null || troco < 0)
+  const faltaCliente = aPrazo && cliente === null
+
+  // Em dinheiro o cursor já entra no valor recebido: é o único campo que a venda
+  // rápida precisa digitar, e chegar nele com o mouse seria um passo a mais.
+  useEffect(() => {
+    if (emDinheiro && !pausado) campoRecebido.current?.focus()
+  }, [emDinheiro, pausado])
+
+  useEffect(() => {
+    if (pausado) return
+
+    function aoTeclar(evento: KeyboardEvent) {
+      const { key, shiftKey, ctrlKey, altKey, metaKey } = evento
+      if (ctrlKey || altKey || metaKey) return
+
+      // ⇧F1..F5 escolhem a forma, como no resto do sistema.
+      if (shiftKey) {
+        const posicao = FORMAS_PAGAMENTO.findIndex((_, i) => key === `F${i + 1}`)
+        if (posicao >= 0) {
+          evento.preventDefault()
+          onFormaChange(FORMAS_PAGAMENTO[posicao].id)
+        }
+        return
+      }
+
+      if (key === "Escape") {
+        evento.preventDefault()
+        onFechar()
+        return
+      }
+      if (key === "Enter") {
+        evento.preventDefault()
+        onConfirmar()
+        return
+      }
+      if (key === "F6") {
+        evento.preventDefault()
+        onEscolherCliente()
+        return
+      }
+      if (key === "F7") {
+        evento.preventDefault()
+        onImprimirChange(!imprimir)
+      }
+    }
+
+    window.addEventListener("keydown", aoTeclar, true)
+    return () => window.removeEventListener("keydown", aoTeclar, true)
+  }, [imprimir, onConfirmar, onEscolherCliente, onFechar, onFormaChange, onImprimirChange, pausado])
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Finalizar venda"
+      className="absolute inset-0 z-40 flex items-start justify-center overflow-y-auto bg-background/80 p-8 backdrop-blur-sm"
+    >
+      <div className="w-full max-w-lg rounded-xl border border-border bg-card p-6 shadow-xl">
+        <div className="flex items-baseline justify-between">
+          <h2 className="text-base font-semibold">Finalizar venda</h2>
+          <span className="text-xs text-muted-foreground">
+            <Kbd>Esc</Kbd> volta ao carrinho
+          </span>
+        </div>
+
+        <div className="mt-3 flex items-baseline justify-between">
+          <span className="text-xs text-muted-foreground">
+            {itens} {itens === 1 ? "item" : "itens"} · {volumes}{" "}
+            {volumes === 1 ? "volume" : "volumes"}
+          </span>
+          <span className="font-mono text-4xl font-bold tracking-tight tabular-nums">
+            {moeda(total)}
+          </span>
+        </div>
+
+        <Separator className="my-4" />
+
+        <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Pagamento
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          {FORMAS_PAGAMENTO.map((opcao, indice) => {
+            const Icone = ICONES[opcao.id]
+            const escolhida = opcao.id === forma
+            return (
+              <Button
+                key={opcao.id}
+                type="button"
+                tabIndex={-1}
+                variant={escolhida ? "default" : "outline"}
+                size="sm"
+                onClick={() => onFormaChange(opcao.id)}
+                className="justify-start rounded-lg"
+              >
+                <Icone className="size-4" />
+                <span className="flex-1 text-left">{opcao.rotulo}</span>
+                <Kbd
+                  className={cn(
+                    "text-[9px]",
+                    escolhida && "bg-primary-foreground/20 text-primary-foreground"
+                  )}
+                >
+                  ⇧F{indice + 1}
+                </Kbd>
+              </Button>
+            )
+          })}
+        </div>
+
+        {emDinheiro ? (
+          <div className="mt-3 flex items-center gap-3 rounded-lg border border-border bg-muted/30 p-3">
+            <label
+              htmlFor="recebido"
+              className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
+            >
+              Recebido
+            </label>
+            <Input
+              ref={campoRecebido}
+              id="recebido"
+              type="search"
+              value={recebido}
+              onChange={(e) => onRecebidoChange(e.target.value)}
+              placeholder="quanto o cliente entregou"
+              inputMode="decimal"
+              autoComplete="off"
+              data-1p-ignore=""
+              data-lpignore="true"
+              className="h-9 flex-1 rounded-lg font-mono text-lg tabular-nums"
+            />
+            <div className="shrink-0 text-right">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                {troco !== null && troco < 0 ? "Falta" : "Troco"}
+              </div>
+              <div
+                className={cn(
+                  "font-mono text-xl font-bold tabular-nums",
+                  troco !== null && troco < 0 && "text-destructive"
+                )}
+              >
+                {troco === null ? "—" : moeda(Math.abs(troco))}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        <Separator className="my-4" />
+
+        <button
+          type="button"
+          tabIndex={-1}
+          onClick={onEscolherCliente}
+          className={cn(
+            "flex w-full items-center gap-3 rounded-lg border p-3 text-left transition-colors hover:bg-muted/60",
+            faltaCliente ? "border-destructive/40 bg-destructive/5" : "border-border"
+          )}
+        >
+          <User className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+          <div className="min-w-0 flex-1">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Cliente
+            </div>
+            {cliente ? (
+              <>
+                <div className="truncate text-sm font-medium">{cliente.nome}</div>
+                <div className="font-mono text-[11px] text-muted-foreground tabular-nums">
+                  {formatarCpfCnpj(cliente.cpfCnpj)}
+                </div>
+              </>
+            ) : (
+              <div
+                className={cn(
+                  "text-sm font-medium",
+                  faltaCliente ? "text-destructive" : "text-foreground"
+                )}
+              >
+                {faltaCliente ? "A prazo exige cliente" : "Consumidor Final"}
+              </div>
+            )}
+          </div>
+          <Kbd className="shrink-0">F6</Kbd>
+        </button>
+
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            tabIndex={-1}
+            onClick={() => onImprimirChange(!imprimir)}
+            className={cn(
+              "flex items-center gap-2 rounded-lg border p-3 text-left transition-colors hover:bg-muted/60",
+              imprimir ? "border-primary bg-primary/5" : "border-border"
+            )}
+          >
+            <Printer className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+            <div className="min-w-0 flex-1">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Cupom
+              </div>
+              <div className="text-sm font-medium">
+                {imprimir ? "Imprimir" : "Não imprimir"}
+              </div>
+            </div>
+            <Kbd className="shrink-0">F7</Kbd>
+          </button>
+
+          {/* Desabilitado a propósito: NF-e é projeto à parte (certificado A1,
+              SEFAZ, contingência), não um botão. O lugar dela já fica definido. */}
+          <div className="flex items-center gap-2 rounded-lg border border-dashed border-border p-3 opacity-50">
+            <FileText className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+            <div className="min-w-0 flex-1">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                NF-e
+              </div>
+              <div className="text-sm font-medium">em breve</div>
+            </div>
+          </div>
+        </div>
+
+        {erro ? (
+          <p className="mt-3 text-xs font-medium text-destructive" role="alert">
+            {erro}
+          </p>
+        ) : null}
+
+        <Separator className="my-4" />
+
+        <Button
+          type="button"
+          tabIndex={-1}
+          size="lg"
+          disabled={gravando || faltaDinheiro || faltaCliente}
+          onClick={onConfirmar}
+          className="h-14 w-full rounded-xl text-base font-semibold"
+        >
+          {gravando ? (
+            "GRAVANDO…"
+          ) : (
+            <>
+              {aPrazo ? "ESCOLHER O PRAZO" : forma === "pix" ? "GERAR O PIX" : "FINALIZAR"}
+              <Kbd className="bg-primary-foreground/20 text-primary-foreground">Enter</Kbd>
+            </>
+          )}
+        </Button>
+
+        {faltaDinheiro && valorRecebido !== null ? (
+          <p className="mt-2 text-center text-xs text-muted-foreground">
+            Faltam {moeda(Math.abs(troco ?? 0))} para fechar
+          </p>
+        ) : null}
+      </div>
+    </div>
+  )
+}

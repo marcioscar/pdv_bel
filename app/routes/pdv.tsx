@@ -10,6 +10,7 @@ import { BarraAtalhos, type Atalho } from "~/components/pdv/barra-atalhos"
 import { BarraComando, type ModoComando } from "~/components/pdv/barra-comando"
 import { ListaItens } from "~/components/pdv/lista-itens"
 import { PixDialogo, type PixNoBalcao } from "~/components/pdv/pix-dialogo"
+import { FinalizarDialogo } from "~/components/pdv/finalizar-dialogo"
 import { PainelPagamento } from "~/components/pdv/painel-pagamento"
 import { Topo } from "~/components/pdv/topo"
 import { Kbd } from "~/components/ui/kbd"
@@ -33,6 +34,7 @@ import {
   moeda,
   quantidade as formatarQuantidade,
 } from "~/lib/moeda"
+import { imprimirDocumento } from "~/lib/impressao"
 import { useAtalhosDeSecao } from "~/lib/navegacao"
 import { useRelogio, useTema } from "~/lib/tema"
 import { cn } from "~/lib/utils"
@@ -227,6 +229,7 @@ export async function action({ request }: Route.ActionArgs) {
       tipo: "pixStatus" as const,
       pago: true as const,
       numero: resultado.numero,
+      vendaId: resultado.vendaId,
       pagoEm: pix.pagoEm,
       endToEndId: pix.endToEndId,
     }
@@ -267,7 +270,13 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   const [modo, setModo] = useState<ModoComando>("busca")
   const [indiceResultado, setIndiceResultado] = useState(0)
   const [forma, setForma] = useState<FormaPagamento>("dinheiro")
-  const [recebido, setRecebido] = useState<number | null>(null)
+  // A finalização virou uma tela de conferência: abre com tudo decidido, e o
+  // Enter grava. O valor recebido passou a ser digitado nela, não na barra de
+  // comando — assim a barra volta a ser só busca de produto.
+  const [finalizando, setFinalizando] = useState(false)
+  const [recebidoTexto, setRecebidoTexto] = useState("")
+  const [imprimirCupom, setImprimirCupom] = useState(true)
+  const [erroFinalizacao, setErroFinalizacao] = useState<string | null>(null)
   const [ajudaAberta, setAjudaAberta] = useState(false)
   const [aviso, setAviso] = useState<Aviso>(null)
   const [cliente, setCliente] = useState<ClienteResumo | null>(null)
@@ -344,15 +353,24 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   const focar = useCallback(() => campo.current?.focus(), [])
 
   useEffect(() => {
-    if (!ajudaAberta && !clienteAberto && !comprovante && !pix && !condicaoAberta) focar()
-  }, [ajudaAberta, clienteAberto, comprovante, pix, condicaoAberta, modo, focar])
+    if (
+      !ajudaAberta &&
+      !clienteAberto &&
+      !comprovante &&
+      !pix &&
+      !condicaoAberta &&
+      !finalizando
+    ) {
+      focar()
+    }
+  }, [ajudaAberta, clienteAberto, comprovante, pix, condicaoAberta, finalizando, modo, focar])
 
   // Clicar num botão de atalho tira o foco do campo; devolvemos no frame seguinte
   // para que a próxima tecla continue caindo na barra de comando.
   const devolverFoco = useCallback(() => {
-    if (ajudaAberta || clienteAberto || condicaoAberta) return
+    if (ajudaAberta || clienteAberto || condicaoAberta || finalizando) return
     requestAnimationFrame(focar)
-  }, [ajudaAberta, clienteAberto, condicaoAberta, focar])
+  }, [ajudaAberta, clienteAberto, condicaoAberta, finalizando, focar])
 
   const voltarParaBusca = useCallback(() => {
     setModo("busca")
@@ -478,11 +496,21 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     }
 
     despachar({ tipo: "limpar" })
-    setRecebido(null)
     setModo("busca")
     setEntrada("")
     setCliente(null)
     setCondicao(null)
+    setFinalizando(false)
+    setRecebidoTexto("")
+
+    // O cupom sai depois de a venda existir: imprimir antes de gravar entregaria
+    // ao cliente um documento de uma venda que pode ter falhado.
+    if (imprimirCupom) {
+      imprimirDocumento(`/vendas/${resposta.vendaId}/cupom`).then((erro) => {
+        if (erro) avisar(erro, "erro")
+      })
+    }
+
     avisar(
       troco > 0
         ? `Venda #${numero} registrada · troco ${moeda(troco)}`
@@ -551,23 +579,52 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
 
     // Pago: a venda já foi gravada no servidor. Limpa o carrinho.
     despachar({ tipo: "limpar" })
-    setRecebido(null)
     setModo("busca")
     setEntrada("")
+    setFinalizando(false)
+    setRecebidoTexto("")
+
+    // O Pix grava a venda por outro caminho (a confirmação do banco), então o
+    // cupom precisa ser disparado aqui também — senão só a venda em Pix sairia
+    // sem comprovante, que é o tipo de diferença que ninguém nota até faltar.
+    if (imprimirCupom) {
+      imprimirDocumento(`/vendas/${r.vendaId}/cupom`).then((erro) => {
+        if (erro) avisar(erro, "erro")
+      })
+    }
+
     setPix((atual) =>
       atual ? { ...atual, concluida: { numero: r.numero, pagoEm: r.pagoEm }, motivoPendente: null } : atual
     )
-  }, [fetcherPix.state, fetcherPix.data])
+  }, [fetcherPix.state, fetcherPix.data, imprimirCupom, avisar])
 
-  const iniciarPagamento = useCallback(() => {
+  /** F10: abre a conferência. Nada é gravado aqui. */
+  const abrirFinalizacao = useCallback(() => {
     if (venda.itens.length === 0) {
       avisar("Nenhum item na venda", "erro")
       return
     }
-    // Dinheiro precisa do valor recebido para calcular troco; o resto fecha direto.
+    setErroFinalizacao(null)
+    setRecebidoTexto("")
+    setFinalizando(true)
+  }, [avisar, venda.itens.length])
+
+  /** Enter na conferência: daqui em diante grava (ou abre Pix/prazo). */
+  const confirmarFinalizacao = useCallback(() => {
+    if (gravando) return
+    setErroFinalizacao(null)
+
     if (forma === "dinheiro") {
-      setModo("recebido")
-      setEntrada("")
+      const valor = interpretarValor(recebidoTexto)
+      if (valor === null) {
+        setErroFinalizacao("Informe o valor recebido")
+        return
+      }
+      if (valor < totais.total) {
+        setErroFinalizacao(`Faltam ${moeda(totais.total - valor)}`)
+        return
+      }
+      concluir(valor)
       return
     }
     // Pix no balcão: gera a cobrança e espera a confirmação do banco.
@@ -589,21 +646,30 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     // A prazo vira boleto: precisa do pagador e de uma das condições fixas.
     if (forma === "prazo") {
       if (!cliente) {
+        setErroFinalizacao("Venda a prazo exige cliente — F6 para vincular")
         setClienteAberto(true)
-        avisar("Venda a prazo exige cliente", "erro")
         return
       }
       // Nenhuma condição serve: nem o boleto de uma parcela chega ao mínimo.
       if (!CONDICOES_PAGAMENTO.some((c) => condicaoCabeNoTotal(c, totais.total))) {
-        avisar(`Venda a prazo exige no mínimo ${moeda(VALOR_MINIMO_BOLETO)}`, "erro")
+        setErroFinalizacao(`Venda a prazo exige no mínimo ${moeda(VALOR_MINIMO_BOLETO)}`)
         return
       }
       setCondicaoAberta(true)
-      setEntrada("")
       return
     }
     concluir(null)
-  }, [avisar, cliente, concluir, fetcher, forma, totais.desconto, totais.total, venda.itens])
+  }, [
+    cliente,
+    concluir,
+    fetcher,
+    forma,
+    gravando,
+    recebidoTexto,
+    totais.desconto,
+    totais.total,
+    venda.itens,
+  ])
 
   const confirmar = useCallback(() => {
     if (modo === "busca") {
@@ -646,35 +712,23 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       return
     }
 
-    if (modo === "desconto") {
-      if (valor > totais.subtotal) {
-        avisar("Desconto maior que o subtotal", "erro")
-        return
-      }
-      despachar({ tipo: "definirDesconto", valor })
-      voltarParaBusca()
+    // modo === "desconto"
+    if (valor > totais.subtotal) {
+      avisar("Desconto maior que o subtotal", "erro")
       return
     }
-
-    // modo === "recebido"
-    setRecebido(valor)
-    if (valor < totais.total) {
-      avisar(`Faltam ${moeda(totais.total - valor)}`, "erro")
-      return
-    }
-    concluir(valor)
+    despachar({ tipo: "definirDesconto", valor })
+    voltarParaBusca()
   }, [
     adicionar,
     avisar,
     comando,
-    concluir,
     entrada,
     indiceResultado,
     modo,
     produtos,
     resultados,
     totais.subtotal,
-    totais.total,
     venda.indiceAtivo,
     voltarParaBusca,
   ])
@@ -700,7 +754,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   const cancelarVenda = useCallback(() => {
     if (venda.itens.length === 0) return
     despachar({ tipo: "limpar" })
-    setRecebido(null)
+    setFinalizando(false)
     voltarParaBusca()
     avisar("Venda cancelada", "erro")
   }, [avisar, venda.itens.length, voltarParaBusca])
@@ -734,8 +788,8 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
         return
       }
 
-      // Cliente e condição têm handler próprio em captura; aqui só saímos.
-      if (clienteAberto || condicaoAberta) return
+      // Cliente, condição e finalização têm handler próprio em captura.
+      if (clienteAberto || condicaoAberta || finalizando) return
 
       if (ajudaAberta) {
         if (key === "Escape" || key === "F1" || key === "?") {
@@ -806,8 +860,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           return
         case "F10":
           evento.preventDefault()
-          if (modo === "recebido") confirmar()
-          else iniciarPagamento()
+          abrirFinalizacao()
           return
         case "Enter":
           evento.preventDefault()
@@ -816,7 +869,6 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
         case "Escape":
           evento.preventDefault()
           if (modo !== "busca") {
-            setRecebido(null)
             voltarParaBusca()
           } else {
             setEntrada("")
@@ -863,12 +915,13 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     clienteAberto,
     condicaoAberta,
     comprovante,
+    finalizando,
     pix,
+    abrirFinalizacao,
     alternarTema,
     cancelarVenda,
     confirmar,
     entrada,
-    iniciarPagamento,
     modo,
     pedirDesconto,
     pedirQuantidade,
@@ -976,14 +1029,10 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           total={totais.total}
           volumes={totais.volumes}
           forma={forma}
-          onFormaChange={setForma}
-          // No modo recebido o troco acompanha a digitação, sem esperar o Enter.
-          recebido={modo === "recebido" ? interpretarValor(entrada) : recebido}
-          onFinalizar={() => (modo === "recebido" ? confirmar() : iniciarPagamento())}
-          finalizando={modo === "recebido"}
-          gravando={gravando}
           cliente={cliente}
-          condicao={condicao}
+          gravando={gravando}
+          onFinalizar={abrirFinalizacao}
+          desabilitado={venda.itens.length === 0}
         />
       </div>
 
@@ -1008,6 +1057,37 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
             fetcher.submit(dados, { method: "post" })
           }}
           onFechar={() => setClienteAberto(false)}
+        />
+      ) : null}
+
+      {finalizando ? (
+        <FinalizarDialogo
+          total={totais.total}
+          volumes={totais.volumes}
+          itens={venda.itens.length}
+          forma={forma}
+          onFormaChange={(nova) => {
+            setForma(nova)
+            setErroFinalizacao(null)
+          }}
+          recebido={recebidoTexto}
+          onRecebidoChange={(v) => {
+            setRecebidoTexto(v)
+            setErroFinalizacao(null)
+          }}
+          cliente={cliente}
+          onEscolherCliente={() => {
+            setClienteErro(null)
+            setClienteAberto(true)
+          }}
+          imprimir={imprimirCupom}
+          onImprimirChange={setImprimirCupom}
+          gravando={gravando}
+          erro={erroFinalizacao}
+          onConfirmar={confirmarFinalizacao}
+          onFechar={() => setFinalizando(false)}
+          // Enquanto cliente, condição ou Pix estão por cima, ele não escuta.
+          pausado={clienteAberto || condicaoAberta || Boolean(pix) || Boolean(comprovante)}
         />
       ) : null}
 

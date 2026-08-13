@@ -6,12 +6,7 @@ import { Separator } from "~/components/ui/separator"
 import { cn } from "~/lib/utils"
 import { formatarCpfCnpj } from "~/lib/documento"
 import { moeda } from "~/lib/moeda"
-import {
-  FORMAS_PAGAMENTO,
-  parcelasDaCondicao,
-  type CondicaoPagamento,
-  type FormaPagamento,
-} from "~/lib/pdv"
+import { FORMAS_PAGAMENTO, type FormaPagamento } from "~/lib/pdv"
 
 const ICONES: Record<FormaPagamento, React.ComponentType<{ className?: string }>> = {
   dinheiro: Banknote,
@@ -26,35 +21,31 @@ type Props = {
   desconto: number
   total: number
   volumes: number
+  /** Só para exibir o que está escolhido — quem decide é o diálogo do F10. */
   forma: FormaPagamento
-  onFormaChange: (forma: FormaPagamento) => void
-  recebido: number | null
-  onFinalizar: () => void
-  finalizando: boolean
-  gravando: boolean
   cliente: { nome: string; cpfCnpj: string } | null
-  condicao: CondicaoPagamento | null
+  gravando: boolean
+  onFinalizar: () => void
+  desabilitado: boolean
 }
 
+/**
+ * Resumo da venda. Ele NÃO decide mais a forma de pagamento nem o cliente: isso
+ * acontece no diálogo do F10. Dois lugares mexendo no mesmo dado é como se grava
+ * venda em dinheiro marcada como cartão.
+ */
 export function PainelPagamento({
   subtotal,
   desconto,
   total,
   volumes,
   forma,
-  onFormaChange,
-  recebido,
-  onFinalizar,
-  finalizando,
-  gravando,
   cliente,
-  condicao,
+  gravando,
+  onFinalizar,
+  desabilitado,
 }: Props) {
-  const troco = recebido === null ? null : recebido - total
-  const insuficiente = troco !== null && troco < 0
-  const aPrazo = forma === "prazo"
-  // A prazo vira boleto e o boleto precisa do pagador; sem cliente não fecha.
-  const faltaCliente = aPrazo && cliente === null
+  const Icone = ICONES[forma]
 
   return (
     <aside className="flex w-[320px] shrink-0 flex-col gap-4 border-l border-border bg-muted/30 p-5">
@@ -91,117 +82,28 @@ export function PainelPagamento({
         </div>
       </div>
 
-      <div>
-        <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-          Forma de pagamento <Kbd className="ml-1">F8</Kbd>
+      {/* Mostra a escolha atual; trocar é no diálogo do F10. */}
+      <div className="rounded-lg border border-border bg-card p-3">
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Pagamento
         </div>
-        <div className="grid grid-cols-2 gap-2">
-          {FORMAS_PAGAMENTO.map((opcao, indice) => {
-            const Icone = ICONES[opcao.id]
-            const selecionada = opcao.id === forma
-            return (
-              <Button
-                key={opcao.id}
-                type="button"
-                tabIndex={-1}
-                variant={selecionada ? "default" : "outline"}
-                size="sm"
-                onClick={() => onFormaChange(opcao.id)}
-                className="justify-start rounded-lg"
-              >
-                <Icone className="size-4" />
-                <span className="flex-1 text-left">{opcao.rotulo}</span>
-                <Kbd
-                  className={cn(
-                    "text-[9px]",
-                    selecionada && "bg-primary-foreground/20 text-primary-foreground"
-                  )}
-                >
-                  ⇧F{indice + 1}
-                </Kbd>
-              </Button>
-            )
-          })}
+        <div className="mt-1 flex items-center gap-2 text-sm font-medium">
+          <Icone className="size-4 text-muted-foreground" />
+          {FORMAS_PAGAMENTO.find((f) => f.id === forma)?.rotulo}
         </div>
-      </div>
-
-      {aPrazo || cliente ? (
-        <div
-          className={cn(
-            "rounded-lg border p-3",
-            faltaCliente ? "border-destructive/40 bg-destructive/5" : "border-border bg-card"
-          )}
-        >
-          <div className="flex items-baseline justify-between gap-2">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        {cliente ? (
+          <>
+            <Separator className="my-2.5" />
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
               Cliente
-            </span>
-            <Kbd>F6</Kbd>
-          </div>
-          {cliente ? (
-            <>
-              <div className="mt-1 truncate text-sm font-medium">{cliente.nome}</div>
-              <div className="font-mono text-[11px] text-muted-foreground tabular-nums">
-                {formatarCpfCnpj(cliente.cpfCnpj)}
-              </div>
-            </>
-          ) : (
-            <div className="mt-1 text-xs font-medium text-destructive">
-              Venda a prazo exige cliente
             </div>
-          )}
-
-          {aPrazo ? (
-            <div className="mt-2.5 border-t border-border pt-2.5">
-              <div className="flex items-baseline justify-between">
-                <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Prazo
-                </span>
-                <span className="text-sm font-semibold">
-                  {condicao ? condicao.rotulo : "escolhe no F10"}
-                </span>
-              </div>
-              {/* As parcelas aparecem aqui porque é o que o vendedor precisa
-                  dizer ao cliente — e são as mesmas que virarão boletos. */}
-              {condicao && condicao.dias.length > 1 ? (
-                <ul className="mt-1.5 space-y-0.5">
-                  {parcelasDaCondicao(condicao, total).map((p) => (
-                    <li
-                      key={p.parcela}
-                      className="flex justify-between font-mono text-[11px] text-muted-foreground tabular-nums"
-                    >
-                      <span>{p.parcela}ª · {p.vencimento.toLocaleDateString("pt-BR")}</span>
-                      <span className="font-semibold text-foreground">{moeda(p.valor)}</span>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
+            <div className="mt-1 truncate text-sm font-medium">{cliente.nome}</div>
+            <div className="font-mono text-[11px] text-muted-foreground tabular-nums">
+              {formatarCpfCnpj(cliente.cpfCnpj)}
             </div>
-          ) : null}
-        </div>
-      ) : null}
-
-      {recebido !== null ? (
-        <div className="rounded-lg border border-border bg-card p-3">
-          <div className="flex justify-between text-xs text-muted-foreground">
-            <span>Recebido</span>
-            <span className="font-mono tabular-nums">{moeda(recebido)}</span>
-          </div>
-          <div className="mt-1.5 flex items-baseline justify-between">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              {insuficiente ? "Falta" : "Troco"}
-            </span>
-            <span
-              className={cn(
-                "font-mono text-xl font-bold tabular-nums",
-                insuficiente && "text-destructive"
-              )}
-            >
-              {moeda(Math.abs(troco ?? 0))}
-            </span>
-          </div>
-        </div>
-      ) : null}
+          </>
+        ) : null}
+      </div>
 
       <div className="mt-auto">
         <Button
@@ -209,14 +111,10 @@ export function PainelPagamento({
           tabIndex={-1}
           size="lg"
           onClick={onFinalizar}
-          disabled={total <= 0 || insuficiente || gravando || faltaCliente}
+          disabled={desabilitado || gravando}
           className="h-14 w-full rounded-xl text-base font-semibold"
         >
-          {gravando
-            ? "GRAVANDO…"
-            : finalizando
-              ? "CONFIRMAR PAGAMENTO"
-              : "FINALIZAR VENDA"}
+          {gravando ? "GRAVANDO…" : "FINALIZAR VENDA"}
           {gravando ? null : (
             <Kbd className="bg-primary-foreground/20 text-primary-foreground">F10</Kbd>
           )}
