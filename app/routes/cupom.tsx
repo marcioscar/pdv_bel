@@ -52,6 +52,16 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       : Promise.resolve([]),
   ])
 
+  /**
+   * O logo precisa de URL ABSOLUTA.
+   *
+   * O cupom é impresso dentro de um iframe cuja origem é uma URL `blob:`, e ali
+   * um caminho como "/logo_bel.svg" não resolve para o site — fica literal e a
+   * imagem não carrega. Medido: aberto direto o logo aparece, pelo caminho da
+   * impressão não aparecia.
+   */
+  const logo = loja.logo ? new URL(loja.logo, request.url).href : null
+
   const forma =
     FORMAS_PAGAMENTO.find((f) => f.id === venda.forma)?.rotulo ?? venda.forma
   const condicao = CONDICOES_PAGAMENTO.find((c) => c.id === venda.condicao)
@@ -130,7 +140,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 </head>
 <body>
   <div class="centro">
-    ${loja.logo ? `<img class="logo" src="${escapar(loja.logo)}" alt="">` : ""}
+    ${logo ? `<img class="logo" src="${escapar(logo)}" alt="">` : ""}
     <div class="titulo">${escapar(loja.razaoSocial ?? loja.nome)}</div>
     <div>${escapar(loja.nome)} · CNPJ ${formatarCnpj(loja.cnpj)}</div>
     ${loja.endereco ? `<div>${escapar(loja.endereco)}</div>` : ""}
