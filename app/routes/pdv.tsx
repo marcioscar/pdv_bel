@@ -588,6 +588,10 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     setEntrada("")
     setFinalizando(false)
     setRecebidoTexto("")
+    // O cliente sai junto, como nas outras formas: cada venda começa em
+    // Consumidor Final. Só este caminho não limpava, e o cliente da venda
+    // anterior seguia grudado na próxima sem ninguém notar.
+    setCliente(null)
 
     // O Pix grava a venda por outro caminho (a confirmação do banco), então o
     // cupom precisa ser disparado aqui também — senão só a venda em Pix sairia
@@ -603,6 +607,16 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     )
   }, [fetcherPix.state, fetcherPix.data, imprimirCupom, avisar])
 
+  /**
+   * A prazo o comprovante é o boleto, que o próprio comprovante manda imprimir —
+   * ligar o cupom junto empilharia duas caixas de impressão a cada venda. Nas
+   * outras formas o cupom é o único documento, então vem ligado.
+   *
+   * Trocar a forma redefine este padrão: é previsível, e quem quiser os dois
+   * documentos liga com F7 depois de escolher a forma.
+   */
+  const cupomPadrao = (f: FormaPagamento) => f !== "prazo"
+
   /** F10: abre a conferência. Nada é gravado aqui. */
   const abrirFinalizacao = useCallback(() => {
     if (venda.itens.length === 0) {
@@ -611,8 +625,9 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     }
     setErroFinalizacao(null)
     setRecebidoTexto("")
+    setImprimirCupom(cupomPadrao(forma))
     setFinalizando(true)
-  }, [avisar, venda.itens.length])
+  }, [avisar, forma, venda.itens.length])
 
   /** Enter na conferência: daqui em diante grava (ou abre Pix/prazo). */
   const confirmarFinalizacao = useCallback(() => {
@@ -1057,6 +1072,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           forma={forma}
           onFormaChange={(nova) => {
             setForma(nova)
+            setImprimirCupom(cupomPadrao(nova))
             setErroFinalizacao(null)
           }}
           recebido={recebidoTexto}
