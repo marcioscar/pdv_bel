@@ -1,28 +1,15 @@
-import { Banknote, CalendarClock, CreditCard, QrCode, Wallet } from "lucide-react"
-
 import { Button } from "~/components/ui/button"
 import { Kbd } from "~/components/ui/kbd"
 import { Separator } from "~/components/ui/separator"
 import { cn } from "~/lib/utils"
 import { formatarCpfCnpj } from "~/lib/documento"
 import { moeda } from "~/lib/moeda"
-import { FORMAS_PAGAMENTO, type FormaPagamento } from "~/lib/pdv"
-
-const ICONES: Record<FormaPagamento, React.ComponentType<{ className?: string }>> = {
-  dinheiro: Banknote,
-  credito: CreditCard,
-  debito: Wallet,
-  pix: QrCode,
-  prazo: CalendarClock,
-}
 
 type Props = {
   subtotal: number
   desconto: number
   total: number
   volumes: number
-  /** Só para exibir o que está escolhido — quem decide é o diálogo do F10. */
-  forma: FormaPagamento
   cliente: { nome: string; cpfCnpj: string } | null
   gravando: boolean
   onFinalizar: () => void
@@ -39,14 +26,11 @@ export function PainelPagamento({
   desconto,
   total,
   volumes,
-  forma,
   cliente,
   gravando,
   onFinalizar,
   desabilitado,
 }: Props) {
-  const Icone = ICONES[forma]
-
   return (
     <aside className="flex w-[320px] shrink-0 flex-col gap-4 border-l border-border bg-muted/30 p-5">
       <div>
@@ -82,28 +66,21 @@ export function PainelPagamento({
         </div>
       </div>
 
-      {/* Mostra a escolha atual; trocar é no diálogo do F10. */}
-      <div className="rounded-lg border border-border bg-card p-3">
-        <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-          Pagamento
+      {/* A forma de pagamento saiu daqui: ela é escolhida na conferência do F10,
+          e repeti-la abaixo do total só ocupava a vista com um dado que ninguém
+          decide nesta tela. O cliente aparece só quando existe — o normal é a
+          venda inteira correr como Consumidor Final. */}
+      {cliente ? (
+        <div className="rounded-lg border border-border bg-card p-3">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Cliente
+          </div>
+          <div className="mt-1 truncate text-sm font-medium">{cliente.nome}</div>
+          <div className="font-mono text-[11px] text-muted-foreground tabular-nums">
+            {formatarCpfCnpj(cliente.cpfCnpj)}
+          </div>
         </div>
-        <div className="mt-1 flex items-center gap-2 text-sm font-medium">
-          <Icone className="size-4 text-muted-foreground" />
-          {FORMAS_PAGAMENTO.find((f) => f.id === forma)?.rotulo}
-        </div>
-        {cliente ? (
-          <>
-            <Separator className="my-2.5" />
-            <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Cliente
-            </div>
-            <div className="mt-1 truncate text-sm font-medium">{cliente.nome}</div>
-            <div className="font-mono text-[11px] text-muted-foreground tabular-nums">
-              {formatarCpfCnpj(cliente.cpfCnpj)}
-            </div>
-          </>
-        ) : null}
-      </div>
+      ) : null}
 
       <div className="mt-auto">
         <Button

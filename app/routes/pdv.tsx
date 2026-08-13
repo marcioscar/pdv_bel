@@ -269,7 +269,13 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   const [entrada, setEntrada] = useState("")
   const [modo, setModo] = useState<ModoComando>("busca")
   const [indiceResultado, setIndiceResultado] = useState(0)
-  const [forma, setForma] = useState<FormaPagamento>("dinheiro")
+  /**
+   * Pix é o padrão do balcão hoje — é a forma que mais sai, então é ela que abre
+   * marcada. Volta a Pix a cada venda nova, não a cada abertura da conferência:
+   * assim quem pré-escolhe com ⇧F3 enquanto passa os produtos não perde a escolha
+   * ao apertar F10.
+   */
+  const [forma, setForma] = useState<FormaPagamento>("pix")
   // A finalização virou uma tela de conferência: abre com tudo decidido, e o
   // Enter grava. O valor recebido passou a ser digitado nela, não na barra de
   // comando — assim a barra volta a ser só busca de produto.
@@ -505,6 +511,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     setEntrada("")
     setCliente(null)
     setCondicao(null)
+    setForma("pix")
     setFinalizando(false)
     setRecebidoTexto("")
 
@@ -592,6 +599,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     // Consumidor Final. Só este caminho não limpava, e o cliente da venda
     // anterior seguia grudado na próxima sem ninguém notar.
     setCliente(null)
+    setForma("pix")
 
     // O Pix grava a venda por outro caminho (a confirmação do banco), então o
     // cupom precisa ser disparado aqui também — senão só a venda em Pix sairia
@@ -1028,7 +1036,6 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           desconto={totais.desconto}
           total={totais.total}
           volumes={totais.volumes}
-          forma={forma}
           cliente={cliente}
           gravando={gravando}
           onFinalizar={abrirFinalizacao}
