@@ -440,6 +440,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       setNovosClientes((atuais) => [...atuais, resposta.cliente])
       setCliente(resposta.cliente)
       setClienteAberto(false)
+      setErroFinalizacao(null)
       avisar(`${resposta.cliente.nome} cadastrado e vinculado à venda`, "sucesso")
       return
     }
@@ -1076,7 +1077,12 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
             setErroFinalizacao(null)
           }}
           cliente={cliente}
-          onEscolherCliente={() => {
+          clientes={todosClientes}
+          onClienteChange={(escolhido) => {
+            setCliente(escolhido)
+            setErroFinalizacao(null)
+          }}
+          onCadastrarCliente={() => {
             setClienteErro(null)
             setClienteAberto(true)
           }}
