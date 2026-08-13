@@ -93,6 +93,25 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     font-size: 11px; line-height: 1.35; color: #000; background: #fff;
   }
   .centro { text-align: center; }
+  /*
+   * Logo na termica: ela imprime em 1 bit, preto ou nada. Cor vira meio-tom
+   * pontilhado, que num logo pequeno sai sujo.
+   *
+   * grayscale + contrast(3) empurra as cores da marca (azul e vermelho) para
+   * preto solido e mantem o branco branco — inclusive o branco DENTRO do
+   * desenho, que um brightness(0) transformaria num borrao. Traco limpo.
+   *
+   * print-color-adjust: exact impede o navegador de "economizar tinta" e
+   * descartar o desenho na impressao.
+   *
+   * (sem crases neste comentario: ele vive dentro de um template literal.)
+   */
+  .logo {
+    width: 46mm; height: auto; margin: 0 auto 2px;
+    filter: grayscale(1) contrast(3);
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
   .dir { text-align: right; }
   .forte { font-weight: 700; }
   .titulo { font-size: 13px; font-weight: 700; }
@@ -111,6 +130,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 </head>
 <body>
   <div class="centro">
+    ${loja.logo ? `<img class="logo" src="${escapar(loja.logo)}" alt="">` : ""}
     <div class="titulo">${escapar(loja.razaoSocial ?? loja.nome)}</div>
     <div>${escapar(loja.nome)} · CNPJ ${formatarCnpj(loja.cnpj)}</div>
     ${loja.endereco ? `<div>${escapar(loja.endereco)}</div>` : ""}

@@ -40,6 +40,9 @@ model Loja {
   /// Ordem de exibição. Existe porque alfabética põe NRT antes de QI, e quem lê a
   /// tabela pensa na rede como matriz, filial e depois as outras.
   ordem  Int    @default(0)
+  /// Caminho do logo impresso no cupom, servido de /public. É POR LOJA porque a
+  /// rede tem três empresas: logo da BrasSaco num cupom da Sacobras seria errado.
+  logo   String?
 
   endereco String?
   bairro   String?
