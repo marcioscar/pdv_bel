@@ -647,7 +647,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     // A prazo vira boleto: precisa do pagador e de uma das condições fixas.
     if (forma === "prazo") {
       if (!cliente) {
-        setErroFinalizacao("Venda a prazo exige cliente — F6 para vincular")
+        setErroFinalizacao("Venda a prazo exige cliente — F6 escolhe aqui mesmo")
         setClienteAberto(true)
         return
       }
@@ -843,18 +843,6 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           evento.preventDefault()
           pedirQuantidade()
           return
-        case "F6":
-          evento.preventDefault()
-          setClienteErro(null)
-          setClienteAberto(true)
-          return
-        case "F8":
-          evento.preventDefault()
-          setForma((atual) => {
-            const i = FORMAS_PAGAMENTO.findIndex((f) => f.id === atual)
-            return FORMAS_PAGAMENTO[(i + 1) % FORMAS_PAGAMENTO.length].id
-          })
-          return
         case "F9":
           evento.preventDefault()
           cancelarVenda()
@@ -949,14 +937,6 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       rotulo: "Alterar qtd",
       acao: pedirQuantidade,
       desabilitado: venda.indiceAtivo < 0,
-    },
-    {
-      tecla: "F6",
-      rotulo: cliente ? "Trocar cliente" : "Vincular cliente",
-      acao: () => {
-        setClienteErro(null)
-        setClienteAberto(true)
-      },
     },
     {
       tecla: "F9",
