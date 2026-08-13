@@ -165,6 +165,48 @@ export async function action({ request }: Route.ActionArgs) {
   }
 }
 
+/** Quantos itens cabem na linha antes de virar "+N". */
+const ITENS_VISIVEIS = 3
+
+/**
+ * Os produtos da venda, um por linha.
+ *
+ * Antes era tudo numa frase separada por vírgula, com `truncate` num `<span>`
+ * inline — onde `truncate` não faz nada. O texto crescia, quebrava em duas linhas
+ * e invadia a coluna da forma de pagamento.
+ *
+ * O teto de três linhas existe para a altura da linha não depender do tamanho da
+ * venda: uma compra de vinte itens deixaria a tabela impossível de percorrer. O
+ * resto vira "+N", e quem precisa do detalhe abre o cupom.
+ */
+function ItensDaVenda({
+  itens,
+}: {
+  itens: { descricao: string; quantidade: number; unidade: string }[]
+}) {
+  const restantes = itens.length - ITENS_VISIVEIS
+
+  return (
+    <div className="max-w-[26rem] text-xs text-muted-foreground">
+      {itens.slice(0, ITENS_VISIVEIS).map((item, i) => (
+        <div key={i} className="flex gap-1.5">
+          <span className="shrink-0 font-mono tabular-nums">
+            {formatarQuantidade(item.quantidade)}×
+          </span>
+          {/* `truncate` precisa de elemento de bloco com largura limitada — era
+              justamente o que faltava e fazia o texto vazar para a coluna vizinha. */}
+          <span className="truncate">{item.descricao}</span>
+        </div>
+      ))}
+      {restantes > 0 ? (
+        <div className="font-medium">
+          + {restantes} {restantes === 1 ? "produto" : "produtos"}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 /**
  * Situação da venda a prazo. Com parcelamento não há uma situação só: mostra a
  * das parcelas quando coincidem e, quando não, quantas já foram recebidas — o
@@ -495,17 +537,8 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                             timeStyle: "short",
                           })}
                         </td>
-                        <td className="max-w-sm px-2 py-2.5 text-xs text-muted-foreground">
-                          {venda.itens.length}{" "}
-                          {venda.itens.length === 1 ? "produto" : "produtos"} ·{" "}
-                          <span className="truncate">
-                            {venda.itens
-                              .map(
-                                (item) =>
-                                  `${formatarQuantidade(item.quantidade)}× ${item.descricao}`
-                              )
-                              .join(", ")}
-                          </span>
+                        <td className="px-2 py-2">
+                          <ItensDaVenda itens={venda.itens} />
                         </td>
                         <td className="px-2 py-2.5 text-xs">
                           {FORMAS_PAGAMENTO.find((f) => f.id === venda.forma)?.rotulo ??
