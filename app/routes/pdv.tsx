@@ -281,6 +281,9 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   const [aviso, setAviso] = useState<Aviso>(null)
   const [cliente, setCliente] = useState<ClienteResumo | null>(null)
   const [clienteAberto, setClienteAberto] = useState(false)
+  // Vindo da conferência, o cadastro abre direto no formulário: a busca já foi
+  // feita no combobox de lá.
+  const [cadastroDireto, setCadastroDireto] = useState(false)
   const [clienteErro, setClienteErro] = useState<string | null>(null)
   // Clientes criados nesta sessão: o loader não revalida (shouldRevalidate=false)
   // para não reenviar o catálogo inteiro, então mantemos os novos aqui.
@@ -440,6 +443,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       setNovosClientes((atuais) => [...atuais, resposta.cliente])
       setCliente(resposta.cliente)
       setClienteAberto(false)
+      setCadastroDireto(false)
       setErroFinalizacao(null)
       avisar(`${resposta.cliente.nome} cadastrado e vinculado à venda`, "sucesso")
       return
@@ -1037,7 +1041,11 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
             setClienteErro(null)
             fetcher.submit(dados, { method: "post" })
           }}
-          onFechar={() => setClienteAberto(false)}
+          onFechar={() => {
+            setClienteAberto(false)
+            setCadastroDireto(false)
+          }}
+          direto={cadastroDireto}
         />
       ) : null}
 
@@ -1064,6 +1072,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           }}
           onCadastrarCliente={() => {
             setClienteErro(null)
+            setCadastroDireto(true)
             setClienteAberto(true)
           }}
           imprimir={imprimirCupom}

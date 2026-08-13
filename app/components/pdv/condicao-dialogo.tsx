@@ -81,7 +81,8 @@ export function CondicaoDialogo({ total, cliente, onEscolher, onFechar }: Props)
       role="dialog"
       aria-modal="true"
       aria-label="Condição de pagamento"
-      className="absolute inset-0 z-40 flex items-start justify-center overflow-y-auto bg-background/80 p-8 backdrop-blur-sm"
+      /* Camada 50: abre SOBRE a conferência do F10 (z-40), como o de cliente. */
+      className="absolute inset-0 z-50 flex items-start justify-center overflow-y-auto bg-background/80 p-8 backdrop-blur-sm"
     >
       <div className="w-full max-w-lg rounded-xl border border-border bg-card p-6 shadow-xl">
         <div className="flex items-baseline justify-between">

@@ -138,7 +138,20 @@ export function FinalizarDialogo({
   // o cliente precisa ser tão fácil quanto escolher um.
   const opcoes: (ClienteResumo | null)[] = [null, ...encontrados];
 
-  useEffect(() => setIndiceCliente(0), [buscaCliente]);
+  useEffect(() => setIndiceCliente(0), [buscaCliente])
+
+  /**
+   * Cliente definido por fora fecha a busca — é o caso do cadastro novo, que
+   * acontece em tela própria e volta com o cliente já vinculado. Sem isto o
+   * operador voltava para a lista de busca em vez de ver quem acabou de cadastrar.
+   */
+  const clienteEscolhido = cliente?.id ?? null
+  useEffect(() => {
+    if (clienteEscolhido) {
+      setEscolhendoCliente(false)
+      setBuscaCliente("")
+    }
+  }, [clienteEscolhido]);
   useEffect(() => {
     if (escolhendoCliente) campoCliente.current?.focus();
     else if (emDinheiro && !pausado) campoRecebido.current?.focus();

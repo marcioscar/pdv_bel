@@ -28,6 +28,13 @@ type Props = {
   onDesvincular: () => void
   onCriar: (dados: FormData) => void
   onFechar: () => void
+  /**
+   * Abre direto no formulário de cadastro.
+   *
+   * Quando vem da conferência do F10, a busca já aconteceu no combobox de lá —
+   * cair noutra lista de busca seria repetir o passo que o operador acabou de dar.
+   */
+  direto?: boolean
 }
 
 function normalizar(texto: string) {
@@ -46,10 +53,11 @@ export function ClienteDialogo({
   onDesvincular,
   onCriar,
   onFechar,
+  direto = false,
 }: Props) {
   const [busca, setBusca] = useState("")
   const [indice, setIndice] = useState(0)
-  const [cadastrando, setCadastrando] = useState(false)
+  const [cadastrando, setCadastrando] = useState(direto)
 
   // Os campos de endereço são controlados para o CEP poder preenchê-los.
   const [endereco, setEndereco] = useState({ endereco: "", bairro: "", cidade: "", uf: "MG" })
@@ -119,7 +127,9 @@ export function ClienteDialogo({
       if (evento.key === "Escape") {
         evento.preventDefault()
         evento.stopPropagation()
-        if (cadastrando) setCadastrando(false)
+        // Vindo direto do cadastro, o Esc fecha: a lista atrás não é o caminho
+        // de volta, é a conferência.
+        if (cadastrando && !direto) setCadastrando(false)
         else onFechar()
         return
       }
@@ -169,7 +179,10 @@ export function ClienteDialogo({
       role="dialog"
       aria-modal="true"
       aria-label="Cliente da venda"
-      className="absolute inset-0 z-40 flex items-start justify-center bg-background/80 p-10 backdrop-blur-sm"
+      /* Camada 50: este diálogo abre SOBRE a conferência do F10 (que é z-40). Sem
+      isso ele ficava atrás dela — a ordem do JSX decidia, e a ordem do JSX é
+      a última coisa em que se pensa ao mexer numa tela. */
+      className="absolute inset-0 z-50 flex items-start justify-center bg-background/80 p-10 backdrop-blur-sm"
     >
       <div className="w-full max-w-2xl rounded-xl border border-border bg-card p-6 shadow-xl">
         <div className="flex items-baseline justify-between">
@@ -392,7 +405,7 @@ export function ClienteDialogo({
         )}
 
         {erro ? (
-          <p className="mt-3 text-xs font-medium text-destructive" role="status">
+          <p className="mt-3 text-xs font-medium text-destructive" role="alert">
             {erro}
           </p>
         ) : null}
