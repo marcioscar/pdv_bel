@@ -20,6 +20,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     // O operador não decide nada: mandar o número da fila para ele seria
     // mostrar um alerta sobre o qual não pode agir.
     aDecidir: ehGerente(eu.papel) ? contagem.aDecidir : 0,
+    aguardando: contagem.aguardando,
     respondidas: contagem.respondidas,
   }
 }

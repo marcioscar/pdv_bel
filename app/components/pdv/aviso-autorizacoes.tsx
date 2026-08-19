@@ -1,6 +1,6 @@
 import { useEffect } from "react"
 import { Link, useFetcher, useLocation } from "react-router"
-import { ShieldAlert, ShieldCheck } from "lucide-react"
+import { Clock, ShieldAlert, ShieldCheck } from "lucide-react"
 
 import { Button } from "~/components/ui/button"
 import { ehGerente } from "~/lib/permissoes"
@@ -15,15 +15,20 @@ import { cn } from "~/lib/utils"
  * no balcão enquanto o gerente trabalha em outra coisa, achando que não há nada.
  *
  * Dois públicos, um componente: o gerente vê o que falta decidir, o vendedor vê
- * o que já foi respondido para ele. Ninguém vê o número do outro — mostrar ao
- * operador uma fila sobre a qual ele não pode agir é ruído.
+ * as vendas dele que estão esperando e as que já foram respondidas. Ninguém vê o
+ * número do outro — mostrar ao operador uma fila sobre a qual ele não pode agir
+ * é ruído.
  */
 
 /** De quanto em quanto tempo pergunta ao servidor. */
 const INTERVALO = 20_000
 
 export function AvisoAutorizacoes({ papel }: { papel: string }) {
-  const fetcher = useFetcher<{ aDecidir: number; respondidas: number }>()
+  const fetcher = useFetcher<{
+    aDecidir: number
+    aguardando: number
+    respondidas: number
+  }>()
   const { pathname } = useLocation()
 
   /**
@@ -46,6 +51,7 @@ export function AvisoAutorizacoes({ papel }: { papel: string }) {
   }, [pathname])
 
   const aDecidir = fetcher.data?.aDecidir ?? 0
+  const aguardando = fetcher.data?.aguardando ?? 0
   const respondidas = fetcher.data?.respondidas ?? 0
 
   // O gerente também vende: se ele tem pedido próprio respondido, os dois avisos
@@ -78,10 +84,28 @@ export function AvisoAutorizacoes({ papel }: { papel: string }) {
           size="sm"
           variant="secondary"
           className="rounded-lg font-semibold"
-          title="Pedidos seus que o gerente já respondeu"
+          title="Vendas suas que o gerente já respondeu — é aqui que você retoma"
         >
           <ShieldCheck className="size-4" aria-hidden />
-          {respondidas} {respondidas === 1 ? "respondido" : "respondidos"}
+          {respondidas} {respondidas === 1 ? "respondida" : "respondidas"}
+        </Button>
+      ) : null}
+
+      {/* Discreto de propósito: é lembrete, não chamado para agir — o vendedor
+          não pode fazer nada além de esperar. Mas precisa existir, senão a venda
+          que ele guardou fica sem caminho de volta até alguém responder. */}
+      {aguardando > 0 ? (
+        <Button
+          render={<Link to="/autorizacoes" />}
+          nativeButton={false}
+          tabIndex={-1}
+          size="sm"
+          variant="ghost"
+          className="rounded-lg"
+          title="Vendas suas guardadas, esperando o gerente"
+        >
+          <Clock className="size-4" aria-hidden />
+          {aguardando} esperando
         </Button>
       ) : null}
     </>

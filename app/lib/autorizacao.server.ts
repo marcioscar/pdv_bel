@@ -290,26 +290,37 @@ export function listarDoOperador(solicitanteId: string) {
 /**
  * Os números do indicador no topo, que toda tela consulta de tempos em tempos.
  *
- * Duas contagens porque são dois públicos na mesma barra: o gerente precisa
- * saber o que falta decidir, o vendedor o que já foi respondido para ele.
+ * Três contagens, dois públicos. O gerente precisa saber o que falta decidir. O
+ * vendedor precisa de duas coisas: o que já foi respondido — a venda que ele
+ * pode fechar — e o que ainda está esperando.
+ *
+ * `aguardando` existe porque sem ela o vendedor ficava sem caminho de volta: ele
+ * pedia, o caixa limpava, e até o gerente responder não havia link nenhum para a
+ * venda guardada. Nem para acompanhá-la, nem para desistir dela. O carrinho
+ * existia no servidor e era inalcançável pela tela.
  */
 export async function contagemDeAutorizacoes(usuario: {
   id: string
   lojasPermitidas: string[]
 }) {
-  const [aDecidir, respondidas] = await Promise.all([
+  const desde = new Date(Date.now() - 24 * 60 * 60 * 1000)
+
+  const [aDecidir, aguardando, respondidas] = await Promise.all([
     db.autorizacao.count({
       where: { situacao: "pendente", loja: { in: usuario.lojasPermitidas } },
+    }),
+    db.autorizacao.count({
+      where: { solicitanteId: usuario.id, situacao: "pendente", criadaEm: { gte: desde } },
     }),
     db.autorizacao.count({
       where: {
         solicitanteId: usuario.id,
         situacao: { in: ["aprovada", "negada"] },
-        criadaEm: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+        criadaEm: { gte: desde },
       },
     }),
   ])
-  return { aDecidir, respondidas }
+  return { aDecidir, aguardando, respondidas }
 }
 
 /**
