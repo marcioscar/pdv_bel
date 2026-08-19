@@ -23,6 +23,7 @@ export default [
       route("estoque", "routes/admin.estoque.tsx"),
       route("vendas", "routes/admin.vendas.tsx"),
       route("contas-a-receber", "routes/admin.contas-a-receber.tsx"),
+      route("autorizacoes", "routes/admin.autorizacoes.tsx"),
       route("relatorios", "routes/admin.relatorios.tsx"),
       route("usuarios", "routes/admin.usuarios.tsx"),
     ]),
@@ -34,6 +35,12 @@ export default [
 
   // Usuários morava aqui: quem tiver o link antigo continua chegando.
   route("usuarios", "routes/usuarios.tsx"),
+
+  // A fila do próprio vendedor: onde ele retoma a venda que o gerente liberou.
+  // Fica no turno, e não em /admin, porque quem a usa está no balcão.
+  route("autorizacoes", "routes/autorizacoes.tsx"),
+  // Recurso consultado de tempos em tempos pelo indicador do topo.
+  route("autorizacoes/contagem", "routes/autorizacoes.contagem.tsx"),
 
   route("entrar", "routes/entrar.tsx"),
   route("loja", "routes/loja.tsx"),

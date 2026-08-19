@@ -108,6 +108,12 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         somenteGerente: true,
       },
       {
+        para: "/admin/autorizacoes",
+        rotulo: "Autorizações",
+        descricao: "Liberar venda a cliente devedor e desconto acima do teto",
+        somenteGerente: true,
+      },
+      {
         para: "/admin/relatorios",
         rotulo: "Relatórios",
         descricao: "Faturamento, formas de pagamento e a receber",
@@ -199,6 +205,7 @@ export const ACOES_DE_GERENTE = {
   verRelatorios: "Só gerente vê os relatórios",
   verVendasDaRede: "Só gerente vê as vendas das outras lojas",
   verContasAReceber: "Só gerente vê as contas a receber",
+  decidirAutorizacoes: "Só gerente libera venda travada — é ele que responde pelo risco",
 } as const
 
 export type AcaoDeGerente = keyof typeof ACOES_DE_GERENTE
