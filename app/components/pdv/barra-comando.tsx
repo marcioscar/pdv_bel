@@ -12,7 +12,7 @@ export type ModoComando = "busca" | "quantidade" | "desconto" | "recebido";
 const PROMPTS: Record<ModoComando, { rotulo: string | null; dica: string }> = {
 	busca: {
 		rotulo: null,
-		dica: "Digite o codigo ou a descrição ou use 3*141 para 3 unidades…",
+		dica: "Digite o código ou a descrição, ou use 3*141 para 3 unidades…",
 	},
 	quantidade: { rotulo: "Quantidade", dica: "Nova quantidade do item ativo" },
 	desconto: {
