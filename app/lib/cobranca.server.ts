@@ -293,8 +293,13 @@ function planoDaVenda(venda: VendaParaCobrar): Parcela[] {
  * #57. Sem o prefixo, as duas pediriam `PDV000057`, o Inter recusaria a segunda
  * como duplicata e a rotina de recuperação adotaria a cobrança da OUTRA loja —
  * boleto de um cliente colado na venda de outro.
+ *
+ * Exportada porque é o "Nº do Documento" IMPRESSO no boleto, e é por ele que se
+ * acha o papel na gaveta: a folha de conferência precisa do mesmo número, e
+ * derivá-lo com esta função — em vez de remontar o formato lá — é o que garante
+ * que a lista nunca mande procurar um número que não está no papel.
  */
-function seuNumeroDaParcela(
+export function seuNumeroDaParcela(
   loja: string,
   numeroDaVenda: number,
   parcela: number,

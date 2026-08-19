@@ -1,19 +1,12 @@
 import type { Route } from "./+types/cupom"
 import { db } from "~/lib/db.server"
+import { escapar } from "~/lib/html"
 import { dadosDaLoja } from "~/lib/lojas.server"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { CONDICOES_PAGAMENTO, FORMAS_PAGAMENTO } from "~/lib/pdv"
 import { exigirUsuario, podeVerDaLoja } from "~/lib/sessao.server"
 
 const OBJECT_ID = /^[0-9a-fA-F]{24}$/
-
-function escapar(texto: string) {
-  return texto
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-}
 
 function formatarCnpj(d: string) {
   return d.length === 14
