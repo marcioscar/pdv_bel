@@ -22,9 +22,14 @@ export default [
       route("clientes", "routes/admin.clientes.tsx"),
       route("estoque", "routes/admin.estoque.tsx"),
       route("vendas", "routes/admin.vendas.tsx"),
+      route("contas-a-receber", "routes/admin.contas-a-receber.tsx"),
       route("relatorios", "routes/admin.relatorios.tsx"),
       route("usuarios", "routes/admin.usuarios.tsx"),
     ]),
+
+    // Fora do layout de propósito: é folha para imprimir, e dentro dele sairia
+    // com a sidebar junto. A guarda de gerente é cobrada na própria rota.
+    route("contas-a-receber/impressao", "routes/contas-a-receber.impressao.tsx"),
   ]),
 
   // Usuários morava aqui: quem tiver o link antigo continua chegando.

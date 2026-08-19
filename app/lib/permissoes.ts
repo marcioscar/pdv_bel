@@ -116,6 +116,18 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
     ],
   },
   {
+    id: "financeiro",
+    rotulo: "Financeiro",
+    secoes: [
+      {
+        para: "/admin/contas-a-receber",
+        rotulo: "Contas a receber",
+        descricao: "Boletos por vencimento: em aberto, vencidos e recebidos",
+        somenteGerente: true,
+      },
+    ],
+  },
+  {
     id: "cadastros",
     rotulo: "Cadastros",
     secoes: [
@@ -186,6 +198,7 @@ export const ACOES_DE_GERENTE = {
   editarProdutos: "Só gerente mexe no catálogo — preço é dinheiro",
   verRelatorios: "Só gerente vê os relatórios",
   verVendasDaRede: "Só gerente vê as vendas das outras lojas",
+  verContasAReceber: "Só gerente vê as contas a receber",
 } as const
 
 export type AcaoDeGerente = keyof typeof ACOES_DE_GERENTE

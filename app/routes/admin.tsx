@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { Link, Outlet, useLocation } from "react-router"
-import { ChevronRight, Package, Receipt, Users, type LucideIcon } from "lucide-react"
+import { ChevronRight, Package, Receipt, Users, Wallet, type LucideIcon } from "lucide-react"
 
 import type { Route } from "./+types/admin"
 import { Topo } from "~/components/pdv/topo"
@@ -19,6 +19,7 @@ import { cn } from "~/lib/utils"
 const ICONES: Record<string, LucideIcon> = {
   produtos: Package,
   vendas: Receipt,
+  financeiro: Wallet,
   cadastros: Users,
 }
 

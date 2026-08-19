@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react"
-import { Link, useNavigation, useSearchParams } from "react-router"
+import { useNavigation, useSearchParams } from "react-router"
 import { FileText, Receipt, Search, X } from "lucide-react"
 
 import type { Route } from "./+types/admin.vendas"
+import { Atalho, Campo, ESTILO_CAMPO, Pagina } from "~/components/pdv/filtros"
 import { Numero } from "~/components/pdv/numero"
 import { ItensDaVenda, SituacaoCobrancas } from "~/components/pdv/venda-celulas"
 import { Badge } from "~/components/ui/badge"
@@ -54,9 +55,6 @@ const SITUACOES = [
   { id: "validas", rotulo: "Só válidas" },
   { id: "canceladas", rotulo: "Só canceladas" },
 ] as const
-
-const ESTILO_CAMPO =
-  "h-9 rounded-lg border border-border bg-background px-2 text-sm outline-none focus-visible:border-ring"
 
 export default function AdminVendas({ loaderData }: Route.ComponentProps) {
   const { filtro, lojas, vendas, total, foraDoPeriodo, paginas, resumo } = loaderData
@@ -401,50 +399,6 @@ export default function AdminVendas({ loaderData }: Route.ComponentProps) {
         ) : null}
       </div>
     </div>
-  )
-}
-
-function Campo({ rotulo, children }: { rotulo: string; children: React.ReactNode }) {
-  return (
-    <label className="flex flex-col gap-1">
-      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-        {rotulo}
-      </span>
-      {children}
-    </label>
-  )
-}
-
-function Atalho({ rotulo, onClick }: { rotulo: string; onClick: () => void }) {
-  return (
-    <Button type="button" size="sm" variant="outline" onClick={onClick} className="rounded-lg">
-      {rotulo}
-    </Button>
-  )
-}
-
-function Pagina({
-  params,
-  para,
-  ativa,
-  children,
-}: {
-  params: URLSearchParams
-  para: number
-  ativa: boolean
-  children: React.ReactNode
-}) {
-  if (!ativa) {
-    return <span className="text-muted-foreground/40">{children}</span>
-  }
-  // Preserva o filtro inteiro e troca só a página — montar a URL do zero perderia
-  // o período e traria a página 2 de outra consulta.
-  const proximos = new URLSearchParams(params)
-  proximos.set("pagina", String(para))
-  return (
-    <Link to={{ search: `?${proximos}` }} className="underline">
-      {children}
-    </Link>
   )
 }
 

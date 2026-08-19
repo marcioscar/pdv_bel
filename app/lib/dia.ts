@@ -16,6 +16,13 @@
  */
 export const PRIMEIRO_DIA = "2000-01-01"
 
+/**
+ * A outra ponta, para o "tudo" de uma tela de VENCIMENTOS. Venda só tem passado;
+ * conta a receber tem futuro, e um "todo o histórico" que parasse em hoje
+ * esconderia justamente as parcelas que ainda vão vencer.
+ */
+export const ULTIMO_DIA = "2099-12-31"
+
 export function emDia(data: Date) {
   const mes = String(data.getMonth() + 1).padStart(2, "0")
   const dia = String(data.getDate()).padStart(2, "0")
@@ -30,6 +37,13 @@ export function diaDeHoje() {
 export function diaAtras(dias: number) {
   const data = new Date()
   data.setDate(data.getDate() - dias)
+  return emDia(data)
+}
+
+/** O dia N dias à frente. `diaAdiante(0)` é hoje, `diaAdiante(1)` é amanhã. */
+export function diaAdiante(dias: number) {
+  const data = new Date()
+  data.setDate(data.getDate() + dias)
   return emDia(data)
 }
 
