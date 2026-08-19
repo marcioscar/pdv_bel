@@ -65,49 +65,105 @@ export function secoesDoPapel(papel: string) {
  * gerente. Cada seção declara aqui o que exige, e o layout de /admin cobra —
  * então tela nova nasce protegida em vez de depender de alguém lembrar.
  */
-export const SECOES_ADMIN = [
-  {
-    para: "/admin/produtos",
-    rotulo: "Produtos",
-    descricao: "Preço, descrição e cadastro do catálogo",
-    somenteGerente: true,
-  },
-  {
-    para: "/admin/clientes",
-    rotulo: "Clientes",
-    descricao: "Cadastro e endereço usados no boleto",
-    somenteGerente: false,
-  },
-  {
-    para: "/admin/estoque",
-    rotulo: "Entradas e inventário",
-    descricao: "Entrada de mercadoria e saldo contado",
-    somenteGerente: false,
-  },
-  {
-    para: "/admin/vendas",
-    rotulo: "Vendas da rede",
-    descricao: "Toda venda de todas as lojas, com filtro e busca",
-    somenteGerente: true,
-  },
-  {
-    para: "/admin/relatorios",
-    rotulo: "Relatórios",
-    descricao: "Faturamento, formas de pagamento e a receber",
-    somenteGerente: true,
-  },
-  {
-    para: "/admin/usuarios",
-    rotulo: "Usuários",
-    descricao: "Quem entra no sistema e com que papel",
-    somenteGerente: true,
-  },
-] as const
+export type SecaoAdmin = {
+  para: string
+  rotulo: string
+  descricao: string
+  somenteGerente: boolean
+}
 
-export type SecaoAdmin = (typeof SECOES_ADMIN)[number]
+export type GrupoAdmin = {
+  id: string
+  rotulo: string
+  secoes: SecaoAdmin[]
+}
+
+export const GRUPOS_ADMIN: GrupoAdmin[] = [
+  {
+    id: "produtos",
+    rotulo: "Produtos",
+    secoes: [
+      {
+        para: "/admin/produtos",
+        rotulo: "Catálogo",
+        descricao: "Preço, descrição e cadastro do catálogo",
+        somenteGerente: true,
+      },
+      {
+        para: "/admin/estoque",
+        rotulo: "Entradas e inventário",
+        descricao: "Entrada de mercadoria e saldo contado",
+        somenteGerente: false,
+      },
+    ],
+  },
+  {
+    id: "vendas",
+    rotulo: "Vendas",
+    secoes: [
+      {
+        para: "/admin/vendas",
+        rotulo: "Vendas da rede",
+        descricao: "Toda venda de todas as lojas, com filtro e busca",
+        somenteGerente: true,
+      },
+      {
+        para: "/admin/relatorios",
+        rotulo: "Relatórios",
+        descricao: "Faturamento, formas de pagamento e a receber",
+        somenteGerente: true,
+      },
+    ],
+  },
+  {
+    id: "cadastros",
+    rotulo: "Cadastros",
+    secoes: [
+      {
+        para: "/admin/clientes",
+        rotulo: "Clientes",
+        descricao: "Cadastro e endereço usados no boleto",
+        somenteGerente: false,
+      },
+      {
+        para: "/admin/usuarios",
+        rotulo: "Usuários",
+        descricao: "Quem entra no sistema e com que papel",
+        somenteGerente: true,
+      },
+    ],
+  },
+]
+
+/**
+ * A lista plana continua sendo a fonte da guarda e do roteamento: o agrupamento
+ * é apresentação, e nenhuma permissão pode depender de em qual gaveta a tela foi
+ * guardada. Derivada, e não escrita à mão, para as duas não divergirem.
+ */
+export const SECOES_ADMIN = GRUPOS_ADMIN.flatMap((grupo) => grupo.secoes)
 
 export function secoesAdminDoPapel(papel: string) {
   return SECOES_ADMIN.filter((secao) => !secao.somenteGerente || ehGerente(papel))
+}
+
+/**
+ * Os grupos com as seções que o papel alcança. Grupo que ficaria vazio não é
+ * mostrado — para o operador, "Vendas" seria uma gaveta que abre no nada.
+ */
+export function gruposAdminDoPapel(papel: string) {
+  return GRUPOS_ADMIN.map((grupo) => ({
+    ...grupo,
+    secoes: grupo.secoes.filter((secao) => !secao.somenteGerente || ehGerente(papel)),
+  })).filter((grupo) => grupo.secoes.length > 0)
+}
+
+/** O grupo em que uma seção mora — é o que a sidebar abre ao entrar na tela. */
+export function grupoDaSecao(pathname: string) {
+  const limpo = pathname.replace(/\/+$/, "")
+  return (
+    GRUPOS_ADMIN.find((grupo) => grupo.secoes.some((secao) => secao.para === limpo))
+      ?.id ?? null
+  )
 }
 
 /** A seção correspondente a um caminho. null na raiz de /admin e no desconhecido. */
