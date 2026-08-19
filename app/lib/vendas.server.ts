@@ -1,5 +1,10 @@
 import type { Prisma } from "@prisma/client"
 
+import {
+  avaliarVenda,
+  conferirAutorizacao,
+  marcarAutorizacaoUsada,
+} from "~/lib/autorizacao.server"
 import { db } from "~/lib/db.server"
 import { depoisDoDia, diaAtras, diaDeHoje, inicioDoDia } from "~/lib/dia"
 import { movimentosDeVenda } from "~/lib/estoque.server"
@@ -37,6 +42,12 @@ export type PedidoRecebido = {
   /** Pix imediato: comprovante do pagamento já confirmado. */
   pixTxid?: string | null
   pixPagoEm?: Date | null
+  /**
+   * Liberação do gerente, quando a venda precisa de uma (cliente com boleto
+   * vencido, desconto acima do teto). Vai o ID, e não um "autorizado: true": um
+   * booleano vindo do navegador seria a autorização em si.
+   */
+  autorizacaoId?: string | null
 }
 
 /** O pedido completo: o que veio da tela mais o que só o servidor sabe. */
@@ -60,6 +71,19 @@ type ItemGravado = {
 export type ResultadoVenda =
   | { ok: true; numero: number; vendaId: string; total: number; troco: number }
   | { ok: false; erro: string }
+  /**
+   * Recusa que TEM saída: a venda não está errada, só precisa do gerente. Um
+   * tipo à parte porque a tela reage de outro jeito — em vez de mostrar o erro
+   * e parar, ela abre o pedido de autorização com a dívida na mão.
+   */
+  | {
+      ok: false
+      erro: string
+      precisaAutorizacao: true
+      motivos: string[]
+      divida: { valor: number; parcelas: number; diasAtraso: number }
+      descontoPercentual: number
+    }
 
 /** Um ObjectId malformado faria o Prisma lançar, virando 500 em vez de 400. */
 const OBJECT_ID = /^[0-9a-fA-F]{24}$/
@@ -93,6 +117,11 @@ export function lerPedido(bruto: unknown): PedidoRecebido | null {
         : NaN
   if (recebido !== null && Number.isNaN(recebido)) return null
 
+  const autorizacaoId =
+    typeof corpo.autorizacaoId === "string" && OBJECT_ID.test(corpo.autorizacaoId)
+      ? corpo.autorizacaoId
+      : null
+
   const clienteId =
     typeof corpo.clienteId === "string" && OBJECT_ID.test(corpo.clienteId)
       ? corpo.clienteId
@@ -107,6 +136,7 @@ export function lerPedido(bruto: unknown): PedidoRecebido | null {
     recebido,
     clienteId,
     condicao: typeof corpo.condicao === "string" ? corpo.condicao : null,
+    autorizacaoId,
   }
 }
 
@@ -174,6 +204,52 @@ export async function registrarVenda(pedido: PedidoVenda): Promise<ResultadoVend
     if (pedido.recebido < total) return { ok: false, erro: "Valor recebido menor que o total" }
   }
 
+  /**
+   * A trava do gerente, cobrada AQUI.
+   *
+   * Aqui e não na tela porque a tela é do outro lado da rede: o payload da venda
+   * é montado no navegador, e uma trava que só existisse lá seria contornada por
+   * qualquer um que abrisse o console. Este é o único ponto por onde toda venda
+   * passa — balcão, Pix e prazo —, então é onde a regra vale para as três.
+   */
+  const avaliacao = await avaliarVenda({
+    clienteId: pedido.clienteId,
+    subtotal,
+    desconto: pedido.desconto,
+    forma: pedido.forma,
+  })
+
+  if (avaliacao.motivos.length > 0) {
+    if (!pedido.autorizacaoId) {
+      return {
+        ok: false,
+        erro: "Esta venda precisa da liberação do gerente",
+        precisaAutorizacao: true,
+        motivos: avaliacao.motivos,
+        divida: {
+          valor: avaliacao.divida.valor,
+          parcelas: avaliacao.divida.parcelas,
+          diasAtraso: avaliacao.divida.diasAtraso,
+        },
+        descontoPercentual: avaliacao.descontoPercentual,
+      }
+    }
+
+    const conferida = await conferirAutorizacao({
+      id: pedido.autorizacaoId,
+      loja: pedido.loja,
+      clienteId: pedido.clienteId,
+      subtotal,
+      desconto: pedido.desconto,
+      motivos: avaliacao.motivos,
+    })
+    if (!conferida.ok) return { ok: false, erro: conferida.erro }
+  }
+
+  // Autorização que sobrou de um carrinho que deixou de precisar dela não é
+  // consumida: seria queimar a liberação do gerente por engano.
+  const autorizacaoAUsar = avaliacao.motivos.length > 0 ? pedido.autorizacaoId ?? null : null
+
   // A prazo vira boleto, e o boleto do Inter exige pagador com endereço e um
   // valor nominal mínimo. Recusar aqui evita gravar venda que não pode ser cobrada.
   let cliente = null
@@ -215,7 +291,9 @@ export async function registrarVenda(pedido: PedidoVenda): Promise<ResultadoVend
   try {
     return {
       ok: true,
-      ...(await gravar(pedido, itens, subtotal, total, troco, cliente, vencimento, condicaoId)),
+      ...(await gravar(
+        pedido, itens, subtotal, total, troco, cliente, vencimento, condicaoId, autorizacaoAUsar
+      )),
       total,
       troco,
     }
@@ -258,7 +336,8 @@ async function gravar(
   troco: number,
   cliente: { id: string; nome: string; cpfCnpj: string } | null,
   vencimento: Date | null,
-  condicao: string | null
+  condicao: string | null,
+  autorizacaoId: string | null
 ): Promise<{ numero: number; vendaId: string }> {
   for (let tentativa = 0; tentativa < 25; tentativa++) {
     // O $inc fica FORA da transação de propósito: dentro dela, o rollback de uma
@@ -275,7 +354,8 @@ async function gravar(
 
     try {
       return await gravarUmaVez(
-        contador.valor, pedido, itens, subtotal, total, troco, cliente, vencimento, condicao
+        contador.valor, pedido, itens, subtotal, total, troco, cliente, vencimento, condicao,
+        autorizacaoId
       )
     } catch (erro) {
       if (!ehColisaoDeNumero(erro)) throw erro
@@ -293,7 +373,8 @@ async function gravarUmaVez(
   troco: number,
   cliente: { id: string; nome: string; cpfCnpj: string } | null,
   vencimento: Date | null,
-  condicao: string | null
+  condicao: string | null,
+  autorizacaoId: string | null
 ): Promise<{ numero: number; vendaId: string }> {
   // A venda e as baixas de estoque caem juntas ou não caem: uma venda gravada
   // sem seus movimentos deixaria o saldo derivado errado para sempre.
@@ -328,6 +409,17 @@ async function gravarUmaVez(
         pedido.operador
       ),
     })
+
+    // Dentro da MESMA transação da venda: fora dela, uma falha na gravação
+    // deixaria a autorização queimada sem venda nenhuma — e, pior, a ordem
+    // inversa deixaria a venda gravada com a liberação ainda "aprovada", pronta
+    // para fechar uma segunda venda com a mesma permissão.
+    if (autorizacaoId) {
+      await marcarAutorizacaoUsada(tx, autorizacaoId, {
+        id: venda.id,
+        numero: venda.numero,
+      })
+    }
 
     return { numero: venda.numero, vendaId: venda.id }
   })

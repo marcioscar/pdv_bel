@@ -248,3 +248,80 @@ model Contador {
 
   @@map("contadores")
 }
+
+/// Pedido de autorização do gerente para uma venda que a regra não deixa passar
+/// sozinha: cliente inadimplente ou desconto acima do teto.
+///
+/// Guarda o CARRINHO, e não só a decisão, porque o vendedor larga a venda e
+/// atende outro cliente enquanto espera — sem o carrinho gravado ele teria de
+/// bipar tudo de novo quando a resposta chegasse, e ninguém faria isso duas
+/// vezes: passaria a vender sem pedir.
+///
+/// O retrato dos preços é para o gerente decidir vendo o que decidiu; a venda em
+/// si é recalculada do catálogo na hora de gravar, como toda venda deste sistema.
+model Autorizacao {
+  id       String   @id @default(auto()) @map("_id") @db.ObjectId
+  loja     String
+  caixa    String
+  criadaEm DateTime @default(now())
+
+  /// Quem pediu. O id serve para a fila do próprio vendedor; o nome, para o
+  /// gerente saber com quem está falando sem uma segunda consulta.
+  solicitanteId String @db.ObjectId
+  solicitante   String
+
+  /// Ids de MOTIVOS_DE_AUTORIZACAO (app/lib/autorizacao.ts). É lista porque uma
+  /// venda pode bater nos dois: cliente devendo E desconto acima do teto.
+  motivos String[]
+
+  itens    AutorizacaoItem[]
+  subtotal Float
+  desconto Float
+  total    Float
+  /// O desconto em % do subtotal — é o que o gerente lê e o que a guarda compara
+  /// na hora de gravar. Guardado, e não recalculado, para a decisão não mudar de
+  /// significado se o arredondamento mudar.
+  descontoPercentual Float
+
+  clienteId      String? @db.ObjectId
+  clienteNome    String?
+  clienteCpfCnpj String?
+
+  /// Retrato da dívida no instante do pedido. Fica gravado porque é a informação
+  /// com que o gerente decidiu: se ele autorizou vendo R$ 800 vencidos, o
+  /// histórico tem de dizer R$ 800 mesmo que o cliente pague amanhã.
+  dividaValor      Float @default(0)
+  dividaParcelas   Int   @default(0)
+  dividaDiasAtraso Int   @default(0)
+
+  /// "pendente" | "aprovada" | "negada" | "usada" | "cancelada"
+  situacao      String    @default("pendente")
+  decididaEm    DateTime?
+  decididaPor   String?
+  decididaPorId String?   @db.ObjectId
+  /// Como o gerente decidiu: no app, de onde estiver, ou com a senha no próprio
+  /// caixa. Sem isto, "quem libera tudo pelo celular sem olhar" fica invisível.
+  decididaOnde  String?
+  /// Justificativa da negativa, ou a condição que o gerente combinou ao aprovar.
+  observacao    String?
+
+  /// A venda que nasceu daqui, quando a autorização foi usada.
+  vendaId     String? @db.ObjectId
+  vendaNumero Int?
+
+  @@index([situacao, criadaEm])
+  @@index([solicitanteId, situacao])
+  @@index([loja, situacao])
+  @@map("autorizacoes")
+}
+
+/// Espelha `VendaItem`: o carrinho guardado do jeito que estava na tela.
+type AutorizacaoItem {
+  produtoId  String @db.ObjectId
+  codigo     String
+  descricao  String
+  unidade    String
+  preco      Float
+  quantidade Float
+  subtotal   Float
+}
