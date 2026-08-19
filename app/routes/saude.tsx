@@ -57,6 +57,17 @@ export async function loader(_: Route.LoaderArgs) {
       ok: true,
       build: __BUILD__,
       ambiente: process.env.NODE_ENV ?? "desconhecido",
+      /**
+       * O fuso do container decide o que é "hoje" no filtro de vendas e nos
+       * relatórios. Fica aqui porque é a única forma de conferir de fora se ele
+       * subiu certo: pelo comportamento da tela, um container em UTC só se
+       * denuncia no fim do expediente, quando o movimento das últimas horas
+       * aparece no dia seguinte.
+       */
+      relogio: {
+        fuso: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        agora: new Date().toLocaleString("pt-BR"),
+      },
       // Sem SESSION_SECRET nada que exige login funciona; melhor dizer aqui.
       sessao: diagnosticoSessao(),
       banco,
