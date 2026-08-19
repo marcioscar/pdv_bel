@@ -1,7 +1,7 @@
 import type { Route } from "./+types/boleto"
 import { db } from "~/lib/db.server"
 import { pdfDaCobranca } from "~/lib/cobranca.server"
-import { exigirUsuario } from "~/lib/sessao.server"
+import { exigirUsuario, podeVerDaLoja } from "~/lib/sessao.server"
 
 /**
  * Serve o PDF do boleto da venda. Rota de recurso: sem componente, só o loader.
@@ -19,7 +19,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     orderBy: { parcela: "asc" },
   })
   if (!cobranca) throw new Response("Cobrança não encontrada", { status: 404 })
-  if (cobranca.loja !== eu.loja) {
+  if (!podeVerDaLoja(eu, cobranca.loja)) {
     throw new Response(`Boleto da loja ${cobranca.loja}`, { status: 403 })
   }
 

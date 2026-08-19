@@ -232,6 +232,19 @@ export async function exigirGerente(
 }
 
 /**
+ * Se o usuário pode ver um documento (cupom, boleto) de determinada loja.
+ *
+ * O operador vê o da loja em que está operando, e só — é a mesma separação que
+ * mantém o caixa de QI fora do movimento de NRT. O gerente vê o de qualquer loja
+ * onde possa operar, porque é isso que /admin/vendas mostra: sem esta exceção o
+ * botão de cupom estaria na tela e responderia 403 em metade das linhas.
+ */
+export function podeVerDaLoja(usuario: UsuarioLogado, loja: string) {
+  if (usuario.loja === loja) return true
+  return ehGerente(usuario.papel) && usuario.lojasPermitidas.includes(loja)
+}
+
+/**
  * A loja com que o usuário entra, sem precisar escolher.
  *
  * Duas fontes, nesta ordem:

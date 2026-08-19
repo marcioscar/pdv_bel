@@ -3,6 +3,7 @@ import {
   BarChart3,
   Boxes,
   Package,
+  Receipt,
   UserCog,
   Users,
   type LucideIcon,
@@ -24,6 +25,7 @@ const ICONES: Record<string, LucideIcon> = {
   "/admin/produtos": Package,
   "/admin/clientes": Users,
   "/admin/estoque": Boxes,
+  "/admin/vendas": Receipt,
   "/admin/relatorios": BarChart3,
   "/admin/usuarios": UserCog,
 }

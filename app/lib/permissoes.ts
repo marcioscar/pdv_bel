@@ -85,6 +85,12 @@ export const SECOES_ADMIN = [
     somenteGerente: false,
   },
   {
+    para: "/admin/vendas",
+    rotulo: "Vendas da rede",
+    descricao: "Toda venda de todas as lojas, com filtro e busca",
+    somenteGerente: true,
+  },
+  {
     para: "/admin/relatorios",
     rotulo: "Relatórios",
     descricao: "Faturamento, formas de pagamento e a receber",
@@ -123,6 +129,7 @@ export const ACOES_DE_GERENTE = {
   gerenciarUsuarios: "Só gerente gerencia usuários",
   editarProdutos: "Só gerente mexe no catálogo — preço é dinheiro",
   verRelatorios: "Só gerente vê os relatórios",
+  verVendasDaRede: "Só gerente vê as vendas das outras lojas",
 } as const
 
 export type AcaoDeGerente = keyof typeof ACOES_DE_GERENTE

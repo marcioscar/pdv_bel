@@ -1,4 +1,7 @@
+import type { Prisma } from "@prisma/client"
+
 import { db } from "~/lib/db.server"
+import { depoisDoDia, diaAtras, diaDeHoje, inicioDoDia } from "~/lib/dia"
 import { movimentosDeVenda } from "~/lib/estoque.server"
 import { arredondar, moeda } from "~/lib/moeda"
 import {
@@ -328,4 +331,190 @@ async function gravarUmaVez(
 
     return { numero: venda.numero, vendaId: venda.id }
   })
+}
+
+/**
+ * Venda cancelada não conta em faturamento nenhum.
+ *
+ * O OR existe porque no Mongo o campo de uma venda nunca cancelada está AUSENTE
+ * do documento, e ausente não casa com `null` no Prisma. Sem isto o filtro
+ * devolvia zero vendas.
+ */
+export const NAO_CANCELADA: Prisma.VendaWhereInput = {
+  OR: [{ canceladaEm: null }, { canceladaEm: { isSet: false } }],
+}
+
+export const VENDAS_POR_PAGINA = 50
+
+export type SituacaoFiltrada = "todas" | "validas" | "canceladas"
+
+/**
+ * O filtro da consulta de vendas, do jeito que a tela o mostra.
+ *
+ * Guarda texto, não `Date` nem `number`: é o mesmo objeto que volta para
+ * preencher o formulário, e converter duas vezes (para consultar e de volta para
+ * exibir) é onde nasce a divergência entre o que a tela diz filtrar e o que
+ * filtrou de fato.
+ */
+export type FiltroVendas = {
+  /** Lojas efetivamente consultadas — sempre um subconjunto das permitidas. */
+  lojas: string[]
+  /** O que o seletor mostra: um código de loja ou "todas". */
+  loja: string
+  /** Dias inclusivos, no formato YYYY-MM-DD do `<input type="date">`. */
+  de: string
+  ate: string
+  numero: string
+  cliente: string
+  forma: string
+  situacao: SituacaoFiltrada
+  pagina: number
+}
+
+const DIA = /^\d{4}-\d{2}-\d{2}$/
+
+/**
+ * Lê o filtro da URL, recusando o que não é do usuário.
+ *
+ * `lojas` sai daqui já cruzado com as permitidas: é este cruzamento, e não o
+ * seletor da tela, que impede alguém de ver o faturamento de uma loja onde não
+ * opera trocando `?loja=` na barra de endereço.
+ */
+export function lerFiltroVendas(url: URL, lojasPermitidas: string[]): FiltroVendas {
+  const params = url.searchParams
+  const texto = (nome: string) => (params.get(nome) ?? "").trim()
+
+  const temDe = DIA.test(texto("de"))
+  const temAte = DIA.test(texto("ate"))
+
+  // Com uma ponta só, o período é aquele dia: quem digita uma data quer um dia.
+  // Sem nenhuma, os últimos sete — a tela abre respondendo "o que andou
+  // vendendo", e um padrão de um dia devolveria tela vazia toda manhã.
+  const de = temDe ? texto("de") : temAte ? texto("ate") : diaAtras(6)
+  const ateBruto = temAte ? texto("ate") : temDe ? texto("de") : diaDeHoje()
+  // Datas invertidas viriam de digitação, não de má-fé: vale mais devolver o
+  // período que a pessoa quis do que uma lista vazia sem explicação.
+  const [inicio, fim] = ateBruto < de ? [ateBruto, de] : [de, ateBruto]
+
+  const loja = lojasPermitidas.includes(texto("loja")) ? texto("loja") : "todas"
+  const situacao = texto("situacao")
+
+  return {
+    lojas: loja === "todas" ? lojasPermitidas : [loja],
+    loja,
+    de: inicio,
+    ate: fim,
+    numero: texto("numero").replace(/\D/g, "").slice(0, 9),
+    cliente: texto("cliente").slice(0, 60),
+    forma: FORMAS_PAGAMENTO.some((f) => f.id === texto("forma")) ? texto("forma") : "",
+    situacao:
+      situacao === "validas" || situacao === "canceladas" ? situacao : "todas",
+    pagina: Math.max(1, Math.trunc(Number(params.get("pagina"))) || 1),
+  }
+}
+
+export type VendaConsultada = Awaited<
+  ReturnType<typeof consultarVendas>
+>["vendas"][number]
+
+/**
+ * As vendas que casam com o filtro, uma página de cada vez.
+ *
+ * O resumo é do filtro INTEIRO, não da página: quem confere o dia quer o total
+ * do dia, e um rodapé que só somasse as 50 primeiras seria pior que nenhum.
+ */
+export async function consultarVendas(filtro: FiltroVendas) {
+  // Separado do período de propósito: é este conjunto que responde "existe em
+  // algum lugar?" quando a busca não acha nada no período pedido.
+  const conteudo: Prisma.VendaWhereInput[] = [{ loja: { in: filtro.lojas } }]
+
+  if (filtro.numero) conteudo.push({ numero: Number(filtro.numero) })
+  if (filtro.forma) conteudo.push({ forma: filtro.forma })
+
+  if (filtro.cliente) {
+    // Nome ou documento, no mesmo campo: quem procura "Maria" e quem procura
+    // "123.456" está fazendo a mesma pergunta, e são dois campos a menos na barra.
+    const digitos = filtro.cliente.replace(/\D/g, "")
+    conteudo.push({
+      OR: [
+        { clienteNome: { contains: filtro.cliente, mode: "insensitive" } },
+        ...(digitos.length >= 3 ? [{ clienteCpfCnpj: { contains: digitos } }] : []),
+      ],
+    })
+  }
+
+  if (filtro.situacao === "validas") conteudo.push(NAO_CANCELADA)
+  if (filtro.situacao === "canceladas") conteudo.push({ NOT: NAO_CANCELADA })
+
+  const condicoes: Prisma.VendaWhereInput[] = [
+    { criadaEm: { gte: inicioDoDia(filtro.de), lt: depoisDoDia(filtro.ate) } },
+    ...conteudo,
+  ]
+  const where: Prisma.VendaWhereInput = { AND: condicoes }
+
+  const [pagina, total, validas, canceladas] = await Promise.all([
+    db.venda.findMany({
+      where,
+      // Por data, e não por número: a numeração é POR LOJA, então ordenar por
+      // número misturaria as lojas numa sequência que não significa nada.
+      orderBy: { criadaEm: "desc" },
+      skip: (filtro.pagina - 1) * VENDAS_POR_PAGINA,
+      take: VENDAS_POR_PAGINA,
+    }),
+    db.venda.count({ where }),
+    db.venda.aggregate({
+      where: { AND: [...condicoes, NAO_CANCELADA] },
+      _sum: { total: true },
+      _count: { _all: true },
+    }),
+    db.venda.count({ where: { AND: [...condicoes, { NOT: NAO_CANCELADA }] } }),
+  ])
+
+  /**
+   * Quantas casariam se o período não estivesse no caminho.
+   *
+   * Achar nada por causa da data é a frustração clássica de tela com filtro:
+   * quem procura a venda #1234 ou uma compra da Maria não sabe de que dia ela é,
+   * e "nenhuma venda" é uma resposta que parece defeito. Custa uma contagem, e só
+   * quando a busca já voltou vazia.
+   */
+  const foraDoPeriodo =
+    total === 0 && (filtro.numero || filtro.cliente || filtro.forma)
+      ? await db.venda.count({ where: { AND: conteudo } })
+      : 0
+
+  // Uma venda parcelada tem uma cobrança por parcela, então é lista, não par.
+  const cobrancas = await db.cobranca.findMany({
+    where: { vendaId: { in: pagina.map((venda) => venda.id) } },
+    orderBy: { parcela: "asc" },
+    select: {
+      vendaId: true,
+      parcela: true,
+      parcelas: true,
+      situacao: true,
+      valor: true,
+      vencimento: true,
+    },
+  })
+  const porVenda = new Map<string, typeof cobrancas>()
+  for (const cobranca of cobrancas) {
+    const lista = porVenda.get(cobranca.vendaId) ?? []
+    lista.push(cobranca)
+    porVenda.set(cobranca.vendaId, lista)
+  }
+
+  return {
+    vendas: pagina.map((venda) => ({
+      ...venda,
+      cobrancas: porVenda.get(venda.id) ?? [],
+    })),
+    total,
+    foraDoPeriodo,
+    paginas: Math.max(1, Math.ceil(total / VENDAS_POR_PAGINA)),
+    resumo: {
+      vendas: validas._count._all,
+      faturamento: validas._sum.total ?? 0,
+      canceladas,
+    },
+  }
 }

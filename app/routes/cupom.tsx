@@ -3,7 +3,7 @@ import { db } from "~/lib/db.server"
 import { dadosDaLoja } from "~/lib/lojas.server"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { CONDICOES_PAGAMENTO, FORMAS_PAGAMENTO } from "~/lib/pdv"
-import { exigirUsuario } from "~/lib/sessao.server"
+import { exigirUsuario, podeVerDaLoja } from "~/lib/sessao.server"
 
 const OBJECT_ID = /^[0-9a-fA-F]{24}$/
 
@@ -41,7 +41,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
   const venda = await db.venda.findUnique({ where: { id: params.vendaId } })
   if (!venda) throw new Response("Venda não encontrada", { status: 404 })
-  if (venda.loja !== eu.loja) {
+  if (!podeVerDaLoja(eu, venda.loja)) {
     throw new Response(`Venda da loja ${venda.loja}`, { status: 403 })
   }
 

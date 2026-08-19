@@ -2,13 +2,14 @@ import { Link, useSearchParams } from "react-router"
 import { BarChart3 } from "lucide-react"
 
 import type { Route } from "./+types/admin.relatorios"
+import { Numero } from "~/components/pdv/numero"
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
 import { db } from "~/lib/db.server"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { FORMAS_PAGAMENTO } from "~/lib/pdv"
 import { exigirGerente } from "~/lib/sessao.server"
-import { cn } from "~/lib/utils"
+import { NAO_CANCELADA } from "~/lib/vendas.server"
 
 export function meta(_: Route.MetaArgs) {
   return [{ title: "Relatórios — BrasSaco" }]
@@ -20,17 +21,6 @@ const PERIODOS = [
   { dias: 30, rotulo: "30 dias" },
   { dias: 365, rotulo: "12 meses" },
 ] as const
-
-/**
- * Venda cancelada não conta em faturamento nenhum.
- *
- * O OR existe porque no Mongo o campo de uma venda nunca cancelada está
- * AUSENTE do documento, e ausente não casa com `null` no Prisma. Sem isto o
- * filtro devolvia zero vendas.
- */
-const NAO_CANCELADA = {
-  OR: [{ canceladaEm: null }, { canceladaEm: { isSet: false } }],
-}
 
 type ItemVendido = { _id: string; quantidade: number; total: number }
 
@@ -279,8 +269,8 @@ export default function AdminRelatorios({ loaderData }: Route.ComponentProps) {
 
           <p className="mt-4 text-[11px] text-muted-foreground">
             Venda a venda, com quem operou e o que foi cobrado, fica em{" "}
-            <Link to="/vendas" className="underline">
-              Vendas
+            <Link to="/admin/vendas" className="underline">
+              Vendas da rede
             </Link>
             .
           </p>
@@ -290,36 +280,3 @@ export default function AdminRelatorios({ loaderData }: Route.ComponentProps) {
   )
 }
 
-function Numero({
-  rotulo,
-  valor,
-  detalhe,
-  destaque,
-  alerta,
-}: {
-  rotulo: string
-  valor: string
-  detalhe?: string
-  destaque?: boolean
-  alerta?: boolean
-}) {
-  return (
-    <div className="rounded-xl border border-border p-4">
-      <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-        {rotulo}
-      </div>
-      <div
-        className={cn(
-          "mt-0.5 font-mono font-bold tabular-nums",
-          destaque ? "text-2xl" : "text-xl",
-          alerta && "text-destructive"
-        )}
-      >
-        {valor}
-      </div>
-      {detalhe ? (
-        <div className="mt-0.5 text-[11px] text-muted-foreground">{detalhe}</div>
-      ) : null}
-    </div>
-  )
-}

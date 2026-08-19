@@ -11,3 +11,6 @@
 
 # Dumps feitos antes de apagar dados
 /backups
+
+# Permissões que o Claude Code grava por máquina
+/.claude/settings.local.json

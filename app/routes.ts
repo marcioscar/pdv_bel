@@ -21,6 +21,7 @@ export default [
       route("produtos", "routes/admin.produtos.tsx"),
       route("clientes", "routes/admin.clientes.tsx"),
       route("estoque", "routes/admin.estoque.tsx"),
+      route("vendas", "routes/admin.vendas.tsx"),
       route("relatorios", "routes/admin.relatorios.tsx"),
       route("usuarios", "routes/admin.usuarios.tsx"),
     ]),
