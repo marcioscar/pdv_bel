@@ -10,17 +10,25 @@ import { BarraAtalhos, type Atalho } from "~/components/pdv/barra-atalhos"
 import { BarraComando, type ModoComando } from "~/components/pdv/barra-comando"
 import { ListaItens } from "~/components/pdv/lista-itens"
 import { PixDialogo, type PixNoBalcao } from "~/components/pdv/pix-dialogo"
+import { AutorizacaoDialogo, type Bloqueio } from "~/components/pdv/autorizacao-dialogo"
 import { FinalizarDialogo } from "~/components/pdv/finalizar-dialogo"
 import { PainelPagamento } from "~/components/pdv/painel-pagamento"
 import { Topo } from "~/components/pdv/topo"
 import { Kbd } from "~/components/ui/kbd"
+import {
+  avaliarVenda,
+  decidirAutorizacao,
+  dividaDoCliente,
+  pedirAutorizacao,
+  recusaPorFaltaDeLiberacao,
+} from "~/lib/autorizacao.server"
 import { db } from "~/lib/db.server"
 import { criarCliente, lerCliente, listarClientes } from "~/lib/clientes.server"
 import { emitirParaVenda, type CobrancaDaVenda } from "~/lib/cobranca.server"
 import { saldosPorProduto } from "~/lib/estoque.server"
 import { contaDaLoja } from "~/lib/lojas.server"
 import { SOMENTE_ATIVOS } from "~/lib/produtos.server"
-import { exigirUsuario } from "~/lib/sessao.server"
+import { autenticar, exigirUsuario } from "~/lib/sessao.server"
 import { lerPedido, precificar, registrarVenda } from "~/lib/vendas.server"
 import {
   confirmarPagamento,
@@ -34,8 +42,13 @@ import {
   moeda,
   quantidade as formatarQuantidade,
 } from "~/lib/moeda"
+import {
+  aprovacaoValida,
+  formaEstendeCredito,
+} from "~/lib/autorizacao"
 import { imprimirDocumento } from "~/lib/impressao"
 import { useAtalhosDeSecao } from "~/lib/navegacao"
+import { ACOES_DE_GERENTE, ehGerente } from "~/lib/permissoes"
 import { useRelogio, useTema } from "~/lib/tema"
 import { cn } from "~/lib/utils"
 import {
@@ -81,6 +94,22 @@ export async function loader({ request }: Route.LoaderArgs) {
     estoque: saldos.get(produto.id) ?? 0,
   }))
 
+  /**
+   * `?retomar=<id>` traz de volta o carrinho de uma venda que o gerente liberou.
+   *
+   * Só as do PRÓPRIO operador e só as aprovadas e no prazo: com o id de outro na
+   * URL, qualquer um herdaria a liberação alheia. As quantidades voltam, os
+   * preços não — quem precifica é o catálogo, na hora de gravar, como em toda
+   * venda deste sistema.
+   */
+  const idParaRetomar = new URL(request.url).searchParams.get("retomar")
+  const retomada = idParaRetomar
+    ? await db.autorizacao
+        .findFirst({ where: { id: idParaRetomar, solicitanteId: eu.id } })
+        .then((a) => (a && aprovacaoValida(a) ? a : null))
+        .catch(() => null)
+    : null
+
   return {
     eu,
     produtos,
@@ -91,6 +120,17 @@ export async function loader({ request }: Route.LoaderArgs) {
       cidade: c.cidade,
       uf: c.uf,
     })),
+    retomada: retomada
+      ? {
+          id: retomada.id,
+          desconto: retomada.desconto,
+          clienteId: retomada.clienteId,
+          itens: retomada.itens.map((item) => ({
+            produtoId: item.produtoId,
+            quantidade: item.quantidade,
+          })),
+        }
+      : null,
   }
 }
 
@@ -119,6 +159,187 @@ export async function action({ request }: Route.ActionArgs) {
       { ok: false as const, tipo: "venda" as const, erro: "Requisição inválida" },
       { status: 400 }
     )
+  }
+
+  // --- Situação do cliente: alimenta o aviso mostrado ao vincular no carrinho ---
+  if ((bruto as { intencao?: string })?.intencao === "situacaoCliente") {
+    const clienteId = String((bruto as { clienteId?: string }).clienteId ?? "")
+    const divida = await dividaDoCliente(clienteId || null)
+    return {
+      ok: true as const,
+      tipo: "situacaoCliente" as const,
+      clienteId,
+      divida: {
+        valor: divida.valor,
+        parcelas: divida.parcelas,
+        diasAtraso: divida.diasAtraso,
+      },
+    }
+  }
+
+  // --- Abre o pedido de liberação e guarda o carrinho para o vendedor retomar ---
+  if ((bruto as { intencao?: string })?.intencao === "pedirAutorizacao") {
+    const pedido = lerPedido(bruto)
+    if (!pedido) {
+      return data(
+        { ok: false as const, tipo: "autorizacao" as const, erro: "Dados inválidos" },
+        { status: 400 }
+      )
+    }
+
+    // Os preços vêm do catálogo, como na venda: o gerente precisa decidir sobre
+    // os mesmos números que serão cobrados, não sobre os que a tela mandou.
+    const preco = await precificar(pedido.itens, pedido.desconto)
+    if (!preco.ok) {
+      return data(
+        { ok: false as const, tipo: "autorizacao" as const, erro: preco.erro },
+        { status: 400 }
+      )
+    }
+
+    const avaliacao = await avaliarVenda({
+      clienteId: pedido.clienteId,
+      subtotal: preco.subtotal,
+      desconto: pedido.desconto,
+      forma: pedido.forma,
+    })
+    if (avaliacao.motivos.length === 0) {
+      return data(
+        {
+          ok: false as const,
+          tipo: "autorizacao" as const,
+          erro: "Esta venda não precisa de liberação",
+        },
+        { status: 400 }
+      )
+    }
+
+    const cliente = pedido.clienteId
+      ? await db.cliente.findUnique({ where: { id: pedido.clienteId } })
+      : null
+
+    const criada = await pedirAutorizacao({
+      loja: eu.loja,
+      caixa: CAIXA,
+      solicitanteId: eu.id,
+      solicitante: eu.nome,
+      motivos: avaliacao.motivos,
+      itens: preco.itens,
+      subtotal: preco.subtotal,
+      desconto: pedido.desconto,
+      total: preco.total,
+      descontoPercentual: avaliacao.descontoPercentual,
+      cliente: cliente
+        ? { id: cliente.id, nome: cliente.nome, cpfCnpj: cliente.cpfCnpj }
+        : null,
+      divida: avaliacao.divida,
+    })
+
+    return { ok: true as const, tipo: "autorizacao" as const, autorizacaoId: criada.id }
+  }
+
+  /**
+   * --- O gerente presente libera na hora, com a senha dele no próprio caixa ---
+   *
+   * Atalho para quando não há tempo de esperar o celular, e a saída para quando
+   * ninguém responde. Vale o mesmo rastro do outro caminho: o pedido é criado e
+   * decidido no mesmo instante, com `decididaOnde: "caixa"` — é o que permite
+   * depois distinguir quem decide olhando a venda de quem libera tudo de longe.
+   *
+   * A senha do gerente NÃO troca a sessão: quem está logado continua sendo o
+   * vendedor, e a venda sai no nome dele. Trocar a sessão faria o histórico
+   * dizer que foi o gerente quem vendeu.
+   */
+  if ((bruto as { intencao?: string })?.intencao === "autorizarNoCaixa") {
+    const corpo = bruto as { email?: string; senha?: string }
+    const pedido = lerPedido(bruto)
+    if (!pedido || typeof corpo.email !== "string" || typeof corpo.senha !== "string") {
+      return data(
+        { ok: false as const, tipo: "autorizacao" as const, erro: "Dados inválidos" },
+        { status: 400 }
+      )
+    }
+
+    const login = await autenticar(corpo.email, corpo.senha)
+    if (!login.ok) {
+      return data(
+        { ok: false as const, tipo: "autorizacao" as const, erro: login.erro },
+        { status: 401 }
+      )
+    }
+
+    const gerente = await db.usuario.findUnique({ where: { id: login.usuarioId } })
+    if (!gerente || !ehGerente(gerente.papel)) {
+      return data(
+        {
+          ok: false as const,
+          tipo: "autorizacao" as const,
+          erro: ACOES_DE_GERENTE.decidirAutorizacoes,
+        },
+        { status: 403 }
+      )
+    }
+
+    const preco = await precificar(pedido.itens, pedido.desconto)
+    if (!preco.ok) {
+      return data(
+        { ok: false as const, tipo: "autorizacao" as const, erro: preco.erro },
+        { status: 400 }
+      )
+    }
+
+    const avaliacao = await avaliarVenda({
+      clienteId: pedido.clienteId,
+      subtotal: preco.subtotal,
+      desconto: pedido.desconto,
+      forma: pedido.forma,
+    })
+    if (avaliacao.motivos.length === 0) {
+      return data(
+        {
+          ok: false as const,
+          tipo: "autorizacao" as const,
+          erro: "Esta venda não precisa de liberação",
+        },
+        { status: 400 }
+      )
+    }
+
+    const cliente = pedido.clienteId
+      ? await db.cliente.findUnique({ where: { id: pedido.clienteId } })
+      : null
+
+    const criada = await pedirAutorizacao({
+      loja: eu.loja,
+      caixa: CAIXA,
+      solicitanteId: eu.id,
+      solicitante: eu.nome,
+      motivos: avaliacao.motivos,
+      itens: preco.itens,
+      subtotal: preco.subtotal,
+      desconto: pedido.desconto,
+      total: preco.total,
+      descontoPercentual: avaliacao.descontoPercentual,
+      cliente: cliente
+        ? { id: cliente.id, nome: cliente.nome, cpfCnpj: cliente.cpfCnpj }
+        : null,
+      divida: avaliacao.divida,
+    })
+
+    await decidirAutorizacao({
+      id: criada.id,
+      decisao: "aprovada",
+      quem: { id: gerente.id, nome: gerente.nome },
+      onde: "caixa",
+      observacao: null,
+    })
+
+    return {
+      ok: true as const,
+      tipo: "autorizadaNoCaixa" as const,
+      autorizacaoId: criada.id,
+      gerente: gerente.nome,
+    }
   }
 
   // Emissão do boleto da venda a prazo, disparada logo após a venda gravar.
@@ -154,6 +375,23 @@ export async function action({ request }: Route.ActionArgs) {
     if (!preco.ok) {
       return data({ ok: false as const, tipo: "pix" as const, erro: preco.erro }, { status: 400 })
     }
+
+    /**
+     * A trava do gerente entra AQUI, antes de existir um QR na tela.
+     *
+     * No Pix a venda só é gravada depois de o banco confirmar o pagamento. Se a
+     * regra fosse cobrada lá, o cliente pagaria e a venda seria recusada em
+     * seguida — dinheiro recebido sem venda, que é o pior desfecho possível no
+     * balcão. Recusar antes do QR custa uma consulta; recusar depois custa um
+     * estorno.
+     */
+    const recusa = await recusaPorFaltaDeLiberacao({
+      clienteId: pedido.clienteId,
+      desconto: pedido.desconto,
+      forma: pedido.forma,
+      subtotal: preco.subtotal,
+    })
+    if (recusa) return data(recusa, { status: 400 })
 
     try {
       const cobranca = await criarPixImediato({
@@ -249,9 +487,29 @@ export async function action({ request }: Route.ActionArgs) {
     caixa: CAIXA,
     operador: eu.nome,
   })
-  return resultado.ok
-    ? { ...resultado, tipo: "venda" as const }
-    : data({ ...resultado, tipo: "venda" as const }, { status: 400 })
+
+  if (resultado.ok) return { ...resultado, tipo: "venda" as const }
+
+  // A recusa por falta de liberação tem tipo próprio: a tela abre o diálogo com
+  // a dívida em vez de piscar uma mensagem de erro na barra de status.
+  if ("precisaAutorizacao" in resultado) {
+    return data(
+      {
+        ok: false as const,
+        tipo: "bloqueio" as const,
+        erro: resultado.erro,
+        motivos: resultado.motivos,
+        divida: resultado.divida,
+        descontoPercentual: resultado.descontoPercentual,
+      },
+      { status: 400 }
+    )
+  }
+
+  return data(
+    { ok: false as const, tipo: "venda" as const, erro: resultado.erro },
+    { status: 400 }
+  )
 }
 
 // O catálogo não muda durante o expediente; revalidar depois de cada venda
@@ -263,7 +521,7 @@ export function shouldRevalidate() {
 type Aviso = { texto: string; tipo: "erro" | "sucesso" } | null
 
 export default function Pdv({ loaderData }: Route.ComponentProps) {
-  const { eu, produtos, clientes } = loaderData
+  const { eu, produtos, clientes, retomada } = loaderData
 
   const [venda, despachar] = useReducer(reduzirVenda, vendaVazia)
   const [entrada, setEntrada] = useState("")
@@ -296,6 +554,27 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   const [novosClientes, setNovosClientes] = useState<ClienteResumo[]>([])
   // Condição escolhida na venda a prazo. Fica guardada para o painel mostrar o
   // prazo enquanto a venda é fechada; o servidor recalcula as datas na gravação.
+  /**
+   * A liberação do gerente que acompanha esta venda.
+   *
+   * Vem de dois lugares: de `?retomar=`, quando o vendedor volta a uma venda que
+   * o gerente aprovou pelo app, ou da senha digitada no caixa. Vai junto no
+   * payload da venda — o servidor confere de novo, porque um id vindo do
+   * navegador não prova nada sozinho.
+   */
+  const [autorizacaoId, setAutorizacaoId] = useState<string | null>(null)
+  /**
+   * A situação do cliente, num fetcher só dela.
+   *
+   * Separado do principal porque a pergunta é feita ao vincular o cliente, no
+   * meio da montagem do carrinho — e ela não pode disputar o mesmo fetcher com
+   * a gravação da venda, que é o que aquele carrega.
+   */
+  const fetcherSituacao = useFetcher<typeof action>()
+
+  const [bloqueio, setBloqueio] = useState<Bloqueio | null>(null)
+  const [autorizacaoErro, setAutorizacaoErro] = useState<string | null>(null)
+
   const [condicao, setCondicao] = useState<CondicaoPagamento | null>(null)
   const [condicaoAberta, setCondicaoAberta] = useState(false)
   const [pix, setPix] = useState<{
@@ -411,6 +690,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   const concluir = useCallback(
     (valorRecebido: number | null, condicaoEscolhida: CondicaoPagamento | null = null) => {
       if (gravando) return
+      tentativa.current = { recebido: valorRecebido, condicao: condicaoEscolhida }
 
       fetcher.submit(
         {
@@ -426,11 +706,60 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           // Vai o id da condição, não as datas: os vencimentos são calculados no
           // servidor, para o prazo gravado ser sempre um dos que a empresa pratica.
           condicao: condicaoEscolhida?.id ?? null,
+          autorizacaoId,
         },
         { method: "post", encType: "application/json" }
       )
     },
-    [cliente, fetcher, forma, gravando, totais.desconto, venda.itens]
+    [autorizacaoId, cliente, fetcher, forma, gravando, totais.desconto, venda.itens]
+  )
+
+  /**
+   * O carrinho como o servidor precisa ver para decidir sobre a liberação — os
+   * mesmos campos da venda, porque é a mesma venda que ele vai avaliar.
+   */
+  /**
+   * Como o fechamento foi tentado antes de esbarrar na trava.
+   *
+   * Guardado para o vendedor não ter de digitar tudo de novo depois de o gerente
+   * liberar: o valor recebido em dinheiro e a condição do prazo já foram
+   * informados uma vez, com o cliente esperando.
+   */
+  const tentativa = useRef<{
+    recebido: number | null
+    condicao: CondicaoPagamento | null
+  } | null>(null)
+  const refazerAposLiberar = useRef(false)
+
+  const pedidoDaAutorizacao = useCallback(
+    () => ({
+      itens: venda.itens.map((item) => ({
+        produtoId: item.produtoId,
+        quantidade: item.quantidade,
+      })),
+      desconto: totais.desconto,
+      forma,
+      recebido: null,
+      clienteId: cliente?.id ?? null,
+    }),
+    [cliente, forma, totais.desconto, venda.itens]
+  )
+
+  const pedirLiberacao = useCallback(() => {
+    fetcher.submit(
+      { intencao: "pedirAutorizacao", ...pedidoDaAutorizacao() },
+      { method: "post", encType: "application/json" }
+    )
+  }, [fetcher, pedidoDaAutorizacao])
+
+  const liberarNoCaixa = useCallback(
+    (email: string, senha: string) => {
+      fetcher.submit(
+        { intencao: "autorizarNoCaixa", email, senha, ...pedidoDaAutorizacao() },
+        { method: "post", encType: "application/json" }
+      )
+    },
+    [fetcher, pedidoDaAutorizacao]
   )
 
   // O carrinho só é limpo depois de o servidor confirmar a gravação.
@@ -481,6 +810,57 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       return
     }
 
+    // O pedido foi para a fila: o caixa é liberado para o próximo cliente, e o
+    // carrinho fica guardado no servidor até o gerente responder.
+    if (resposta.tipo === "autorizacao") {
+      if (!resposta.ok) {
+        setAutorizacaoErro(resposta.erro)
+        return
+      }
+      setBloqueio(null)
+      setAutorizacaoErro(null)
+      setAutorizacaoId(null)
+      despachar({ tipo: "limpar" })
+      setModo("busca")
+      setEntrada("")
+      setCliente(null)
+      setCondicao(null)
+      setFinalizando(false)
+      setRecebidoTexto("")
+      avisar(
+        "Pedido enviado ao gerente — o carrinho está guardado em Minhas autorizações",
+        "sucesso"
+      )
+      return
+    }
+
+    // O gerente liberou ali mesmo: guarda a permissão e fecha a venda na hora,
+    // sem obrigar o vendedor a apertar "finalizar" de novo com o cliente esperando.
+    if (resposta.tipo === "autorizadaNoCaixa") {
+      setAutorizacaoId(resposta.autorizacaoId)
+      setBloqueio(null)
+      setAutorizacaoErro(null)
+      // O fechamento é refeito sozinho no efeito abaixo: obrigar o vendedor a
+      // apertar Enter de novo, com o gerente ainda de pé ao lado dele, seria
+      // teatro. Ele já disse o que queria fazer antes de a trava aparecer.
+      refazerAposLiberar.current = true
+      avisar(`Liberado por ${resposta.gerente}`, "sucesso")
+      return
+    }
+
+    // Recusa com saída: não é erro do vendedor, é a regra da casa batendo. Abre
+    // o diálogo com a dívida na mão em vez de piscar uma mensagem na barra.
+    if (resposta.tipo === "bloqueio") {
+      setBloqueio({
+        motivos: resposta.motivos,
+        divida: resposta.divida,
+        descontoPercentual: resposta.descontoPercentual,
+      })
+      setAutorizacaoErro(null)
+      setPix(null)
+      return
+    }
+
     if (!resposta.ok) {
       avisar(resposta.erro, "erro")
       return
@@ -514,6 +894,10 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     setForma("pix")
     setFinalizando(false)
     setRecebidoTexto("")
+    // A liberação vale para uma venda só; deixá-la no estado faria a próxima
+    // venda nascer com a permissão da anterior.
+    setAutorizacaoId(null)
+    setBloqueio(null)
 
     // O cupom sai depois de a venda existir: imprimir antes de gravar entregaria
     // ao cliente um documento de uma venda que pode ter falhado.
@@ -530,6 +914,100 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       "sucesso"
     )
   }, [fetcher.state, fetcher.data, avisar, fetcher, forma])
+
+  /**
+   * Refaz o fechamento assim que a liberação entra no estado.
+   *
+   * Num efeito, e não logo depois do `setAutorizacaoId`: o estado do React só
+   * chega no próximo render, e `concluir` chamado ali ainda mandaria
+   * `autorizacaoId: null` — a venda seria recusada de novo, com o gerente
+   * olhando. Aqui `concluir` já foi recriado com o id novo.
+   */
+  useEffect(() => {
+    if (!autorizacaoId || !refazerAposLiberar.current) return
+    refazerAposLiberar.current = false
+
+    // O Pix não tem o que refazer: o QR nem chegou a ser criado, porque a trava
+    // é cobrada antes disso. Recomeça o fluxo do zero.
+    if (forma === "pix") {
+      setPix({ cobranca: null, criando: true, erro: null, concluida: null, motivoPendente: null })
+      fetcher.submit(
+        {
+          intencao: "pixCriar",
+          itens: venda.itens.map((i) => ({ produtoId: i.produtoId, quantidade: i.quantidade })),
+          desconto: totais.desconto,
+          forma: "pix",
+          recebido: null,
+        },
+        { method: "post", encType: "application/json" }
+      )
+      return
+    }
+
+    concluir(tentativa.current?.recebido ?? null, tentativa.current?.condicao ?? null)
+  }, [autorizacaoId, concluir, fetcher, forma, totais.desconto, venda.itens])
+
+  /**
+   * Pergunta a situação do cliente assim que ele entra na venda.
+   *
+   * Aqui, e não no fechamento: com o aviso na tela desde o começo, o vendedor
+   * conversa sobre o atrasado enquanto monta o carrinho. Descobrir a trava
+   * depois de bipar trinta itens é descobrir tarde.
+   */
+  const clienteId = cliente?.id ?? null
+  useEffect(() => {
+    if (!clienteId) return
+    fetcherSituacao.submit(
+      { intencao: "situacaoCliente", clienteId },
+      { method: "post", encType: "application/json" }
+    )
+    // `fetcherSituacao` muda de identidade a cada render; o que dispara a
+    // pergunta é o cliente ter mudado.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clienteId])
+
+  /**
+   * A dívida do cliente que está NA venda agora.
+   *
+   * A conferência do id importa: a resposta é assíncrona, e sem ela a dívida do
+   * cliente anterior apareceria por um instante sob o nome do novo — no balcão,
+   * acusar o cliente errado de caloteiro é o pior defeito possível desta tela.
+   */
+  const dividaDoClienteNaVenda =
+    fetcherSituacao.data?.tipo === "situacaoCliente" &&
+    fetcherSituacao.data.clienteId === clienteId &&
+    fetcherSituacao.data.divida.parcelas > 0
+      ? fetcherSituacao.data.divida
+      : null
+
+  /**
+   * Traz de volta o carrinho da venda que o gerente liberou.
+   *
+   * Roda uma vez, no primeiro render em que os produtos existem: o `ref` impede
+   * que uma revalidação recarregue os itens por cima de um carrinho que o
+   * vendedor já começou a mexer.
+   */
+  const jaRetomou = useRef(false)
+  useEffect(() => {
+    if (!retomada || jaRetomou.current) return
+    jaRetomou.current = true
+
+    for (const item of retomada.itens) {
+      const produto = produtos.find((p) => p.id === item.produtoId)
+      // Produto desativado desde o pedido simplesmente não volta: vendê-lo agora
+      // seria ressuscitar do carrinho o que saiu do catálogo.
+      if (produto) despachar({ tipo: "adicionar", produto, quantidade: item.quantidade })
+    }
+    if (retomada.desconto > 0) {
+      despachar({ tipo: "definirDesconto", valor: retomada.desconto })
+    }
+    if (retomada.clienteId) {
+      const escolhido = clientes.find((c) => c.id === retomada.clienteId)
+      if (escolhido) setCliente(escolhido)
+    }
+    setAutorizacaoId(retomada.id)
+    avisar("Venda liberada pelo gerente — carrinho retomado", "sucesso")
+  }, [avisar, clientes, produtos, retomada])
 
   /**
    * Consulta o pagamento enquanto o QR está na tela.
@@ -1037,6 +1515,8 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           total={totais.total}
           volumes={totais.volumes}
           cliente={cliente}
+          divida={dividaDoClienteNaVenda}
+          aPrazo={formaEstendeCredito(forma)}
           gravando={gravando}
           onFinalizar={abrirFinalizacao}
           desabilitado={venda.itens.length === 0}
@@ -1106,6 +1586,22 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           onFechar={() => setFinalizando(false)}
           // Enquanto cliente, condição ou Pix estão por cima, ele não escuta.
           pausado={clienteAberto || condicaoAberta || Boolean(pix) || Boolean(comprovante)}
+        />
+      ) : null}
+
+      {bloqueio ? (
+        <AutorizacaoDialogo
+          bloqueio={bloqueio}
+          cliente={cliente}
+          total={totais.total}
+          enviando={gravando}
+          erro={autorizacaoErro}
+          onPedir={pedirLiberacao}
+          onLiberarNoCaixa={liberarNoCaixa}
+          onFechar={() => {
+            setBloqueio(null)
+            setAutorizacaoErro(null)
+          }}
         />
       ) : null}
 

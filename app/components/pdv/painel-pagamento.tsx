@@ -1,3 +1,5 @@
+import { TriangleAlert } from "lucide-react"
+
 import { Button } from "~/components/ui/button"
 import { Kbd } from "~/components/ui/kbd"
 import { Separator } from "~/components/ui/separator"
@@ -11,6 +13,16 @@ type Props = {
   total: number
   volumes: number
   cliente: { nome: string; cpfCnpj: string } | null
+  /**
+   * A dívida vencida do cliente vinculado, quando existe.
+   *
+   * Aparece assim que o cliente entra na venda, e não só no fechamento: descobrir
+   * que a venda está travada depois de bipar trinta itens é descobrir tarde. Com
+   * o aviso aqui, o vendedor conversa sobre o atrasado enquanto monta o carrinho.
+   */
+  divida?: { valor: number; parcelas: number; diasAtraso: number } | null
+  /** Se a forma escolhida estende crédito — só aí a dívida trava a venda. */
+  aPrazo?: boolean
   gravando: boolean
   onFinalizar: () => void
   desabilitado: boolean
@@ -27,6 +39,8 @@ export function PainelPagamento({
   total,
   volumes,
   cliente,
+  divida,
+  aPrazo = false,
   gravando,
   onFinalizar,
   desabilitado,
@@ -79,6 +93,28 @@ export function PainelPagamento({
           <div className="font-mono text-[11px] text-muted-foreground tabular-nums">
             {formatarCpfCnpj(cliente.cpfCnpj)}
           </div>
+
+          {divida && divida.parcelas > 0 ? (
+            <div className="mt-2 flex gap-1.5 rounded-lg bg-destructive/10 p-2 text-[11px] leading-snug text-destructive">
+              <TriangleAlert className="mt-px size-3.5 shrink-0" aria-hidden />
+              <span>
+                <strong className="font-semibold">
+                  {moeda(divida.valor)} vencidos
+                </strong>{" "}
+                em {divida.parcelas}{" "}
+                {divida.parcelas === 1 ? "parcela" : "parcelas"}
+                {divida.diasAtraso > 0
+                  ? ` — a mais velha há ${divida.diasAtraso} ${divida.diasAtraso === 1 ? "dia" : "dias"}`
+                  : ""}
+                .{" "}
+                {/* A dívida aparece em qualquer forma, para o vendedor poder
+                    cobrar; a trava só existe quando a venda somaria crédito novo. */}
+                {aPrazo
+                  ? "Vender a prazo precisa da liberação do gerente."
+                  : "À vista fecha normal — a prazo precisaria do gerente."}
+              </span>
+            </div>
+          ) : null}
         </div>
       ) : null}
 

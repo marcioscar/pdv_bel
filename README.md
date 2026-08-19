@@ -41,6 +41,16 @@ Option compõe caracteres. Navegação e formas de pagamento usam teclas de fun�
 - **A venda em Pix imediato só nasce depois do pagamento confirmado** — não faz
   sentido baixar estoque de algo que talvez não seja pago. (Fluxo ainda não ligado
   ao caixa; ver Pendências.)
+- **Duas coisas travam a venda e pedem o gerente**: desconto acima de 5% do
+  subtotal, em qualquer forma de pagamento; e cliente com boleto vencido há mais
+  de 3 dias, mas **só na venda a prazo** — quem paga à vista não recebe crédito
+  novo, e recusar essa venda não protege nada. A trava é cobrada em
+  `registrarVenda`, e no Pix antes de gerar o QR: cobrá-la depois deixaria o
+  cliente pagando uma venda que seria recusada em seguida.
+- **A liberação do gerente é um registro, não um clique**: guarda o carrinho (o
+  vendedor larga a venda e atende o próximo), o retrato da dívida com que ele
+  decidiu, e se foi decidida pelo app ou com a senha no próprio caixa. Vale 12
+  horas, para uma venda só, e é consumida na mesma transação que grava a venda.
 
 ## Comandos
 
