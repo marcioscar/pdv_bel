@@ -243,6 +243,48 @@ export async function reabrirCaixa(loja: string, dia: string) {
   return count > 0
 }
 
+/**
+ * O fechamento com tudo que o compõe, para conferir na tela.
+ *
+ * Traz as vendas uma a uma porque é aí que a conferência acontece de fato: o
+ * total em dinheiro é uma soma, e quem procura R$ 40 que faltam precisa ver as
+ * parcelas que a formaram. Sem isso a tela repetiria o papel — e o papel a
+ * pessoa já tem na mão.
+ */
+export async function fechamentoDetalhado(id: string) {
+  const fechamento = await db.fechamentoCaixa.findUnique({ where: { id } })
+  if (!fechamento) return null
+
+  const [movimentos, vendas] = await Promise.all([
+    db.movimentoCaixa.findMany({
+      where: { loja: fechamento.loja, dia: fechamento.dia },
+      orderBy: { criadoEm: "asc" },
+    }),
+    db.venda.findMany({
+      where: {
+        loja: fechamento.loja,
+        criadaEm: {
+          gte: inicioDoDia(fechamento.dia),
+          lt: depoisDoDia(fechamento.dia),
+        },
+      },
+      orderBy: { criadaEm: "asc" },
+      select: {
+        id: true,
+        numero: true,
+        criadaEm: true,
+        operador: true,
+        forma: true,
+        total: true,
+        clienteNome: true,
+        canceladaEm: true,
+      },
+    }),
+  ])
+
+  return { fechamento, movimentos, vendas }
+}
+
 export type FechamentoListado = Awaited<ReturnType<typeof listarFechamentos>>[number]
 
 export function listarFechamentos(lojasPermitidas: string[], limite = 90) {

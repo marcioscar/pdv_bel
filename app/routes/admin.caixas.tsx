@@ -1,4 +1,4 @@
-import { data, Form, useNavigation } from "react-router"
+import { data, Form, Link, useNavigation } from "react-router"
 import { Banknote, TriangleAlert, Unlock } from "lucide-react"
 
 import type { Route } from "./+types/admin.caixas"
@@ -208,7 +208,9 @@ export default function AdminCaixas({ loaderData, actionData }: Route.ComponentP
                       className={cn("border-b border-border", grave && "bg-destructive/5")}
                     >
                       <td className="whitespace-nowrap py-2.5 font-mono tabular-nums">
-                        {diaEmTexto(f.dia)}
+                        <Link to={`/admin/caixas/${f.id}`} className="underline">
+                          {diaEmTexto(f.dia)}
+                        </Link>
                       </td>
                       <td className="px-2 py-2.5">
                         <Badge variant="outline" className="font-mono text-[10px]">
@@ -243,14 +245,18 @@ export default function AdminCaixas({ loaderData, actionData }: Route.ComponentP
                       </td>
                       <td className="px-2 py-2.5">
                         <span className="flex items-center gap-1">
-                          <a
-                            href={`/fechamento/${f.id}/papel`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-xs underline"
+                          {/* Leva à tela, não ao papel: quem abre daqui está
+                              investigando uma diferença, e o documento impresso
+                              só repete o total que ela já viu na linha. */}
+                          <Button
+                            render={<Link to={`/admin/caixas/${f.id}`} />}
+                            nativeButton={false}
+                            size="sm"
+                            variant="outline"
+                            className="rounded-lg"
                           >
-                            papel
-                          </a>
+                            Conferir
+                          </Button>
                           <Form method="post">
                             <input type="hidden" name="loja" value={f.loja} />
                             <input type="hidden" name="dia" value={f.dia} />

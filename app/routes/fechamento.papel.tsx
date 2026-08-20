@@ -16,7 +16,8 @@ import { exigirUsuario, podeVerDaLoja } from "~/lib/sessao.server"
  * para entender de onde saiu o número — e quem confere caixa faz isso de pé, com
  * o dinheiro na mão.
  *
- * Sai em duas vias: uma vai com o malote, a outra fica na loja.
+ * Uma via só: o comprovante de retirada é que viaja com o dinheiro, e este
+ * fica na loja com a assinatura de quem conferiu.
  */
 export async function loader({ params, request }: Route.LoaderArgs) {
   const eu = await exigirUsuario(request)
@@ -57,11 +58,10 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const grave = diferencaRelevante(fechamento.diferenca)
   const sobra = fechamento.diferenca > 0
 
-  const via = (rotulo: string) => `<section class="via">
+  const folha = `<section class="via">
     <header>
       <div class="topo">
         <h1>Fechamento de caixa</h1>
-        <span class="rotulo-via">${rotulo}</span>
       </div>
       <div class="identificacao">
         <span class="loja">${escapar(fechamento.loja)} · ${escapar(loja.nome)}</span>
@@ -150,16 +150,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     font-size: 10.5px; line-height: 1.35;
   }
 
-  /* Duas vias: uma vai com o malote, a outra fica na loja. */
-  .via { padding-bottom: 6mm; }
-  .via + .via { border-top: 1px dashed #666; padding-top: 6mm; }
 
   .topo { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
   h1 { font-size: 15px; margin: 0; }
-  .rotulo-via {
-    font-size: 8.5px; text-transform: uppercase; letter-spacing: .08em;
-    border: 1px solid #000; padding: 1px 5px; white-space: nowrap;
-  }
   .identificacao {
     margin-top: 4px; padding: 4px 0;
     border-top: 2px solid #000; border-bottom: 1px solid #000;
@@ -216,8 +209,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 </style>
 </head>
 <body>
-  ${via("Via do malote")}
-  ${via("Via da loja")}
+  ${folha}
 </body>
 </html>`
 

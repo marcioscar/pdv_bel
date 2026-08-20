@@ -32,6 +32,7 @@ export default [
       route("perdas", "routes/admin.perdas.tsx"),
       route("vendas", "routes/admin.vendas.tsx"),
       route("caixas", "routes/admin.caixas.tsx"),
+      route("caixas/:fechamentoId", "routes/admin.caixa.tsx"),
       route("contas-a-receber", "routes/admin.contas-a-receber.tsx"),
       route("autorizacoes", "routes/admin.autorizacoes.tsx"),
       route("relatorios", "routes/admin.relatorios.tsx"),
