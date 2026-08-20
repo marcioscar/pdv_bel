@@ -120,7 +120,10 @@ export function Topo({
         <span className="hidden lg:inline">
           <b className="font-semibold text-foreground">{operador}</b>
         </span>
-        <span className="hidden xl:inline">{relogio ?? "--/-- --:--"}</span>
+        {/* O relógio só existe depois da hidratação (o servidor não sabe a hora
+            do cliente); o vazio no lugar evita o pisca de um texto falso. Cabe
+            mais cedo agora que é curto — lg em vez de xl. */}
+        <span className="hidden lg:inline">{relogio ?? ""}</span>
         <Button
           type="button"
           tabIndex={-1}
