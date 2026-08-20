@@ -1,7 +1,21 @@
 import { db } from "~/lib/db.server"
 import { arredondar } from "~/lib/moeda"
 
-export type TipoMovimento = "venda" | "entrada" | "ajuste" | "estorno"
+export type TipoMovimento =
+  | "venda"
+  | "entrada"
+  | "ajuste"
+  | "estorno"
+  /** Saída da loja de origem, no momento em que a carga é despachada. */
+  | "transferencia_saida"
+  /**
+   * Entrada no destino, do que foi CONFERIDO na chegada — não do que saiu.
+   *
+   * A diferença entre os dois não precisa de lançamento próprio: uma saída de 10
+   * sem a entrada correspondente de 10 já É a perda, e o saldo da rede cai
+   * sozinho. Quem assumiu o buraco fica registrado no documento da transferência.
+   */
+  | "transferencia_entrada"
 
 /**
  * Saldo por produto, somado do livro de movimentos. Não existe estoque guardado

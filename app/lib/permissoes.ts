@@ -49,6 +49,11 @@ export const SECOES = [
   { para: "/", rotulo: "Caixa", tecla: "F1", somenteGerente: false },
   { para: "/estoque", rotulo: "Estoque", tecla: "F2", somenteGerente: false },
   { para: "/vendas", rotulo: "Vendas", tecla: "F3", somenteGerente: false },
+  // Transferir mercadoria é trabalho de turno, não de escritório: quem carrega a
+  // caixa no carro está de pé no estoque, e mandar essa pessoa procurar a tela
+  // dentro da administração significa, na prática, esperar o gerente. Foi por
+  // isso que a barra cresceu — o critério continua sendo quem faz, não o que é.
+  { para: "/transferencias", rotulo: "Transf", tecla: "F4", somenteGerente: false },
   { para: "/admin", rotulo: "Adm", tecla: null, somenteGerente: false },
 ] as const
 
@@ -94,6 +99,12 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         rotulo: "Entradas e inventário",
         descricao: "Entrada de mercadoria e saldo contado",
         somenteGerente: false,
+      },
+      {
+        para: "/admin/perdas",
+        rotulo: "Perdas no transporte",
+        descricao: "O que saiu de uma loja e não chegou na outra, por rota",
+        somenteGerente: true,
       },
     ],
   },
@@ -206,6 +217,8 @@ export const ACOES_DE_GERENTE = {
   verVendasDaRede: "Só gerente vê as vendas das outras lojas",
   verContasAReceber: "Só gerente vê as contas a receber",
   decidirAutorizacoes: "Só gerente libera venda travada — é ele que responde pelo risco",
+  resolverFaltaDeTransferencia:
+    "Só gerente decide o que houve com a mercadoria que não chegou",
 } as const
 
 export type AcaoDeGerente = keyof typeof ACOES_DE_GERENTE

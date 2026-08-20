@@ -1,7 +1,7 @@
 import { Form, Link, useLocation } from "react-router"
 import { LogOut, Moon, SlidersHorizontal, Store, Sun } from "lucide-react"
 
-import { AvisoAutorizacoes } from "~/components/pdv/aviso-autorizacoes"
+import { AvisosDoTopo } from "~/components/pdv/avisos-topo"
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
 import { Kbd } from "~/components/ui/kbd"
@@ -114,7 +114,7 @@ export function Topo({
             precisa alcançar o gerente onde quer que ele esteja no sistema, e uma
             tela nova que esquecesse de incluí-lo seria um ponto cego. Aqui ela
             nasce coberta, como a guarda de /admin. */}
-        <AvisoAutorizacoes papel={papel} />
+        <AvisosDoTopo papel={papel} />
         {children}
         {/* O papel substitui o rótulo fixo "Operador": quem está no caixa precisa
             saber com que poder está logado, e um selo extra ao lado seria redundante. */}

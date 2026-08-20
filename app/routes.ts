@@ -11,6 +11,9 @@ export default [
   index("routes/pdv.tsx"),
   route("estoque", "routes/estoque.tsx"),
   route("vendas", "routes/vendas.tsx"),
+  route("transferencias", "routes/transferencias.tsx"),
+  // O papel que viaja com a carga. Fora de qualquer layout: é folha para imprimir.
+  route("transferencias/:transferenciaId/romaneio", "routes/transferencia.romaneio.tsx"),
   route("vendas/:vendaId/boleto.pdf", "routes/boleto.tsx"),
   route("vendas/:vendaId/cupom", "routes/cupom.tsx"),
 
@@ -21,6 +24,7 @@ export default [
       route("produtos", "routes/admin.produtos.tsx"),
       route("clientes", "routes/admin.clientes.tsx"),
       route("estoque", "routes/admin.estoque.tsx"),
+      route("perdas", "routes/admin.perdas.tsx"),
       route("vendas", "routes/admin.vendas.tsx"),
       route("contas-a-receber", "routes/admin.contas-a-receber.tsx"),
       route("autorizacoes", "routes/admin.autorizacoes.tsx"),
@@ -40,7 +44,10 @@ export default [
   // Fica no turno, e não em /admin, porque quem a usa está no balcão.
   route("autorizacoes", "routes/autorizacoes.tsx"),
   // Recurso consultado de tempos em tempos pelo indicador do topo.
-  route("autorizacoes/contagem", "routes/autorizacoes.contagem.tsx"),
+  // Um endereço só para tudo que o topo precisa saber: autorizações esperando,
+  // cargas por conferir. Uma rota por assunto viraria uma consulta por assunto,
+  // em toda tela, a cada vinte segundos.
+  route("avisos/contagem", "routes/avisos.contagem.tsx"),
 
   route("entrar", "routes/entrar.tsx"),
   route("loja", "routes/loja.tsx"),

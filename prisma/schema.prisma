@@ -143,9 +143,17 @@ model MovimentoEstoque {
   operador   String
   vendaId    String?  @db.ObjectId
   vendaNumero Int?
+  /// A transferência que gerou este movimento, quando foi uma.
+  ///
+  /// Campo, e não só o número na observação: é o que permite ir do extrato de
+  /// estoque ("saíram 10 daqui") até o documento que explica o que aconteceu com
+  /// eles. Texto numa observação se lê, mas não se navega nem se agrupa.
+  transferenciaId     String? @db.ObjectId
+  transferenciaNumero Int?
   observacao String?
 
   @@index([produtoId, loja])
+  @@index([transferenciaId])
   @@index([loja, criadoEm])
   @@index([vendaId])
   @@map("movimentos_estoque")
@@ -324,4 +332,71 @@ type AutorizacaoItem {
   preco      Float
   quantidade Float
   subtotal   Float
+}
+
+/// Remessa de mercadoria de uma loja para outra.
+///
+/// É um DOCUMENTO, e não um par de movimentos soltos, porque entre a saída e a
+/// chegada existe um intervalo em que a mercadoria não está em prateleira
+/// nenhuma — está no carro. Sem o documento não há como listar o que está no
+/// caminho, nem cobrar a conferência de alguém, nem descobrir onde sumiu o que
+/// não chegou.
+///
+/// O saldo continua derivado do livro de movimentos: a expedição grava uma saída
+/// na origem, a conferência grava uma entrada no destino. Este documento não
+/// guarda saldo — guarda a INTENÇÃO (o que foi mandado) contra a REALIDADE (o
+/// que chegou), que é justamente a diferença que ninguém consegue investigar
+/// depois quando só existem os dois movimentos.
+model Transferencia {
+  id       String   @id @default(auto()) @map("_id") @db.ObjectId
+  /// Sequência única da rede: uma transferência tem dois donos, e numerar por
+  /// loja faria a mesma remessa ter números diferentes na origem e no destino.
+  numero   Int      @unique
+  origem   String
+  destino  String
+  criadaEm DateTime @default(now())
+
+  enviadaPorId String @db.ObjectId
+  enviadaPor   String
+  observacao   String?
+
+  itens TransferenciaItem[]
+
+  /// "em_transito" | "recebida" | "recebida_com_falta" | "cancelada"
+  ///
+  /// `recebida_com_falta` é um estado de verdade, e não um detalhe da recebida:
+  /// é o que mantém a diferença visível até um gerente decidir de quem é a
+  /// perda. Some da tela cedo demais e a mercadoria sumida vira rotina.
+  situacao String @default("em_transito")
+
+  recebidaEm    DateTime?
+  recebidaPor   String?
+  recebidaPorId String?   @db.ObjectId
+
+  canceladaEm  DateTime?
+  canceladaPor String?
+
+  /// Como a falta foi resolvida, quando houve. Preenchido só pelo gerente.
+  faltaResolvidaEm  DateTime?
+  faltaResolvidaPor String?
+  faltaObservacao   String?
+
+  @@index([situacao, criadaEm])
+  @@index([origem, situacao])
+  @@index([destino, situacao])
+  @@map("transferencias")
+}
+
+/// O que foi mandado e o que foi contado na chegada, lado a lado.
+///
+/// `recebida` fica nulo enquanto a carga está no caminho — nulo é "ainda não
+/// conferido", que é diferente de zero ("conferido e não veio nada"). A
+/// distinção importa: uma é ignorância, a outra é um fato.
+type TransferenciaItem {
+  produtoId String @db.ObjectId
+  codigo    String
+  descricao String
+  unidade   String
+  enviada   Float
+  recebida  Float?
 }

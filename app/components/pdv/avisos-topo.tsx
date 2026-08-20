@@ -1,13 +1,13 @@
 import { useEffect } from "react"
 import { Link, useFetcher, useLocation } from "react-router"
-import { Clock, ShieldAlert, ShieldCheck } from "lucide-react"
+import { Clock, PackageX, ShieldAlert, ShieldCheck, Truck } from "lucide-react"
 
 import { Button } from "~/components/ui/button"
 import { ehGerente } from "~/lib/permissoes"
 import { cn } from "~/lib/utils"
 
 /**
- * O aviso de autorização que acompanha o usuário por todas as telas.
+ * Os avisos que acompanham o usuário por todas as telas.
  *
  * Vive no topo, e não numa tela só, porque essa foi a exigência: o gerente
  * precisa saber que tem venda travada no balcão SEM ter aberto a tela certa. Uma
@@ -18,16 +18,22 @@ import { cn } from "~/lib/utils"
  * as vendas dele que estão esperando e as que já foram respondidas. Ninguém vê o
  * número do outro — mostrar ao operador uma fila sobre a qual ele não pode agir
  * é ruído.
+ *
+ * A carga a conferir entra aqui pelo mesmo motivo das autorizações: enquanto
+ * ninguém confere, o estoque do destino está defasado e o sistema sabe disso
+ * sozinho. Sem o aviso, a carga espera até alguém lembrar de abrir a tela.
  */
 
 /** De quanto em quanto tempo pergunta ao servidor. */
 const INTERVALO = 20_000
 
-export function AvisoAutorizacoes({ papel }: { papel: string }) {
+export function AvisosDoTopo({ papel }: { papel: string }) {
   const fetcher = useFetcher<{
     aDecidir: number
     aguardando: number
     respondidas: number
+    cargas: number
+    faltas: number
   }>()
   const { pathname } = useLocation()
 
@@ -40,7 +46,7 @@ export function AvisoAutorizacoes({ papel }: { papel: string }) {
    */
   useEffect(() => {
     const perguntar = () => {
-      if (fetcher.state === "idle") fetcher.load("/autorizacoes/contagem")
+      if (fetcher.state === "idle") fetcher.load("/avisos/contagem")
     }
     perguntar()
     const relogio = setInterval(perguntar, INTERVALO)
@@ -53,6 +59,8 @@ export function AvisoAutorizacoes({ papel }: { papel: string }) {
   const aDecidir = fetcher.data?.aDecidir ?? 0
   const aguardando = fetcher.data?.aguardando ?? 0
   const respondidas = fetcher.data?.respondidas ?? 0
+  const cargas = fetcher.data?.cargas ?? 0
+  const faltas = fetcher.data?.faltas ?? 0
 
   // O gerente também vende: se ele tem pedido próprio respondido, os dois avisos
   // aparecem, e cada um leva para a sua tela.
@@ -94,6 +102,46 @@ export function AvisoAutorizacoes({ papel }: { papel: string }) {
       {/* Discreto de propósito: é lembrete, não chamado para agir — o vendedor
           não pode fazer nada além de esperar. Mas precisa existir, senão a venda
           que ele guardou fica sem caminho de volta até alguém responder. */}
+      {/* Âmbar, e não vermelho: carga esperando é trabalho acumulando, não venda
+          parada com cliente na frente. O vermelho fica reservado para o que tem
+          alguém de pé no balcão do outro lado. */}
+      {cargas > 0 ? (
+        <Button
+          render={<Link to="/transferencias" />}
+          nativeButton={false}
+          tabIndex={-1}
+          size="sm"
+          variant="outline"
+          className={cn(
+            "rounded-lg font-semibold",
+            "border-amber-400 bg-amber-100 text-amber-950 hover:bg-amber-200",
+            "dark:border-amber-500/50 dark:bg-amber-500/20 dark:text-amber-200 dark:hover:bg-amber-500/30"
+          )}
+          title="Mercadoria que chegou nesta loja e ainda não foi conferida"
+        >
+          <Truck className="size-4" aria-hidden />
+          {cargas} {cargas === 1 ? "carga" : "cargas"}
+        </Button>
+      ) : null}
+
+      {/* Sem cor de alarme: mercadoria sumida é passado, não urgência — mas
+          precisa cutucar, senão a falta fica sem decisão para sempre e o padrão
+          por trás dela nunca aparece. */}
+      {faltas > 0 ? (
+        <Button
+          render={<Link to="/admin/perdas" />}
+          nativeButton={false}
+          tabIndex={-1}
+          size="sm"
+          variant="outline"
+          className="rounded-lg"
+          title="Mercadoria que sumiu entre lojas e ainda não teve decisão"
+        >
+          <PackageX className="size-4" aria-hidden />
+          {faltas} {faltas === 1 ? "falta" : "faltas"}
+        </Button>
+      ) : null}
+
       {aguardando > 0 ? (
         <Button
           render={<Link to="/autorizacoes" />}
