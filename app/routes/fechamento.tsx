@@ -1,0 +1,506 @@
+import { useState } from "react"
+import { data, Form, Link, useNavigation, useSearchParams } from "react-router"
+import { Banknote, Loader2, Lock, Printer, Trash2 } from "lucide-react"
+
+import type { Route } from "./+types/fechamento"
+import { Topo } from "~/components/pdv/topo"
+import { Badge } from "~/components/ui/badge"
+import { Button } from "~/components/ui/button"
+import { Input } from "~/components/ui/input"
+import {
+  diferencaRelevante,
+  rotuloDoMovimento,
+  tipoDeCaixaValido,
+  TIPOS_DE_MOVIMENTO_DE_CAIXA,
+} from "~/lib/caixa"
+import {
+  apagarMovimentoDeCaixa,
+  fecharCaixa,
+  lancarMovimentoDeCaixa,
+  resumoDoDia,
+} from "~/lib/caixa.server"
+import { diaAtras, diaDeHoje, diaEmTexto } from "~/lib/dia"
+import { imprimirDocumento } from "~/lib/impressao"
+import { interpretarValor, moeda } from "~/lib/moeda"
+import { useAtalhosDeSecao } from "~/lib/navegacao"
+import { exigirUsuario } from "~/lib/sessao.server"
+import { useRelogio, useTema } from "~/lib/tema"
+import { cn } from "~/lib/utils"
+
+export function meta(_: Route.MetaArgs) {
+  return [{ title: "Fechamento de caixa — BrasSaco" }]
+}
+
+const DIA = /^\d{4}-\d{2}-\d{2}$/
+
+/**
+ * O fechamento do caixa do dia, na loja em que a pessoa está operando.
+ *
+ * A tela é a conta em voz alta: mostra de onde vem cada parcela do esperado —
+ * troco da abertura, vendas em dinheiro, sangrias, reforços — e só então pede o
+ * número que ela não sabe, que é quanto há de fato na gaveta. Mostrar só o total
+ * esperado transformaria a conferência num "bate ou não bate", sem chance de
+ * achar ONDE não bate.
+ */
+export async function loader({ request }: Route.LoaderArgs) {
+  const eu = await exigirUsuario(request)
+
+  const pedido = new URL(request.url).searchParams.get("dia")
+  const dia = pedido && DIA.test(pedido) ? pedido : diaDeHoje()
+
+  return { eu, dia, resumo: await resumoDoDia(eu.loja, dia) }
+}
+
+export async function action({ request }: Route.ActionArgs) {
+  const eu = await exigirUsuario(request)
+  const formulario = await request.formData()
+  const intencao = String(formulario.get("intencao") ?? "")
+
+  const pedido = String(formulario.get("dia") ?? "")
+  // A loja vem da SESSÃO, nunca do formulário: com ela no payload daria para
+  // mexer no caixa de outra loja.
+  const dia = DIA.test(pedido) ? pedido : diaDeHoje()
+
+  if (intencao === "lancar") {
+    const tipo = formulario.get("tipo")
+    if (!tipoDeCaixaValido(tipo)) {
+      return data({ ok: false as const, erro: "Tipo de lançamento inválido" }, { status: 400 })
+    }
+    const valor = interpretarValor(String(formulario.get("valor") ?? ""))
+    if (valor === null) {
+      return data({ ok: false as const, erro: "Informe o valor" }, { status: 400 })
+    }
+
+    const r = await lancarMovimentoDeCaixa({
+      loja: eu.loja,
+      dia,
+      tipo,
+      valor,
+      operador: eu.nome,
+      operadorId: eu.id,
+      observacao: String(formulario.get("observacao") ?? ""),
+    })
+    if (!r.ok) return data({ ok: false as const, erro: r.erro }, { status: 400 })
+    return { ok: true as const, mensagem: `${rotuloDoMovimento(tipo)} de ${moeda(valor)} lançada` }
+  }
+
+  if (intencao === "apagar") {
+    const r = await apagarMovimentoDeCaixa(String(formulario.get("id") ?? ""), eu.loja)
+    if (!r.ok) return data({ ok: false as const, erro: r.erro }, { status: 400 })
+    return { ok: true as const, mensagem: "Lançamento removido" }
+  }
+
+  if (intencao === "fechar") {
+    const contado = interpretarValor(String(formulario.get("contado") ?? ""))
+    if (contado === null) {
+      return data({ ok: false as const, erro: "Informe quanto foi contado" }, { status: 400 })
+    }
+
+    const r = await fecharCaixa({
+      loja: eu.loja,
+      dia,
+      contado,
+      operador: eu.nome,
+      operadorId: eu.id,
+      observacao: String(formulario.get("observacao") ?? ""),
+    })
+    if (!r.ok) return data({ ok: false as const, erro: r.erro }, { status: 400 })
+
+    return {
+      ok: true as const,
+      mensagem: diferencaRelevante(r.diferenca)
+        ? `Caixa fechado com ${r.diferenca > 0 ? "sobra" : "falta"} de ${moeda(Math.abs(r.diferenca))}`
+        : "Caixa fechado, gaveta batendo",
+    }
+  }
+
+  return data({ ok: false as const, erro: "Ação desconhecida" }, { status: 400 })
+}
+
+export default function Fechamento({ loaderData, actionData }: Route.ComponentProps) {
+  const { eu, dia, resumo } = loaderData
+  const { escuro, alternar } = useTema()
+  const relogio = useRelogio()
+  useAtalhosDeSecao(eu.papel)
+
+  const [, setParams] = useSearchParams()
+  const navegacao = useNavigation()
+  const enviando = navegacao.state !== "idle"
+  const fechado = resumo.fechamento
+
+  return (
+    <main className="flex h-screen flex-col overflow-hidden bg-card text-foreground">
+      <Topo
+        operador={eu.nome}
+        papel={eu.papel}
+        loja={eu.loja}
+        lojasPermitidas={eu.lojasPermitidas.length}
+        relogio={relogio}
+        escuro={escuro}
+        onAlternarTema={alternar}
+      />
+
+      <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <Banknote className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+          <h1 className="text-base font-semibold">Fechamento de caixa</h1>
+          <Badge variant="outline" className="font-mono text-[10px]">{eu.loja}</Badge>
+
+          <div className="flex items-center gap-1">
+            <input
+              type="date"
+              value={dia}
+              max={diaDeHoje()}
+              onChange={(e) => setParams({ dia: e.target.value })}
+              className="h-9 rounded-lg border border-border bg-background px-2 text-sm outline-none focus-visible:border-ring"
+            />
+            {dia !== diaDeHoje() ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setParams({ dia: diaDeHoje() })}
+                className="rounded-lg"
+              >
+                Hoje
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setParams({ dia: diaAtras(1) })}
+                className="rounded-lg"
+              >
+                Ontem
+              </Button>
+            )}
+          </div>
+        </div>
+
+        {actionData ? (
+          <p
+            role="alert"
+            className={cn(
+              "mt-3 max-w-2xl rounded-lg px-3 py-2 text-sm",
+              actionData.ok
+                ? "bg-primary/10 text-foreground"
+                : "bg-destructive/10 text-destructive"
+            )}
+          >
+            {actionData.ok ? actionData.mensagem : actionData.erro}
+          </p>
+        ) : null}
+
+        {fechado ? (
+          <div className="mt-4 flex max-w-2xl flex-wrap items-center gap-3 rounded-xl border border-border bg-muted/40 px-4 py-3">
+            <Lock className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+            <span className="text-sm">
+              Fechado por <b>{fechado.fechadoPor}</b> em{" "}
+              {new Date(fechado.fechadoEm).toLocaleString("pt-BR")}
+            </span>
+            <BotaoPapel id={fechado.id} />
+          </div>
+        ) : null}
+
+        <div className="mt-5 grid max-w-5xl gap-5 lg:grid-cols-[minmax(0,22rem)_1fr]">
+          <section>
+            <h2 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Dinheiro na gaveta
+            </h2>
+
+            {/* A conta aberta, parcela por parcela. */}
+            <dl className="mt-3 rounded-xl border border-border p-4 text-sm">
+              <Linha rotulo="Troco da abertura" valor={resumo.abertura} />
+              <Linha rotulo="Vendas em dinheiro" valor={resumo.vendasDinheiro} />
+              {resumo.suprimentos > 0 ? (
+                <Linha rotulo="Reforços" valor={resumo.suprimentos} />
+              ) : null}
+              {resumo.sangrias > 0 ? (
+                <Linha rotulo="Sangrias" valor={-resumo.sangrias} />
+              ) : null}
+
+              <div className="mt-2 flex items-baseline justify-between border-t border-border pt-2">
+                <dt className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Deve haver
+                </dt>
+                <dd className="font-mono text-xl font-bold tabular-nums">
+                  {moeda(fechado ? fechado.esperado : resumo.esperado)}
+                </dd>
+              </div>
+
+              {fechado ? (
+                <>
+                  <div className="mt-3 flex items-baseline justify-between border-t border-border pt-2">
+                    <dt className="text-muted-foreground">Contado</dt>
+                    <dd className="font-mono text-lg font-semibold tabular-nums">
+                      {moeda(fechado.contado)}
+                    </dd>
+                  </div>
+                  <div className="mt-1 flex items-baseline justify-between">
+                    <dt className="text-muted-foreground">Diferença</dt>
+                    <dd
+                      className={cn(
+                        "font-mono text-lg font-bold tabular-nums",
+                        diferencaRelevante(fechado.diferenca) && "text-destructive"
+                      )}
+                    >
+                      {fechado.diferenca > 0 ? "+" : ""}
+                      {moeda(fechado.diferenca)}
+                    </dd>
+                  </div>
+                  {fechado.observacao ? (
+                    <p className="mt-2 rounded-lg bg-muted/50 px-2.5 py-1.5 text-xs">
+                      {fechado.observacao}
+                    </p>
+                  ) : null}
+                </>
+              ) : (
+                <Form method="post" className="mt-4 border-t border-border pt-3">
+                  <input type="hidden" name="intencao" value="fechar" />
+                  <input type="hidden" name="dia" value={dia} />
+                  <label className="block">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      Contei na gaveta
+                    </span>
+                    <Input
+                      name="contado"
+                      inputMode="decimal"
+                      placeholder="0,00"
+                      autoComplete="off"
+                      required
+                      className="mt-1 h-12 rounded-lg border-border bg-background text-right font-mono text-lg tabular-nums"
+                    />
+                  </label>
+                  <Input
+                    name="observacao"
+                    placeholder="Observação (opcional)"
+                    autoComplete="off"
+                    className="mt-2 h-10 rounded-lg border-border bg-background text-sm"
+                  />
+                  <Button
+                    type="submit"
+                    disabled={enviando}
+                    className="mt-3 h-12 w-full rounded-lg text-base font-semibold"
+                  >
+                    <Lock className="size-4" aria-hidden /> Fechar o caixa deste dia
+                  </Button>
+                  <p className="mt-2 text-[11px] text-muted-foreground">
+                    Depois de fechado, os lançamentos deste dia não podem mais mudar.
+                  </p>
+                </Form>
+              )}
+            </dl>
+          </section>
+
+          <section>
+            <h2 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Movimento do dia · {diaEmTexto(dia)}
+            </h2>
+
+            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <Cartao rotulo="Dinheiro" valor={resumo.vendasDinheiro} />
+              <Cartao rotulo="Pix" valor={resumo.vendasPix} />
+              <Cartao rotulo="Débito" valor={resumo.vendasDebito} />
+              <Cartao rotulo="Crédito" valor={resumo.vendasCredito} />
+              <Cartao rotulo="A prazo" valor={resumo.vendasPrazo} />
+              <Cartao rotulo="Total vendido" valor={resumo.totalVendido} destaque />
+            </div>
+
+            <p className="mt-2 text-xs text-muted-foreground">
+              {resumo.quantidadeVendas}{" "}
+              {resumo.quantidadeVendas === 1 ? "venda" : "vendas"}
+              {resumo.canceladas > 0
+                ? ` · ${resumo.canceladas} cancelada${resumo.canceladas === 1 ? "" : "s"} (não entram em nada aqui)`
+                : ""}
+            </p>
+
+            {!fechado ? (
+              <>
+                <h2 className="mt-6 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Lançar na gaveta
+                </h2>
+                <Form method="post" className="mt-3 flex flex-wrap items-end gap-2">
+                  <input type="hidden" name="intencao" value="lancar" />
+                  <input type="hidden" name="dia" value={dia} />
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      O que é
+                    </span>
+                    <select
+                      name="tipo"
+                      defaultValue="sangria"
+                      className="h-10 rounded-lg border border-border bg-background px-2 text-sm outline-none focus-visible:border-ring"
+                    >
+                      {Object.entries(TIPOS_DE_MOVIMENTO_DE_CAIXA).map(([id, t]) => (
+                        <option key={id} value={id} title={t.ajuda}>
+                          {t.rotulo}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      Valor
+                    </span>
+                    <Input
+                      name="valor"
+                      inputMode="decimal"
+                      placeholder="0,00"
+                      required
+                      autoComplete="off"
+                      className="h-10 w-32 rounded-lg border-border bg-background text-right font-mono tabular-nums"
+                    />
+                  </label>
+                  <Input
+                    name="observacao"
+                    placeholder="Motivo — depósito, pagamento, troco"
+                    autoComplete="off"
+                    className="h-10 min-w-48 flex-1 rounded-lg border-border bg-background text-sm"
+                  />
+                  <Button type="submit" disabled={enviando} className="h-10 rounded-lg">
+                    Lançar
+                  </Button>
+                </Form>
+              </>
+            ) : null}
+
+            {resumo.movimentos.length > 0 ? (
+              <ul className="mt-4 divide-y divide-border border-y border-border">
+                {resumo.movimentos.map((m) => (
+                  <li key={m.id} className="flex items-center gap-2 py-2 text-sm">
+                    <Badge variant="outline" className="shrink-0 text-[10px]">
+                      {rotuloDoMovimento(m.tipo)}
+                    </Badge>
+                    <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                      {m.observacao ?? ""}
+                      <span className="ml-1 font-mono">
+                        {new Date(m.criadoEm).toLocaleTimeString("pt-BR", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}{" "}
+                        · {m.operador}
+                      </span>
+                    </span>
+                    <span
+                      className={cn(
+                        "shrink-0 font-mono tabular-nums",
+                        m.tipo === "sangria" && "text-destructive"
+                      )}
+                    >
+                      {m.tipo === "sangria" ? "−" : "+"}
+                      {moeda(m.valor)}
+                    </span>
+                    {!fechado ? (
+                      <Form method="post" className="shrink-0">
+                        <input type="hidden" name="intencao" value="apagar" />
+                        <input type="hidden" name="dia" value={dia} />
+                        <input type="hidden" name="id" value={m.id} />
+                        <Button
+                          type="submit"
+                          size="icon-sm"
+                          variant="ghost"
+                          aria-label="Remover lançamento"
+                          className="text-muted-foreground"
+                        >
+                          <Trash2 className="size-4" aria-hidden />
+                        </Button>
+                      </Form>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-4 text-xs text-muted-foreground">
+                Nenhum lançamento de gaveta neste dia.
+                {resumo.abertura === 0 && !fechado
+                  ? " Comece pela abertura, com o troco que ficou na gaveta."
+                  : ""}
+              </p>
+            )}
+
+            <p className="mt-6 text-[11px] text-muted-foreground">
+              Venda a venda em{" "}
+              <Link to="/vendas" className="underline">
+                Vendas
+              </Link>
+              .
+            </p>
+          </section>
+        </div>
+      </div>
+    </main>
+  )
+}
+
+function Linha({ rotulo, valor }: { rotulo: string; valor: number }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3 py-0.5">
+      <dt className="text-muted-foreground">{rotulo}</dt>
+      <dd className={cn("font-mono tabular-nums", valor < 0 && "text-destructive")}>
+        {valor < 0 ? "− " : ""}
+        {moeda(Math.abs(valor))}
+      </dd>
+    </div>
+  )
+}
+
+function Cartao({
+  rotulo,
+  valor,
+  destaque,
+}: {
+  rotulo: string
+  valor: number
+  destaque?: boolean
+}) {
+  return (
+    <div className={cn("rounded-xl border border-border p-3", destaque && "bg-muted/40")}>
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        {rotulo}
+      </div>
+      <div
+        className={cn(
+          "mt-0.5 font-mono font-bold tabular-nums",
+          destaque ? "text-lg" : "text-base"
+        )}
+      >
+        {moeda(valor)}
+      </div>
+    </div>
+  )
+}
+
+function BotaoPapel({ id }: { id: string }) {
+  const [gerando, setGerando] = useState(false)
+  const [erro, setErro] = useState<string | null>(null)
+
+  return (
+    <>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        disabled={gerando}
+        className="ml-auto rounded-lg"
+        onClick={async () => {
+          setGerando(true)
+          setErro(await imprimirDocumento(`/fechamento/${id}/papel`))
+          setGerando(false)
+        }}
+      >
+        {gerando ? (
+          <Loader2 className="size-4 animate-spin" aria-hidden />
+        ) : (
+          <Printer className="size-4" aria-hidden />
+        )}
+        Imprimir
+      </Button>
+      {erro ? (
+        <span role="alert" className="text-xs text-destructive">
+          {erro}
+        </span>
+      ) : null}
+    </>
+  )
+}

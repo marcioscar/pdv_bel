@@ -54,6 +54,10 @@ export const SECOES = [
   // dentro da administração significa, na prática, esperar o gerente. Foi por
   // isso que a barra cresceu — o critério continua sendo quem faz, não o que é.
   { para: "/transferencias", rotulo: "Transf", tecla: "F4", somenteGerente: false },
+  // Fechar o caixa é a última tarefa do turno, feita por quem contou a gaveta.
+  // "Fechamento", e não "Caixa": este já é o nome do PDV em F1, e dois itens com
+  // o mesmo rótulo na mesma barra é um convite a clicar no errado.
+  { para: "/fechamento", rotulo: "Fechamento", tecla: "F5", somenteGerente: false },
   { para: "/admin", rotulo: "Adm", tecla: null, somenteGerente: false },
 ] as const
 
@@ -143,6 +147,12 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
     rotulo: "Financeiro",
     secoes: [
       {
+        para: "/admin/caixas",
+        rotulo: "Fechamentos de caixa",
+        descricao: "Diferenças por loja e os dias que ninguém fechou",
+        somenteGerente: true,
+      },
+      {
         para: "/admin/contas-a-receber",
         rotulo: "Contas a receber",
         descricao: "Boletos por vencimento: em aberto, vencidos e recebidos",
@@ -223,6 +233,7 @@ export const ACOES_DE_GERENTE = {
   verVendasDaRede: "Só gerente vê as vendas das outras lojas",
   verContasAReceber: "Só gerente vê as contas a receber",
   decidirAutorizacoes: "Só gerente libera venda travada — é ele que responde pelo risco",
+  reabrirCaixa: "Só gerente reabre um caixa já fechado — o papel assinado deixa de valer",
   resolverFaltaDeTransferencia:
     "Só gerente decide o que houve com a mercadoria que não chegou",
 } as const

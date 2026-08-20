@@ -400,3 +400,84 @@ type TransferenciaItem {
   enviada   Float
   recebida  Float?
 }
+
+/// Dinheiro que entra ou sai da gaveta sem ser venda: o troco do início do dia,
+/// a sangria para o banco, o reforço de troco no meio da tarde.
+///
+/// Sem estes lançamentos o fechamento não fecha. O esperado em espécie seria só
+/// a soma das vendas em dinheiro, e qualquer loja que comece o dia com troco
+/// acusaria diferença TODO dia — e um alarme que dispara sempre é um alarme que
+/// as pessoas aprendem a ignorar, junto com os dias em que ele estava certo.
+model MovimentoCaixa {
+  id       String   @id @default(auto()) @map("_id") @db.ObjectId
+  loja     String
+  /// O dia do caixa em "YYYY-MM-DD", no fuso local.
+  ///
+  /// Campo próprio, e não derivado de `criadoEm`: o fechamento é por dia de
+  /// expediente, e agrupar por timestamp obriga toda consulta a repetir a
+  /// conversão de fuso — que é onde nasce o lançamento das 23h caindo no dia
+  /// seguinte.
+  dia      String
+  criadoEm DateTime @default(now())
+
+  /// "abertura" | "sangria" | "suprimento"
+  ///
+  /// O valor é sempre POSITIVO e o tipo diz a direção. Guardar sangria como
+  /// negativo pareceria elegante e faria a soma esconder o que aconteceu: dois
+  /// lançamentos que se anulam somem, e some com eles a pergunta de por que
+  /// houve dois.
+  tipo     String
+  valor    Float
+  operador String
+  operadorId String @db.ObjectId
+  observacao String?
+
+  @@index([loja, dia])
+  @@map("movimentos_caixa")
+}
+
+/// A conferência da gaveta no fim do dia.
+///
+/// Guarda o RETRATO do que o sistema calculou, e não só a diferença: se uma
+/// venda daquele dia for cancelada semana que vem, o fechamento assinado
+/// continua dizendo o que foi conferido na hora. Documento que muda depois de
+/// assinado não serve para conferir nada.
+model FechamentoCaixa {
+  id  String @id @default(auto()) @map("_id") @db.ObjectId
+  loja String
+  dia  String
+
+  fechadoEm    DateTime @default(now())
+  fechadoPor   String
+  fechadoPorId String   @db.ObjectId
+
+  /// A conta do dinheiro em espécie, parcela por parcela — para o papel poder
+  /// mostrar COMO se chegou ao esperado, em vez de só afirmar o total.
+  abertura     Float
+  vendasDinheiro Float
+  sangrias     Float
+  suprimentos  Float
+  esperado     Float
+  /// O que a pessoa contou na gaveta. É o único número que o sistema não sabe.
+  contado      Float
+  /// contado − esperado. Positivo sobrou, negativo faltou.
+  diferenca    Float
+
+  /// As outras formas não entram na conferência da gaveta (o dinheiro delas vai
+  /// para o banco), mas entram no papel: é o movimento do dia.
+  vendasPix     Float @default(0)
+  vendasDebito  Float @default(0)
+  vendasCredito Float @default(0)
+  vendasPrazo   Float @default(0)
+  totalVendido  Float @default(0)
+  quantidadeVendas Int @default(0)
+  canceladas       Int @default(0)
+
+  observacao String?
+
+  /// Um por loja por dia. É o índice que impede dois fechamentos do mesmo
+  /// expediente — e não uma checagem na tela, que duas abas contornam. Serve
+  /// também de índice de consulta: não precisa de um `@@index` igual ao lado.
+  @@unique([loja, dia])
+  @@map("fechamentos_caixa")
+}
