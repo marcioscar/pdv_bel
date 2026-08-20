@@ -14,6 +14,8 @@ export default [
   route("transferencias", "routes/transferencias.tsx"),
   route("fechamento", "routes/fechamento.tsx"),
   route("fechamento/:fechamentoId/papel", "routes/fechamento.papel.tsx"),
+  // O comprovante do dinheiro que sai da gaveta — viaja junto com ele.
+  route("sangria/:movimentoId/comprovante", "routes/sangria.comprovante.tsx"),
   // O papel que viaja com a carga. Fora de qualquer layout: é folha para imprimir.
   route("transferencias/:transferenciaId/romaneio", "routes/transferencia.romaneio.tsx"),
   route("vendas/:vendaId/boleto.pdf", "routes/boleto.tsx"),

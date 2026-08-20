@@ -203,6 +203,44 @@ export default function Fechamento({ loaderData, actionData }: Route.ComponentPr
           </div>
         ) : null}
 
+        {/*
+          * Abrir o caixa é a PRIMEIRA coisa do dia, e estava escondida num
+          * seletor cujo padrão era "sangria", numa tela chamada Fechamento —
+          * ninguém procuraria ali de manhã. Enquanto não há abertura, ela é a
+          * única coisa que a tela pede.
+          */}
+        {!fechado && resumo.abertura === 0 ? (
+          <section className="mt-5 max-w-2xl rounded-xl border-2 border-primary/40 bg-primary/5 p-4">
+            <h2 className="text-sm font-semibold">Abra o caixa deste dia</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Conte o troco que ficou na gaveta e lance aqui. É esse valor que entra na
+              conta do fim do dia — sem ele, a conferência vai acusar falta.
+            </p>
+            <Form method="post" className="mt-3 flex flex-wrap items-end gap-2">
+              <input type="hidden" name="intencao" value="lancar" />
+              <input type="hidden" name="dia" value={dia} />
+              <input type="hidden" name="tipo" value="abertura" />
+              <label className="flex flex-col gap-1">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Troco na gaveta
+                </span>
+                <Input
+                  name="valor"
+                  inputMode="decimal"
+                  placeholder="0,00"
+                  required
+                  autoComplete="off"
+                  autoFocus
+                  className="h-12 w-40 rounded-lg border-border bg-background text-right font-mono text-lg tabular-nums"
+                />
+              </label>
+              <Button type="submit" disabled={enviando} className="h-12 rounded-lg px-6 font-semibold">
+                Abrir o caixa
+              </Button>
+            </Form>
+          </section>
+        ) : null}
+
         <div className="mt-5 grid max-w-5xl gap-5 lg:grid-cols-[minmax(0,22rem)_1fr]">
           <section>
             <h2 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -332,11 +370,15 @@ export default function Fechamento({ loaderData, actionData }: Route.ComponentPr
                       defaultValue="sangria"
                       className="h-10 rounded-lg border border-border bg-background px-2 text-sm outline-none focus-visible:border-ring"
                     >
-                      {Object.entries(TIPOS_DE_MOVIMENTO_DE_CAIXA).map(([id, t]) => (
-                        <option key={id} value={id} title={t.ajuda}>
-                          {t.rotulo}
-                        </option>
-                      ))}
+                      {/* A abertura sai da lista depois de feita: é uma por dia,
+                          e deixá-la aqui só produziria a recusa do servidor. */}
+                      {Object.entries(TIPOS_DE_MOVIMENTO_DE_CAIXA)
+                        .filter(([id]) => id !== "abertura" || resumo.abertura === 0)
+                        .map(([id, t]) => (
+                          <option key={id} value={id} title={t.ajuda}>
+                            {t.rotulo}
+                          </option>
+                        ))}
                     </select>
                   </label>
                   <label className="flex flex-col gap-1">
@@ -391,6 +433,10 @@ export default function Fechamento({ loaderData, actionData }: Route.ComponentPr
                       {m.tipo === "sangria" ? "−" : "+"}
                       {moeda(m.valor)}
                     </span>
+                    {/* O comprovante que acompanha o dinheiro. Vale para a
+                        sangria (sai) e para o reforço (entra): nos dois casos
+                        alguém carregou dinheiro de um lugar para outro. */}
+                    <BotaoComprovante id={m.id} />
                     {!fechado ? (
                       <Form method="post" className="shrink-0">
                         <input type="hidden" name="intencao" value="apagar" />
@@ -468,6 +514,34 @@ function Cartao({
         {moeda(valor)}
       </div>
     </div>
+  )
+}
+
+/** Imprime o comprovante de um lançamento da gaveta. */
+function BotaoComprovante({ id }: { id: string }) {
+  const [gerando, setGerando] = useState(false)
+
+  return (
+    <Button
+      type="button"
+      size="icon-sm"
+      variant="ghost"
+      disabled={gerando}
+      aria-label="Imprimir comprovante"
+      title="Imprimir o comprovante para acompanhar o dinheiro"
+      className="shrink-0 text-muted-foreground"
+      onClick={async () => {
+        setGerando(true)
+        await imprimirDocumento(`/sangria/${id}/comprovante`)
+        setGerando(false)
+      }}
+    >
+      {gerando ? (
+        <Loader2 className="size-4 animate-spin" aria-hidden />
+      ) : (
+        <Printer className="size-4" aria-hidden />
+      )}
+    </Button>
   )
 }
 
