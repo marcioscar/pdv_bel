@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react"
-import { data, useFetcher } from "react-router"
+import { data, redirect, useFetcher } from "react-router"
 
 import type { Route } from "./+types/pdv"
 import { AjudaAtalhos } from "~/components/pdv/ajuda-atalhos"
@@ -15,6 +15,8 @@ import { FinalizarDialogo } from "~/components/pdv/finalizar-dialogo"
 import { PainelPagamento } from "~/components/pdv/painel-pagamento"
 import { Topo } from "~/components/pdv/topo"
 import { Kbd } from "~/components/ui/kbd"
+import { caixaAberto } from "~/lib/caixa.server"
+import { diaDeHoje } from "~/lib/dia"
 import {
   avaliarVenda,
   avisarPedidoPendente,
@@ -81,6 +83,21 @@ const CAIXA = "01"
 
 export async function loader({ request }: Route.LoaderArgs) {
   const eu = await exigirUsuario(request)
+
+  /**
+   * Abrir o caixa é a primeira coisa do dia, antes de qualquer venda.
+   *
+   * O redirecionamento é a única forma que funciona: um aviso na tela seria
+   * fechado sem ser lido, e o dia inteiro correria com a gaveta sem ponto de
+   * partida — a conferência da noite acusaria falta do valor do troco, e depois
+   * de algumas noites assim ninguém mais confere.
+   *
+   * Custa uma consulta por carregamento do caixa, e é uma busca por índice que
+   * para no primeiro documento. A tela de abertura volta para cá sozinha.
+   */
+  if (!(await caixaAberto(eu.loja, diaDeHoje()))) {
+    throw redirect("/fechamento?abrir=caixa")
+  }
 
   // O catálogo inteiro vai para o cliente para a busca responder sem latência
   // por tecla. Acima de ~5 mil produtos, trocar por busca no servidor.

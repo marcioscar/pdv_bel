@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { data, Form, Link, useNavigation, useSearchParams } from "react-router"
+import { data, Form, Link, redirect, useNavigation, useSearchParams } from "react-router"
 import { Banknote, Loader2, Lock, Printer, Trash2 } from "lucide-react"
 
 import type { Route } from "./+types/fechamento"
@@ -81,6 +81,13 @@ export async function action({ request }: Route.ActionArgs) {
       observacao: String(formulario.get("observacao") ?? ""),
     })
     if (!r.ok) return data({ ok: false as const, erro: r.erro }, { status: 400 })
+
+    // Quem foi mandado para cá pelo caixa volta para lá assim que abre: ele
+    // estava tentando vender, e provavelmente tem alguém esperando.
+    if (tipo === "abertura" && new URL(request.url).searchParams.get("abrir") === "caixa") {
+      throw redirect("/")
+    }
+
     return { ok: true as const, mensagem: `${rotuloDoMovimento(tipo)} de ${moeda(valor)} lançada` }
   }
 
@@ -123,7 +130,10 @@ export default function Fechamento({ loaderData, actionData }: Route.ComponentPr
   const relogio = useRelogio()
   useAtalhosDeSecao(eu.papel)
 
-  const [, setParams] = useSearchParams()
+  const [params, setParams] = useSearchParams()
+  // Veio do caixa porque tentou vender antes de abrir: a tela precisa dizer isso,
+  // senão a pessoa acha que clicou errado.
+  const veioDoCaixa = params.get("abrir") === "caixa"
   const navegacao = useNavigation()
   const enviando = navegacao.state !== "idle"
   const fechado = resumo.fechamento
@@ -211,12 +221,19 @@ export default function Fechamento({ loaderData, actionData }: Route.ComponentPr
           */}
         {!fechado && resumo.abertura === 0 ? (
           <section className="mt-5 max-w-2xl rounded-xl border-2 border-primary/40 bg-primary/5 p-4">
-            <h2 className="text-sm font-semibold">Abra o caixa deste dia</h2>
+            <h2 className="text-sm font-semibold">
+              {veioDoCaixa ? "Abra o caixa antes de vender" : "Abra o caixa deste dia"}
+            </h2>
             <p className="mt-1 text-xs text-muted-foreground">
-              Conte o troco que ficou na gaveta e lance aqui. É esse valor que entra na
-              conta do fim do dia — sem ele, a conferência vai acusar falta.
+              {veioDoCaixa
+                ? "O caixa desta loja ainda não foi aberto hoje. Conte o troco da gaveta, lance aqui e você volta direto para a venda."
+                : "Conte o troco que ficou na gaveta e lance aqui. É esse valor que entra na conta do fim do dia — sem ele, a conferência vai acusar falta."}
             </p>
-            <Form method="post" className="mt-3 flex flex-wrap items-end gap-2">
+            <Form
+              method="post"
+              action={veioDoCaixa ? "/fechamento?abrir=caixa" : undefined}
+              className="mt-3 flex flex-wrap items-end gap-2"
+            >
               <input type="hidden" name="intencao" value="lancar" />
               <input type="hidden" name="dia" value={dia} />
               <input type="hidden" name="tipo" value="abertura" />

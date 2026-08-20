@@ -74,6 +74,22 @@ export async function resumoDoDia(loja: string, dia: string) {
   }
 }
 
+/**
+ * O caixa do dia já foi aberto nesta loja?
+ *
+ * É a pergunta que o PDV faz antes de deixar vender. Abertura lançada significa
+ * que alguém contou a gaveta e assumiu o troco inicial — sem isso, a conferência
+ * da noite compara o dinheiro com um esperado que ignora o que já estava lá, e
+ * acusa falta do valor exato do troco. Todo dia, para sempre.
+ */
+export async function caixaAberto(loja: string, dia: string) {
+  const abertura = await db.movimentoCaixa.findFirst({
+    where: { loja, dia, tipo: "abertura" },
+    select: { id: true },
+  })
+  return abertura !== null
+}
+
 /** Lança troco inicial, sangria ou reforço. */
 export async function lancarMovimentoDeCaixa(entrada: {
   loja: string

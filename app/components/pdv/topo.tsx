@@ -5,7 +5,7 @@ import { AvisosDoTopo } from "~/components/pdv/avisos-topo"
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
 import { Kbd } from "~/components/ui/kbd"
-import { rotuloDoPapel, secoesDoPapel } from "~/lib/permissoes"
+import { secoesDoPapel } from "~/lib/permissoes"
 import { cn } from "~/lib/utils"
 
 type Props = {
@@ -103,9 +103,6 @@ export function Topo({
         >
           <Store className="size-4" aria-hidden />
           {loja}
-          {lojasPermitidas > 1 ? (
-            <span className="text-[9px] font-normal opacity-70">trocar</span>
-          ) : null}
         </Button>
       </div>
 
@@ -116,10 +113,11 @@ export function Topo({
             nasce coberta, como a guarda de /admin. */}
         <AvisosDoTopo papel={papel} />
         {children}
-        {/* O papel substitui o rótulo fixo "Operador": quem está no caixa precisa
-            saber com que poder está logado, e um selo extra ao lado seria redundante. */}
+        {/* Só o nome. O cargo saiu daqui: quem está logado já sabe com que
+            poder está, e o que a barra não mostra vira espaço para o que muda —
+            a loja e os avisos. O papel continua decidindo o que aparece no menu,
+            que é onde ele tem efeito prático. */}
         <span className="hidden lg:inline">
-          {rotuloDoPapel(papel)}{" "}
           <b className="font-semibold text-foreground">{operador}</b>
         </span>
         <span className="hidden xl:inline">{relogio ?? "--/-- --:--"}</span>
