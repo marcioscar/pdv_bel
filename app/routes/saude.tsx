@@ -6,6 +6,7 @@ import {
   interConfigurado,
 } from "~/lib/inter.server"
 import { diagnosticoSessao } from "~/lib/sessao.server"
+import { diagnosticoTelegram } from "~/lib/telegram.server"
 
 /**
  * Diz o que está rodando. Serve para responder "o deploy entrou?" sem adivinhar
@@ -72,6 +73,9 @@ export async function loader(_: Route.LoaderArgs) {
       sessao: diagnosticoSessao(),
       banco,
       contasInter: contas,
+      // Sem isto, "o gerente parou de receber aviso" e "o token nunca subiu para
+      // o ambiente" seriam indistinguíveis de fora.
+      avisoTelegram: diagnosticoTelegram(),
       inter: {
         // sandbox ou produção — dá para ver de fora se alguém trocou sem avisar
         alvo: process.env.INTER_BASE_URL?.includes("sandbox") ? "sandbox" : "producao",

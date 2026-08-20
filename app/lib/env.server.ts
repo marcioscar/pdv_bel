@@ -37,4 +37,22 @@ if (existsSync(ARQUIVO)) {
   }
 }
 
-export {}
+/**
+ * O endereço público do sistema, para montar link que sai daqui — hoje, o da
+ * fila de autorizações que vai no aviso do Telegram.
+ *
+ * `APP_URL` vem primeiro porque o link precisa funcionar no celular de quem
+ * recebe, e o que o servidor enxerga do request não serve: atrás do proxy do
+ * easypanel o `request.url` chega como `http://0.0.0.0:3000`, um endereço que só
+ * existe dentro do container. Os cabeçalhos do proxy são o segundo melhor
+ * palpite, e o request cru é o último recurso — em desenvolvimento ele é o certo.
+ */
+export function enderecoDoApp(request: Request) {
+  const configurado = process.env.APP_URL?.trim()
+  if (configurado) return configurado.replace(/\/+$/, "")
+
+  const url = new URL(request.url)
+  const host = request.headers.get("x-forwarded-host") ?? url.host
+  const protocolo = request.headers.get("x-forwarded-proto") ?? url.protocol.replace(":", "")
+  return `${protocolo}://${host}`
+}

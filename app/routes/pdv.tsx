@@ -17,12 +17,14 @@ import { Topo } from "~/components/pdv/topo"
 import { Kbd } from "~/components/ui/kbd"
 import {
   avaliarVenda,
+  avisarPedidoPendente,
   decidirAutorizacao,
   dividaDoCliente,
   pedirAutorizacao,
   recusaPorFaltaDeLiberacao,
 } from "~/lib/autorizacao.server"
 import { db } from "~/lib/db.server"
+import { enderecoDoApp } from "~/lib/env.server"
 import { criarCliente, lerCliente, listarClientes } from "~/lib/clientes.server"
 import { emitirParaVenda, type CobrancaDaVenda } from "~/lib/cobranca.server"
 import { saldosPorProduto } from "~/lib/estoque.server"
@@ -234,6 +236,17 @@ export async function action({ request }: Route.ActionArgs) {
         : null,
       divida: avaliacao.divida,
     })
+
+    /**
+     * Só ESTE caminho avisa. A liberação com a senha no caixa também cria um
+     * pedido, mas nasce decidida: mandar o aviso ali faria o celular do gerente
+     * apitar sobre uma venda que ele mesmo acabou de liberar de pé no balcão.
+     *
+     * Em segundo plano, e não `await`: o vendedor recebe a confirmação no tempo
+     * do banco, não no da rede do Telegram. Se o aviso falhar, o pedido continua
+     * na fila — o gerente o vê ao abrir a tela.
+     */
+    avisarPedidoPendente(criada, new URL("/admin/autorizacoes", enderecoDoApp(request)).href)
 
     return { ok: true as const, tipo: "autorizacao" as const, autorizacaoId: criada.id }
   }

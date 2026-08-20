@@ -10,8 +10,9 @@ import {
 } from "~/lib/autorizacao"
 import { db } from "~/lib/db.server"
 import { diaAtras, diaDeHoje, emDia, inicioDoDia } from "~/lib/dia"
-import { arredondar } from "~/lib/moeda"
+import { arredondar, moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { SITUACOES_EM_ABERTO } from "~/lib/recebiveis"
+import { enviarTelegramEmSegundoPlano, texto } from "~/lib/telegram.server"
 
 /**
  * A dívida vencida de um cliente, em toda a rede.
@@ -191,6 +192,83 @@ export async function pedirAutorizacao(entrada: {
       dividaDiasAtraso: entrada.divida.diasAtraso,
     },
   })
+}
+
+/** "12,0%" — com vírgula, que é como se escreve número por aqui. */
+function percentualEmTexto(valor: number) {
+  return `${valor.toFixed(1).replace(".", ",")}%`
+}
+
+/**
+ * O aviso que chega no celular do gerente.
+ *
+ * Escrito para ser decidido SEM abrir o app: quem pediu, para quem, quanto, e
+ * por que travou. Um aviso que só diz "há uma venda para autorizar" obriga a
+ * parar o que se está fazendo, achar o celular, abrir o app e só então descobrir
+ * que era um desconto de 6% — e depois da terceira vez, ninguém mais abre.
+ *
+ * O link vem por último porque é o que se toca; no topo fica o que se lê.
+ */
+export function mensagemDeAutorizacao(
+  pedido: {
+    loja: string
+    solicitante: string
+    clienteNome: string | null
+    motivos: string[]
+    subtotal: number
+    desconto: number
+    descontoPercentual: number
+    total: number
+    dividaValor: number
+    dividaParcelas: number
+    dividaDiasAtraso: number
+    itens: { descricao: string; quantidade: number }[]
+  },
+  urlDaFila: string
+) {
+  const linhas = [
+    `🔒 <b>Venda travada em ${texto(pedido.loja)}</b>`,
+    `${texto(pedido.solicitante)} → ${texto(pedido.clienteNome ?? "Consumidor Final")}`,
+    "",
+  ]
+
+  if (pedido.motivos.includes("inadimplencia")) {
+    linhas.push(
+      `⚠️ Cliente deve <b>${moeda(pedido.dividaValor)}</b> em ${pedido.dividaParcelas} ` +
+        `${pedido.dividaParcelas === 1 ? "parcela vencida" : "parcelas vencidas"}` +
+        (pedido.dividaDiasAtraso > 0 ? ` (a mais velha há ${pedido.dividaDiasAtraso}d)` : "")
+    )
+  }
+  if (pedido.motivos.includes("desconto")) {
+    linhas.push(
+      `⚠️ Desconto de <b>${percentualEmTexto(pedido.descontoPercentual)}</b> — ${moeda(pedido.desconto)}`
+    )
+  }
+
+  // Os três primeiros itens: o suficiente para reconhecer a compra sem transformar
+  // a notificação num cupom que não cabe na tela de bloqueio do celular.
+  const amostra = pedido.itens.slice(0, 3)
+  linhas.push(
+    "",
+    ...amostra.map((i) => `• ${formatarQuantidade(i.quantidade)}× ${texto(i.descricao)}`),
+    ...(pedido.itens.length > amostra.length
+      ? [`• +${pedido.itens.length - amostra.length} outros`]
+      : []),
+    "",
+    `Total <b>${moeda(pedido.total)}</b>`,
+    "",
+    `<a href="${texto(urlDaFila)}">Abrir a fila para liberar</a>`
+  )
+
+  return linhas.join("\n")
+}
+
+/** Avisa o grupo dos gerentes que entrou pedido. Nunca segura quem chamou. */
+export function avisarPedidoPendente(
+  pedido: Parameters<typeof mensagemDeAutorizacao>[0],
+  urlDaFila: string
+) {
+  enviarTelegramEmSegundoPlano(mensagemDeAutorizacao(pedido, urlDaFila))
 }
 
 export type Decisao = "aprovada" | "negada"

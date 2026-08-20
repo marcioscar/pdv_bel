@@ -73,7 +73,15 @@ INTER_CHAVE_PIX        # chave DICT, para as cobranças imediatas
 INTER_CONTA_CORRENTE   # só se a integração tiver mais de uma conta
 INTER_CERT             # certificado em base64 (ou INTER_CERT_PATH em dev)
 INTER_KEY              # chave privada em base64 (ou INTER_KEY_PATH em dev)
+
+APP_URL                # endereço público, p/ os links que saem daqui (ex.: avisos)
+TELEGRAM_BOT_TOKEN     # bot criado no @BotFather; sem ele o aviso só não sai
+TELEGRAM_CHAT_ID       # o grupo dos gerentes (negativo em grupo: -100…)
 ```
+
+Sem `TELEGRAM_*` o sistema roda igual — o pedido de autorização entra na fila do
+mesmo jeito, só não apita no celular de ninguém. `GET /saude` diz em
+`avisoTelegram` se está configurado e para qual chat.
 
 O certificado entra por variável de propósito: chave privada não pertence a uma
 layer de imagem Docker, então `certificados/` está no `.dockerignore`.
