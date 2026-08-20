@@ -8,10 +8,14 @@ import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { db } from "~/lib/db.server"
 import { fichaDoProduto } from "~/lib/estoque.server"
-import { quantidade as formatarQuantidade } from "~/lib/moeda"
+import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { ajudaDoTipo, rotuloDoTipo } from "~/lib/movimentos"
 import { buscarProdutos, criarIndice } from "~/lib/pdv"
-import { SOMENTE_ATIVOS } from "~/lib/produtos.server"
+import {
+  alteracoesDePreco,
+  SOMENTE_ATIVOS,
+  ultimasAlteracoesDePreco,
+} from "~/lib/produtos.server"
 import { exigirUsuario } from "~/lib/sessao.server"
 import { cn } from "~/lib/utils"
 
@@ -55,11 +59,14 @@ export async function loader({ request }: Route.LoaderArgs) {
     })),
     produto: produto ?? null,
     ficha: produto ? await fichaDoProduto(produto.id, eu.lojasPermitidas) : null,
+    precos: produto ? await alteracoesDePreco(produto.id) : [],
+    // Sem produto escolhido, a tela vira a lista de quem mexeu em preço na rede.
+    precosDaRede: produto ? [] : await ultimasAlteracoesDePreco(),
   }
 }
 
 export default function AdminFicha({ loaderData }: Route.ComponentProps) {
-  const { produtos, produto, ficha } = loaderData
+  const { produtos, produto, ficha, precos, precosDaRede } = loaderData
   const [, setParams] = useSearchParams()
   const [termo, setTermo] = useState("")
 
@@ -115,14 +122,69 @@ export default function AdminFicha({ loaderData }: Route.ComponentProps) {
       </div>
 
       {!produto ? (
-        <div className="mt-8 rounded-xl border border-dashed border-border py-16 text-center">
-          <ScrollText className="mx-auto size-10 text-muted-foreground/40" aria-hidden />
-          <p className="mt-3 text-sm text-muted-foreground">
-            Procure um produto para ver a ficha dele.
-          </p>
-        </div>
+        <>
+          <div className="mt-8 rounded-xl border border-dashed border-border py-12 text-center">
+            <ScrollText className="mx-auto size-10 text-muted-foreground/40" aria-hidden />
+            <p className="mt-3 text-sm text-muted-foreground">
+              Procure um produto para ver a ficha dele.
+            </p>
+          </div>
+
+          {precosDaRede.length > 0 ? (
+            <section className="mt-8">
+              <h2 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Últimas alterações de preço na rede
+              </h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Preço é dinheiro: aqui fica quem mudou, quando e de quanto para quanto.
+              </p>
+              <div className="mt-3 overflow-x-auto">
+                <table className="w-full min-w-[36rem] text-sm">
+                  <thead>
+                    <tr className="border-b border-border text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      <th scope="col" className="py-2 text-left font-semibold">Quando</th>
+                      <th scope="col" className="px-2 py-2 text-left font-semibold">Produto</th>
+                      <th scope="col" className="px-2 py-2 text-right font-semibold">De</th>
+                      <th scope="col" className="px-2 py-2 text-right font-semibold">Para</th>
+                      <th scope="col" className="px-2 py-2 text-right font-semibold">Variação</th>
+                      <th scope="col" className="px-2 py-2 text-left font-semibold">Quem</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {precosDaRede.map((a) => (
+                      <tr key={a.id} className="border-b border-border">
+                        <td className="whitespace-nowrap py-2 font-mono text-xs text-muted-foreground tabular-nums">
+                          {new Date(a.criadoEm).toLocaleString("pt-BR", {
+                            dateStyle: "short",
+                            timeStyle: "short",
+                          })}
+                        </td>
+                        <td className="max-w-[16rem] px-2 py-2">
+                          <span className="block truncate text-xs">{a.descricao}</span>
+                          <span className="font-mono text-[11px] text-muted-foreground">
+                            {a.codigo}
+                          </span>
+                        </td>
+                        <td className="px-2 py-2 text-right font-mono text-xs text-muted-foreground tabular-nums line-through">
+                          {moeda(a.de)}
+                        </td>
+                        <td className="px-2 py-2 text-right font-mono font-semibold tabular-nums">
+                          {moeda(a.para)}
+                        </td>
+                        <td className="px-2 py-2 text-right">
+                          <Variacao de={a.de} para={a.para} />
+                        </td>
+                        <td className="px-2 py-2 text-xs">{a.operador}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          ) : null}
+        </>
       ) : (
-        <Ficha produto={produto} ficha={ficha!} />
+        <Ficha produto={produto} ficha={ficha!} precos={precos} />
       )}
     </div>
   )
@@ -131,9 +193,11 @@ export default function AdminFicha({ loaderData }: Route.ComponentProps) {
 function Ficha({
   produto,
   ficha,
+  precos,
 }: {
   produto: { codigo: string; descricao: string; unidade: string }
   ficha: NonNullable<Route.ComponentProps["loaderData"]["ficha"]>
+  precos: Route.ComponentProps["loaderData"]["precos"]
 }) {
   const [loja, setLoja] = useState<string>("todas")
 
@@ -278,9 +342,58 @@ function Ficha({
             {linhas.length} {linhas.length === 1 ? "movimento" : "movimentos"} · o saldo de
             cada linha é o que havia logo depois dela, na loja daquela linha.
           </p>
+
+          {/* O preço é a outra dimensão da vida do produto: quantidade explica o
+              saldo, preço explica o valor da venda. */}
+          {precos.length > 0 ? (
+            <section className="mt-7">
+              <h2 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Alterações de preço
+              </h2>
+              <ul className="mt-3 divide-y divide-border border-y border-border">
+                {precos.map((a) => (
+                  <li key={a.id} className="flex flex-wrap items-baseline gap-x-3 py-2 text-sm">
+                    <span className="font-mono text-xs text-muted-foreground tabular-nums">
+                      {new Date(a.criadoEm).toLocaleString("pt-BR", {
+                        dateStyle: "short",
+                        timeStyle: "short",
+                      })}
+                    </span>
+                    <span className="font-mono text-muted-foreground tabular-nums line-through">
+                      {moeda(a.de)}
+                    </span>
+                    <span className="font-mono font-semibold tabular-nums">
+                      {moeda(a.para)}
+                    </span>
+                    <Variacao de={a.de} para={a.para} />
+                    <span className="ml-auto text-xs text-muted-foreground">{a.operador}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
         </>
       )}
     </>
+  )
+}
+
+/** A variação em %, com sinal — é o que se lê antes dos valores absolutos. */
+function Variacao({ de, para }: { de: number; para: number }) {
+  if (de <= 0) return <span className="text-xs text-muted-foreground">—</span>
+  const pct = ((para - de) / de) * 100
+  const subiu = para > de
+  return (
+    <span
+      className={cn(
+        "font-mono text-xs tabular-nums",
+        subiu ? "text-muted-foreground" : "text-destructive font-semibold"
+      )}
+      title={subiu ? "preço subiu" : "preço baixou"}
+    >
+      {subiu ? "+" : ""}
+      {pct.toFixed(1).replace(".", ",")}%
+    </span>
   )
 }
 

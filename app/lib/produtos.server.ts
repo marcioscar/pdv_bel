@@ -61,7 +61,9 @@ export async function criarProduto(entrada: ProdutoEntrada): Promise<ResultadoPr
 
 export async function atualizarProduto(
   id: string,
-  entrada: ProdutoEntrada
+  entrada: ProdutoEntrada,
+  /** Quem está mexendo. Preço é dinheiro: a mudança fica com nome e hora. */
+  quem?: { nome: string; id: string }
 ): Promise<ResultadoProduto> {
   if (!OBJECT_ID.test(id)) return { ok: false, erro: "Produto inválido" }
 
@@ -69,7 +71,63 @@ export async function atualizarProduto(
   if (!existente) return { ok: false, erro: "Produto não encontrado" }
 
   const produto = await db.produto.update({ where: { id }, data: entrada })
+
+  /**
+   * O registro entra DEPOIS da alteração e fora de transação, de propósito.
+   *
+   * Se o registro falhasse dentro de uma transação, a mudança de preço seria
+   * desfeita — e travar a edição do catálogo porque o log falhou é pior do que
+   * um log com uma lacuna. A lacuna, se acontecer, aparece: o preço da ficha
+   * não bate com a última linha do histórico.
+   */
+  if (quem && existente.preco !== produto.preco) {
+    await db.alteracaoDePreco.create({
+      data: {
+        produtoId: produto.id,
+        de: existente.preco,
+        para: produto.preco,
+        operador: quem.nome,
+        operadorId: quem.id,
+      },
+    })
+  }
+
   return { ok: true, produto }
+}
+
+/** O histórico de preço de um produto, do mais recente para o mais antigo. */
+export function alteracoesDePreco(produtoId: string, limite = 40) {
+  return db.alteracaoDePreco.findMany({
+    where: { produtoId },
+    orderBy: { criadoEm: "desc" },
+    take: limite,
+  })
+}
+
+/**
+ * As últimas alterações de preço da rede inteira.
+ *
+ * É a lista que responde "quem andou mexendo em preço" — a pergunta que não
+ * tinha resposta antes. Traz a descrição junto porque um id de produto não diz
+ * nada a quem está lendo.
+ */
+export async function ultimasAlteracoesDePreco(limite = 30) {
+  const alteracoes = await db.alteracaoDePreco.findMany({
+    orderBy: { criadoEm: "desc" },
+    take: limite,
+  })
+
+  const produtos = await db.produto.findMany({
+    where: { id: { in: [...new Set(alteracoes.map((a) => a.produtoId))] } },
+    select: { id: true, codigo: true, descricao: true, unidade: true },
+  })
+  const porId = new Map(produtos.map((p) => [p.id, p]))
+
+  return alteracoes.map((a) => ({
+    ...a,
+    codigo: porId.get(a.produtoId)?.codigo ?? "—",
+    descricao: porId.get(a.produtoId)?.descricao ?? "(produto removido)",
+  }))
 }
 
 /** Quantos produtos repetem cada código — o caixa precisa desambiguar esses. */

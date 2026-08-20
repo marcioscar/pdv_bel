@@ -520,3 +520,29 @@ model FechamentoCaixa {
   @@unique([loja, dia])
   @@map("fechamentos_caixa")
 }
+
+/// Cada vez que o preço de um produto muda.
+///
+/// O catálogo guarda só o preço de agora, e sobrescrever apagava a pergunta:
+/// dava para baixar o preço, fazer a venda e devolver ao normal sem deixar
+/// vestígio. A venda guarda o preço praticado, então era possível VER que saiu
+/// barata — mas não que alguém mexeu no cadastro naquele minuto.
+///
+/// Livro, como o de estoque: só cresce, nunca é reescrito.
+model AlteracaoDePreco {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  produtoId String   @db.ObjectId
+  criadoEm  DateTime @default(now())
+
+  /// De quanto para quanto. Guardar os dois evita ter de reconstruir a série
+  /// inteira para saber o que aconteceu numa linha só.
+  de   Float
+  para Float
+
+  operador   String
+  operadorId String @db.ObjectId
+
+  @@index([produtoId, criadoEm])
+  @@index([criadoEm])
+  @@map("alteracoes_preco")
+}

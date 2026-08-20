@@ -50,7 +50,9 @@ export async function loader({ request }: Route.LoaderArgs) {
 }
 
 export async function action({ request }: Route.ActionArgs) {
-  await exigirGerente(request, "editarProdutos")
+  // O nome de quem edita entra no histórico de preço: preço é dinheiro, e a
+  // mudança precisa ter dono.
+  const eu = await exigirGerente(request, "editarProdutos")
 
   const form = await request.formData()
 
@@ -67,7 +69,9 @@ export async function action({ request }: Route.ActionArgs) {
   }
 
   const id = String(form.get("id") ?? "")
-  const resultado = id ? await atualizarProduto(id, lido) : await criarProduto(lido)
+  const resultado = id
+    ? await atualizarProduto(id, lido, { nome: eu.nome, id: eu.id })
+    : await criarProduto(lido)
 
   if (!resultado.ok) {
     return data({ ok: false as const, erro: resultado.erro }, { status: 400 })
