@@ -1,9 +1,19 @@
 import { useEffect, useState } from "react"
 import { Link, Outlet, useLocation } from "react-router"
-import { ChevronRight, Package, Receipt, Users, Wallet, type LucideIcon } from "lucide-react"
+import {
+  ChevronRight,
+  Menu,
+  Package,
+  Receipt,
+  Users,
+  Wallet,
+  X,
+  type LucideIcon,
+} from "lucide-react"
 
 import type { Route } from "./+types/admin"
 import { Topo } from "~/components/pdv/topo"
+import { Button } from "~/components/ui/button"
 import { useAtalhosDeSecao } from "~/lib/navegacao"
 import {
   ehGerente,
@@ -59,6 +69,17 @@ export default function Admin({ loaderData }: Route.ComponentProps) {
   const grupoAtivo = grupoDaSecao(pathname)
   const [abertos, setAbertos] = useState<string[]>(grupoAtivo ? [grupoAtivo] : [])
 
+  /**
+   * No celular a sidebar é gaveta; no desktop, coluna fixa.
+   *
+   * Uma coluna de 224px come metade de um telefone — e é justamente no telefone
+   * que o gerente abre a fila de autorizações pelo link do aviso. Fechar ao
+   * navegar é o comportamento esperado de gaveta: quem escolheu a tela quer ver
+   * a tela, não o menu por cima dela.
+   */
+  const [menuAberto, setMenuAberto] = useState(false)
+  useEffect(() => setMenuAberto(false), [pathname])
+
   useEffect(() => {
     if (grupoAtivo) setAbertos((atuais) => (atuais.includes(grupoAtivo) ? atuais : [...atuais, grupoAtivo]))
   }, [grupoAtivo])
@@ -75,12 +96,49 @@ export default function Admin({ loaderData }: Route.ComponentProps) {
         onAlternarTema={alternar}
       />
 
-      <div className="flex min-h-0 flex-1">
+      {/* A barra da gaveta, só no celular: sem ela não haveria como voltar ao
+          menu depois de entrar numa tela. */}
+      <div className="flex items-center gap-2 border-b border-border px-3 py-2 lg:hidden">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          aria-expanded={menuAberto}
+          aria-controls="menu-admin"
+          onClick={() => setMenuAberto((a) => !a)}
+          className="rounded-lg"
+        >
+          {menuAberto ? <X className="size-4" aria-hidden /> : <Menu className="size-4" aria-hidden />}
+          Menu
+        </Button>
+        <span className="truncate text-sm font-semibold">
+          {secaoAdminDoCaminho(pathname)?.rotulo ?? "Administração"}
+        </span>
+      </div>
+
+      <div className="relative flex min-h-0 flex-1">
+        {/* Escurece o conteúdo atrás da gaveta e fecha ao toque fora dela. */}
+        {menuAberto ? (
+          <button
+            type="button"
+            aria-label="Fechar menu"
+            onClick={() => setMenuAberto(false)}
+            className="absolute inset-0 z-10 bg-black/40 lg:hidden"
+          />
+        ) : null}
+
         {/* A sidebar vive só aqui. No caixa ela roubaria a coluna de descrição do
             produto, que é o que o operador lê com o cliente esperando. */}
         <nav
+          id="menu-admin"
           aria-label="Administração"
-          className="flex w-56 shrink-0 flex-col gap-1 border-r border-border bg-muted/30 p-3"
+          className={cn(
+            "flex w-56 shrink-0 flex-col gap-1 border-r border-border bg-muted/30 p-3",
+            // No celular ela flutua sobre o conteúdo; no desktop é coluna comum.
+            "absolute inset-y-0 left-0 z-20 overflow-y-auto shadow-xl transition-transform",
+            "lg:static lg:z-auto lg:translate-x-0 lg:shadow-none",
+            menuAberto ? "translate-x-0" : "-translate-x-full"
+          )}
         >
           {grupos.map((grupo) => {
             const Icone = ICONES[grupo.id] ?? Package
@@ -146,7 +204,7 @@ export default function Admin({ loaderData }: Route.ComponentProps) {
             )
           })}
 
-          <p className="mt-auto px-3 text-[11px] leading-relaxed text-muted-foreground">
+          <p className="mt-auto hidden px-3 text-[11px] leading-relaxed text-muted-foreground lg:block">
             O caixa e as vendas ficam na barra de cima, com{" "}
             <span className="font-mono">Ctrl F1</span> a{" "}
             <span className="font-mono">Ctrl F3</span>.

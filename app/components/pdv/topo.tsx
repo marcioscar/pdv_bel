@@ -35,11 +35,11 @@ export function Topo({
   const { pathname } = useLocation()
 
   return (
-    <header className="flex items-center justify-between border-b border-border px-5 py-2.5">
-      <div className="flex items-center gap-4">
+    <header className="flex items-center justify-between gap-2 border-b border-border px-2.5 py-2 sm:px-5 sm:py-2.5">
+      <div className="flex min-w-0 items-center gap-2 sm:gap-4">
         {/* O azul da marca é puro (#0000FF) e desaparece no fundo escuro; a placa
             branca mantém a logo legível nos dois temas. */}
-        <span className="rounded-md bg-white px-2 py-1">
+        <span className="hidden rounded-md bg-white px-2 py-1 sm:inline-block">
           <img
             src="/logo_bel.svg"
             alt="BrasSaco Embalagens"
@@ -49,7 +49,9 @@ export function Topo({
           />
         </span>
 
-        <nav className="flex items-center gap-1">
+        {/* Rola em vez de estourar: com cinco itens e um celular estreito, o que
+            não cabe fica alcançável pelo dedo em vez de sumir fora da tela. */}
+        <nav className="flex min-w-0 items-center gap-0.5 overflow-x-auto sm:gap-1 [&::-webkit-scrollbar]:hidden">
           {secoesDoPapel(papel).map((secao) => {
             // A administração é a única com ícone: ela não é uma seção de turno, e
             // o ícone marca essa diferença sem precisar de separador.
@@ -71,8 +73,9 @@ export function Topo({
               >
                 {Icone ? <Icone className="size-3.5" aria-hidden /> : null}
                 {secao.rotulo}
+                {/* Tecla de função em celular é ruído: não há teclado. */}
                 {secao.tecla ? (
-                  <Kbd className="text-[9px]">Ctrl {secao.tecla}</Kbd>
+                  <Kbd className="hidden text-[9px] lg:inline-flex">Ctrl {secao.tecla}</Kbd>
                 ) : null}
               </Button>
             )
@@ -106,7 +109,7 @@ export function Topo({
         </Button>
       </div>
 
-      <div className="flex items-center gap-4 font-mono text-xs text-muted-foreground">
+      <div className="flex shrink-0 items-center gap-1.5 font-mono text-xs text-muted-foreground sm:gap-4">
         {/* Dentro do Topo, e não passado por cada tela: o aviso de venda travada
             precisa alcançar o gerente onde quer que ele esteja no sistema, e uma
             tela nova que esquecesse de incluí-lo seria um ponto cego. Aqui ela
@@ -115,11 +118,11 @@ export function Topo({
         {children}
         {/* O papel substitui o rótulo fixo "Operador": quem está no caixa precisa
             saber com que poder está logado, e um selo extra ao lado seria redundante. */}
-        <span>
+        <span className="hidden lg:inline">
           {rotuloDoPapel(papel)}{" "}
           <b className="font-semibold text-foreground">{operador}</b>
         </span>
-        <span>{relogio ?? "--/-- --:--"}</span>
+        <span className="hidden xl:inline">{relogio ?? "--/-- --:--"}</span>
         <Button
           type="button"
           tabIndex={-1}

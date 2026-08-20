@@ -91,9 +91,9 @@ export default function AdminAutorizacoes({ loaderData, actionData }: Route.Comp
   }, [navegacao.state, revalidador])
 
   return (
-    <div className="p-6">
-      <div className="flex items-center gap-3">
-        <ShieldCheck className="size-4 text-muted-foreground" aria-hidden />
+    <div className="p-4 sm:p-6">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <ShieldCheck className="size-4 shrink-0 text-muted-foreground" aria-hidden />
         <h1 className="text-base font-semibold">Autorizações</h1>
         <span className="text-xs text-muted-foreground">
           {pendentes.length === 0
@@ -249,7 +249,9 @@ function Pedido({ pedido }: { pedido: AutorizacaoListada }) {
         ) : null}
         <span
           className={cn(
-            "ml-auto text-xs",
+            // `basis-full` no celular: o nome do vendedor cai para a linha de
+            // baixo inteira em vez de espremer o nome do cliente até truncar.
+            "basis-full text-xs sm:ml-auto sm:basis-auto",
             demorando ? "font-semibold text-destructive" : "text-muted-foreground"
           )}
         >
@@ -319,16 +321,17 @@ function Pedido({ pedido }: { pedido: AutorizacaoListada }) {
           onChange={(e) => setObservacao(e.target.value)}
           placeholder="Observação (opcional) — o vendedor lê"
           autoComplete="off"
-          className="h-9 min-w-40 flex-1 rounded-lg border-border bg-background text-sm"
+          className="h-10 w-full min-w-0 rounded-lg border-border bg-background text-sm sm:h-9 sm:w-auto sm:flex-1"
         />
+        {/* Altura de dedo no celular, e cada um com metade da largura: decidir
+            errado por causa de um botão pequeno é caro dos dois lados. */}
         <Button
           type="submit"
           name="decisao"
           value="negada"
-          size="sm"
           variant="outline"
           disabled={enviando}
-          className="rounded-lg"
+          className="h-11 flex-1 rounded-lg sm:h-9 sm:flex-none"
         >
           <X className="size-4" aria-hidden /> Negar
         </Button>
@@ -336,9 +339,8 @@ function Pedido({ pedido }: { pedido: AutorizacaoListada }) {
           type="submit"
           name="decisao"
           value="aprovada"
-          size="sm"
           disabled={enviando}
-          className="rounded-lg"
+          className="h-11 flex-1 rounded-lg sm:h-9 sm:flex-none"
         >
           <Check className="size-4" aria-hidden /> Aprovar
         </Button>
