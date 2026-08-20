@@ -233,6 +233,8 @@ export const ACOES_DE_GERENTE = {
   verVendasDaRede: "Só gerente vê as vendas das outras lojas",
   verContasAReceber: "Só gerente vê as contas a receber",
   decidirAutorizacoes: "Só gerente libera venda travada — é ele que responde pelo risco",
+  trocarDeLoja:
+    "Só gerente troca a loja do turno — para operar em outra, saia e entre de novo",
   reabrirCaixa: "Só gerente reabre um caixa já fechado — o papel assinado deixa de valer",
   resolverFaltaDeTransferencia:
     "Só gerente decide o que houve com a mercadoria que não chegou",

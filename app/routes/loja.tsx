@@ -7,6 +7,7 @@ import { Button } from "~/components/ui/button"
 import { Kbd } from "~/components/ui/kbd"
 import { listarLojas } from "~/lib/lojas.server"
 import { cookieDaLojaDaMaquina, lojaDaMaquina } from "~/lib/maquina.server"
+import { ACOES_DE_GERENTE, ehGerente } from "~/lib/permissoes"
 import { definirLojaDaSessao, usuarioDaSessao } from "~/lib/sessao.server"
 import { cn } from "~/lib/utils"
 
@@ -23,8 +24,16 @@ function destinoSeguro(bruto: string | null) {
  * Escolha da loja.
  *
  * Existe porque um funcionário atende em mais de uma loja: a loja é do turno, não
- * do cadastro. Também é a tela de "trocar de loja", sem pedir a senha de novo — o
- * cadastro já diz onde ele pode operar, e trocar não amplia permissão nenhuma.
+ * do cadastro.
+ *
+ * A tela faz duas coisas parecidas com pesos muito diferentes, e a diferença é
+ * ter ou não loja na sessão:
+ *
+ * - **Escolher ao entrar** (sem loja ainda): qualquer um faz, senão o operador
+ *   de duas lojas não conseguiria trabalhar.
+ * - **Trocar no meio do turno** (já com loja): só gerente. Trocar move venda,
+ *   estoque e caixa para outra prateleira, e um caixa aberto numa loja com o
+ *   operador vendendo na outra é um dia inteiro de conferência errada.
  */
 export async function loader({ request }: Route.LoaderArgs) {
   const usuario = await usuarioDaSessao(request)
@@ -35,6 +44,13 @@ export async function loader({ request }: Route.LoaderArgs) {
       status: 302,
       headers: { location: `/entrar?destino=${encodeURIComponent(destino)}` },
     })
+  }
+
+  // `usuario.loja` só existe depois de escolhida: é ela que separa a entrada da
+  // troca. Em `usuarioDaSessao` ela vem vazia enquanto ninguém escolheu.
+  const trocando = Boolean(usuario.loja)
+  if (trocando && !ehGerente(usuario.papel)) {
+    throw new Response(ACOES_DE_GERENTE.trocarDeLoja, { status: 403 })
   }
 
   const todas = await listarLojas()
@@ -52,6 +68,12 @@ export async function loader({ request }: Route.LoaderArgs) {
 export async function action({ request }: Route.ActionArgs) {
   const usuario = await usuarioDaSessao(request)
   if (!usuario) throw new Response(null, { status: 302, headers: { location: "/entrar" } })
+
+  // A guarda vale no action também: o loader protege a tela, e é o action que
+  // move a loja de verdade.
+  if (usuario.loja && !ehGerente(usuario.papel)) {
+    return data({ erro: ACOES_DE_GERENTE.trocarDeLoja }, { status: 403 })
+  }
 
   const form = await request.formData()
   const escolhida = String(form.get("loja") ?? "")

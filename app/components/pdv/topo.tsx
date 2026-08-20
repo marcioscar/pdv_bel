@@ -5,7 +5,7 @@ import { AvisosDoTopo } from "~/components/pdv/avisos-topo"
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
 import { Kbd } from "~/components/ui/kbd"
-import { secoesDoPapel } from "~/lib/permissoes"
+import { ehGerente, secoesDoPapel } from "~/lib/permissoes"
 import { cn } from "~/lib/utils"
 
 type Props = {
@@ -33,6 +33,8 @@ export function Topo({
   children,
 }: Props) {
   const { pathname } = useLocation()
+  // Trocar a loja do turno é do gerente: move venda, estoque e caixa de lugar.
+  const podeTrocar = lojasPermitidas > 1 && ehGerente(papel)
 
   return (
     <header className="flex items-center justify-between gap-2 border-b border-border px-2.5 py-2 sm:px-5 sm:py-2.5">
@@ -88,8 +90,16 @@ export function Topo({
         {/* Âmbar, não azul nem vermelho: azul é ação comum e passa batido, vermelho
             significa erro. Aqui o recado é "confira antes de vender" — a venda vai
             para a loja escrita aqui, e reparar nisso depois custa estorno. */}
+        {/* Só quem pode trocar recebe um link; para o operador o selo continua
+            mostrando a loja, mas não promete uma tela que responderia 403. */}
         <Button
-          render={<Link to={`/loja?destino=${encodeURIComponent(pathname)}`} />}
+          render={
+            podeTrocar ? (
+              <Link to={`/loja?destino=${encodeURIComponent(pathname)}`} />
+            ) : (
+              <span />
+            )
+          }
           nativeButton={false}
           tabIndex={-1}
           variant="secondary"
@@ -99,7 +109,7 @@ export function Topo({
             "border-amber-400 bg-amber-100 text-amber-950 hover:bg-amber-200",
             "dark:border-amber-500/50 dark:bg-amber-500/20 dark:text-amber-200 dark:hover:bg-amber-500/30"
           )}
-          title={lojasPermitidas > 1 ? "Trocar de loja" : "Loja em que você está operando"}
+          title={podeTrocar ? "Trocar de loja" : "Loja em que você está operando"}
         >
           <Store className="size-4" aria-hidden />
           {loja}
