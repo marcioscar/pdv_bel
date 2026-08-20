@@ -218,6 +218,61 @@ export async function registrarAjuste(
   return { movimento, diferenca, saldo: saldoContado }
 }
 
+/**
+ * A ficha de um produto: todo movimento, do primeiro ao último, com o saldo
+ * depois de cada um.
+ *
+ * O saldo acumulado é a razão de a ficha existir. Uma lista de lançamentos
+ * responde "o que aconteceu"; a coluna de saldo responde "quando o número virou
+ * o que é" — que é a pergunta de quem está investigando uma falta. Ele é somado
+ * aqui, em ordem cronológica, e não guardado: o livro continua sendo a única
+ * verdade, como em todo o resto deste sistema.
+ *
+ * Ordena por data CRESCENTE para acumular, e a tela inverte para mostrar. Somar
+ * de trás para frente daria o saldo de cada instante ao contrário — o número
+ * certo no lugar errado, que é o pior tipo de erro numa ficha.
+ */
+export async function fichaDoProduto(produtoId: string, lojas: string[]) {
+  const movimentos = await db.movimentoEstoque.findMany({
+    where: { produtoId, loja: { in: lojas } },
+    orderBy: { criadoEm: "asc" },
+  })
+
+  /** Um acumulador por loja: o saldo de QI não é afetado pelo movimento de NRT. */
+  const acumulado = new Map<string, number>()
+
+  const linhas = movimentos.map((m) => {
+    const anterior = acumulado.get(m.loja) ?? 0
+    const saldo = arredondar(anterior + m.quantidade)
+    acumulado.set(m.loja, saldo)
+
+    return {
+      id: m.id,
+      criadoEm: m.criadoEm,
+      loja: m.loja,
+      tipo: m.tipo,
+      quantidade: m.quantidade,
+      saldo,
+      operador: m.operador,
+      vendaId: m.vendaId,
+      vendaNumero: m.vendaNumero,
+      transferenciaId: m.transferenciaId,
+      transferenciaNumero: m.transferenciaNumero,
+      observacao: m.observacao,
+    }
+  })
+
+  return {
+    linhas,
+    /** O saldo final de cada loja — o mesmo que a soma do livro devolveria. */
+    saldos: [...acumulado.entries()]
+      .map(([loja, saldo]) => ({ loja, saldo }))
+      .sort((a, b) => lojas.indexOf(a.loja) - lojas.indexOf(b.loja)),
+  }
+}
+
+export type FichaDeEstoque = Awaited<ReturnType<typeof fichaDoProduto>>
+
 /** Últimos lançamentos, para a tela de estoque mostrar o que acabou de entrar. */
 export async function movimentosRecentes(loja: string, limite = 40) {
   const movimentos = await db.movimentoEstoque.findMany({

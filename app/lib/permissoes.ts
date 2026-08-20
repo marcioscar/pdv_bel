@@ -101,6 +101,12 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         somenteGerente: false,
       },
       {
+        para: "/admin/ficha",
+        rotulo: "Ficha de estoque",
+        descricao: "Todo movimento de um produto, com o saldo depois de cada um",
+        somenteGerente: false,
+      },
+      {
         para: "/admin/perdas",
         rotulo: "Perdas no transporte",
         descricao: "O que saiu de uma loja e não chegou na outra, por rota",
