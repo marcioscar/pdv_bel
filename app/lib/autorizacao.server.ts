@@ -5,6 +5,7 @@ import {
   descontoExigeAutorizacao,
   DIAS_DE_CARENCIA,
   formaEstendeCredito,
+  HORAS_DE_VALIDADE,
   percentualDoDesconto,
   type MotivoDeAutorizacao,
 } from "~/lib/autorizacao"
@@ -313,12 +314,23 @@ export async function decidirAutorizacao(entrada: {
   return { ok: true as const }
 }
 
-/** O vendedor desistiu da venda: o pedido sai da fila do gerente. */
+/**
+ * O vendedor dá baixa: a venda não vai sair.
+ *
+ * Vale para o pedido que ainda espera (sai da fila do gerente) e também para a
+ * liberação já concedida e não usada. Sem o segundo caso, uma aprovação ficava
+ * pendurada até expirar: o vendedor cancelava a venda no caixa, e o aviso
+ * continuava no topo oferecendo retomar uma venda que ele já tinha desistido.
+ *
+ * `situacao` no filtro, e não só o id: uma autorização já USADA não pode voltar
+ * atrás — ela aponta para uma venda gravada. E é o filtro que torna esta função
+ * segura de chamar às cegas ao limpar o carrinho, sem a tela precisar saber se a
+ * liberação foi consumida ou não.
+ */
 export async function cancelarAutorizacao(id: string, solicitanteId: string) {
   const { count } = await db.autorizacao.updateMany({
-    // O próprio dono, e só enquanto pendente: cancelar a aprovação de outro
-    // seria apagar a decisão de um gerente.
-    where: { id, solicitanteId, situacao: "pendente" },
+    // O próprio dono: dar baixa na liberação de outro seria apagar trabalho alheio.
+    where: { id, solicitanteId, situacao: { in: ["pendente", "aprovada"] } },
     data: { situacao: "cancelada" },
   })
   return count > 0
@@ -383,6 +395,11 @@ export async function contagemDeAutorizacoes(usuario: {
 }) {
   const desde = new Date(Date.now() - 24 * 60 * 60 * 1000)
 
+  // A aprovação vale por HORAS_DE_VALIDADE contadas da decisão; passado isso ela
+  // não serve para fechar nada, e anunciá-la seria mandar o vendedor a uma tela
+  // onde o botão de retomar não existe mais.
+  const valida = new Date(Date.now() - HORAS_DE_VALIDADE * 60 * 60 * 1000)
+
   const [aDecidir, aguardando, respondidas] = await Promise.all([
     db.autorizacao.count({
       where: { situacao: "pendente", loja: { in: usuario.lojasPermitidas } },
@@ -390,11 +407,21 @@ export async function contagemDeAutorizacoes(usuario: {
     db.autorizacao.count({
       where: { solicitanteId: usuario.id, situacao: "pendente", criadaEm: { gte: desde } },
     }),
+    /**
+     * Só o que ainda pede uma ação do vendedor.
+     *
+     * "aprovada" que já virou venda é "usada" e sai sozinha; a que ele dispensou
+     * é "cancelada" e também sai. O que não pode é a liberação de uma venda
+     * abandonada ficar contando no topo até expirar — foi o que acontecia, e o
+     * aviso passava a apontar para uma venda que ninguém ia fechar.
+     */
     db.autorizacao.count({
       where: {
         solicitanteId: usuario.id,
-        situacao: { in: ["aprovada", "negada"] },
-        criadaEm: { gte: desde },
+        OR: [
+          { situacao: "aprovada", decididaEm: { gte: valida } },
+          { situacao: "negada", criadaEm: { gte: desde } },
+        ],
       },
     }),
   ])
@@ -436,12 +463,16 @@ export async function conferirAutorizacao(entrada: {
   if (!aprovacaoValida(autorizacao)) {
     return {
       ok: false as const,
+      // Cada situação com o seu texto: "expirou" numa liberação que o próprio
+      // vendedor dispensou manda ele esperar o relógio em vez de pedir de novo.
       erro:
         autorizacao.situacao === "pendente"
           ? "A autorização ainda não foi decidida"
           : autorizacao.situacao === "negada"
             ? "A autorização foi negada pelo gerente"
-            : "A autorização expirou — peça de novo",
+            : autorizacao.situacao === "cancelada"
+              ? "Esta liberação foi dispensada — peça outra"
+              : "A autorização expirou — peça de novo",
     }
   }
   if (autorizacao.loja !== entrada.loja) {

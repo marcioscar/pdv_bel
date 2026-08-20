@@ -585,6 +585,25 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
    */
   const fetcherSituacao = useFetcher<typeof action>()
 
+  /**
+   * Dá baixa na liberação que acompanhava o carrinho.
+   *
+   * Chamada às cegas sempre que o carrinho esvazia — por venda gravada ou por
+   * cancelamento —, porque a tela não tem como saber se a autorização foi
+   * consumida: quem decide isso é a gravação, no servidor. A baixa filtra por
+   * situação, então numa já "usada" ela não faz nada. Sem isto, a liberação de
+   * uma venda abandonada ficava viva por doze horas, com o aviso no topo
+   * oferecendo retomar uma venda que ninguém ia fechar.
+   */
+  const fetcherBaixa = useFetcher()
+  const darBaixaNaLiberacao = useCallback(
+    (id: string | null) => {
+      if (!id) return
+      fetcherBaixa.submit({ id }, { method: "post", action: "/autorizacoes" })
+    },
+    [fetcherBaixa]
+  )
+
   const [bloqueio, setBloqueio] = useState<Bloqueio | null>(null)
   const [autorizacaoErro, setAutorizacaoErro] = useState<string | null>(null)
 
@@ -908,7 +927,10 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     setFinalizando(false)
     setRecebidoTexto("")
     // A liberação vale para uma venda só; deixá-la no estado faria a próxima
-    // venda nascer com a permissão da anterior.
+    // venda nascer com a permissão da anterior. A baixa cobre o caso em que a
+    // venda fechou SEM precisar dela (o vendedor tirou o desconto, ou trocou o
+    // prazo por Pix): aí ela não foi consumida e sobraria válida.
+    darBaixaNaLiberacao(autorizacaoId)
     setAutorizacaoId(null)
     setBloqueio(null)
 
@@ -926,7 +948,9 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
         : `Venda #${numero} registrada`,
       "sucesso"
     )
-  }, [fetcher.state, fetcher.data, avisar, fetcher, forma])
+    // `autorizacaoId` entra nas dependências para a baixa usar o id do render
+    // corrente; a guarda de `ultimaResposta` torna re-execuções inócuas.
+  }, [fetcher.state, fetcher.data, avisar, fetcher, forma, autorizacaoId, darBaixaNaLiberacao])
 
   /**
    * Refaz o fechamento assim que a liberação entra no estado.
@@ -1272,11 +1296,14 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
 
   const cancelarVenda = useCallback(() => {
     if (venda.itens.length === 0) return
+    // A liberação morre com a venda que ela liberava.
+    darBaixaNaLiberacao(autorizacaoId)
+    setAutorizacaoId(null)
     despachar({ tipo: "limpar" })
     setFinalizando(false)
     voltarParaBusca()
     avisar("Venda cancelada", "erro")
-  }, [avisar, venda.itens.length, voltarParaBusca])
+  }, [autorizacaoId, avisar, darBaixaNaLiberacao, venda.itens.length, voltarParaBusca])
 
   // -------------------------------------------------------------------------
   // Teclado global — tudo passa por aqui para a lógica ficar num só lugar.

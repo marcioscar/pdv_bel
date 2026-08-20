@@ -38,7 +38,9 @@ export async function action({ request }: Route.ActionArgs) {
   const cancelada = await cancelarAutorizacao(String(formulario.get("id") ?? ""), eu.id)
   if (!cancelada) {
     return data(
-      { ok: false as const, erro: "O pedido já foi decidido — atualize a tela" },
+      // Falha esperada quando a liberação já virou venda: aí não há o que dar
+      // baixa. Também é o caso do caixa chamando às cegas ao limpar o carrinho.
+      { ok: false as const, erro: "Esta autorização já foi usada ou encerrada" },
       { status: 409 }
     )
   }
@@ -176,6 +178,12 @@ export default function Autorizacoes({ loaderData, actionData }: Route.Component
                           ? `Negada por ${pedido.decididaPor}`
                           : "Negada"}
                       </span>
+                    ) : pedido.situacao === "aprovada" ? (
+                      // Aprovada mas fora do prazo: sem esta linha o cartão
+                      // ficaria sem botão e sem motivo, parecendo defeito.
+                      <span className="text-xs text-muted-foreground">
+                        A liberação passou das {HORAS_DE_VALIDADE}h — peça de novo
+                      </span>
                     ) : (
                       <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
                         <Clock className="size-3.5 animate-pulse" aria-hidden />
@@ -183,7 +191,11 @@ export default function Autorizacoes({ loaderData, actionData }: Route.Component
                       </span>
                     )}
 
-                    {pedido.situacao === "pendente" ? (
+                    {/* Dar baixa vale para o pedido que espera e para a
+                        liberação concedida que não vai virar venda. Sem a
+                        segunda, a aprovação de uma venda abandonada ficava
+                        acesa no topo até expirar, doze horas depois. */}
+                    {pedido.situacao === "pendente" || liberada ? (
                       <Form method="post" className="ml-auto">
                         <input type="hidden" name="id" value={pedido.id} />
                         <Button
@@ -192,7 +204,8 @@ export default function Autorizacoes({ loaderData, actionData }: Route.Component
                           variant="ghost"
                           className="rounded-lg text-muted-foreground"
                         >
-                          <X className="size-4" aria-hidden /> Desistir
+                          <X className="size-4" aria-hidden />
+                          {pedido.situacao === "pendente" ? "Desistir" : "Não vou usar"}
                         </Button>
                       </Form>
                     ) : null}
