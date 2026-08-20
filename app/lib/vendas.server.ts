@@ -5,6 +5,7 @@ import {
   conferirAutorizacao,
   marcarAutorizacaoUsada,
 } from "~/lib/autorizacao.server"
+import { caixaAberto } from "~/lib/caixa.server"
 import { db } from "~/lib/db.server"
 import { depoisDoDia, diaAtras, diaDeHoje, inicioDoDia } from "~/lib/dia"
 import { movimentosDeVenda } from "~/lib/estoque.server"
@@ -202,6 +203,25 @@ export async function registrarVenda(pedido: PedidoVenda): Promise<ResultadoVend
   if (pedido.forma === "dinheiro") {
     if (pedido.recebido === null) return { ok: false, erro: "Informe o valor recebido" }
     if (pedido.recebido < total) return { ok: false, erro: "Valor recebido menor que o total" }
+  }
+
+  /**
+   * Caixa aberto é condição para gravar venda — cobrada AQUI, não só na tela.
+   *
+   * A trava vivia apenas no carregamento da tela do caixa, e isso deixava dois
+   * furos: quem já estava com a aba aberta continuava vendendo depois de o caixa
+   * ser fechado ou a abertura cancelada, e qualquer requisição montada fora da
+   * tela passava direto. Foi assim que uma venda entrou dois minutos depois de a
+   * abertura ter sido cancelada.
+   *
+   * É o mesmo princípio das outras regras deste arquivo: a guarda mora onde a
+   * gravação acontece, porque a tela é do outro lado da rede.
+   */
+  if (!(await caixaAberto(pedido.loja, diaDeHoje()))) {
+    return {
+      ok: false,
+      erro: `O caixa de ${pedido.loja} não foi aberto hoje — lance o troco da gaveta antes de vender`,
+    }
   }
 
   /**

@@ -1,3 +1,5 @@
+import type { Prisma } from "@prisma/client"
+
 import { db } from "~/lib/db.server"
 import { depoisDoDia, inicioDoDia } from "~/lib/dia"
 import { arredondar } from "~/lib/moeda"
@@ -10,6 +12,21 @@ import { moeda } from "~/lib/moeda"
 import { ehGerente } from "~/lib/permissoes"
 import { autenticar } from "~/lib/sessao.server"
 import { NAO_CANCELADA } from "~/lib/vendas.server"
+
+/**
+ * Lançamento que ainda vale: não foi cancelado.
+ *
+ * Constante compartilhada de propósito. Quando o cancelamento passou a marcar
+ * em vez de apagar, uma das consultas ficou para trás — a que a trava do caixa
+ * usa — e uma abertura CANCELADA continuou abrindo o caixa para vender. Com o
+ * filtro repetido à mão em cada consulta, esse esquecimento é questão de tempo.
+ *
+ * O `isSet: false` está aí porque no Mongo o campo de um lançamento nunca
+ * cancelado está AUSENTE do documento, e ausente não casa com `null` no Prisma.
+ */
+const NAO_CANCELADO: Prisma.MovimentoCaixaWhereInput = {
+  OR: [{ canceladoEm: null }, { canceladoEm: { isSet: false } }],
+}
 
 /**
  * O fechamento do caixa de um dia.
@@ -84,6 +101,21 @@ export async function resumoDoDia(loja: string, dia: string) {
      * uma conferência nova.
      */
     fechamento: fechamento && !fechamento.reabertoEm ? fechamento : null,
+    /**
+     * A reabertura, quando houve — para o caixa saber que está refazendo uma
+     * conferência, e não fazendo a primeira. Sem isso, o operador chega numa
+     * tela idêntica à de um dia comum e não entende por que precisa contar de
+     * novo o que ele já contou.
+     */
+    reabertura:
+      fechamento?.reabertoEm && fechamento.reabertoPor
+        ? {
+            em: fechamento.reabertoEm,
+            por: fechamento.reabertoPor,
+            vezes: fechamento.tentativas.length,
+            ultima: fechamento.tentativas[fechamento.tentativas.length - 1] ?? null,
+          }
+        : null,
   }
 }
 
@@ -97,7 +129,10 @@ export async function resumoDoDia(loja: string, dia: string) {
  */
 export async function caixaAberto(loja: string, dia: string) {
   const abertura = await db.movimentoCaixa.findFirst({
-    where: { loja, dia, tipo: "abertura" },
+    // Cancelada não abre nada: o esperado do fim do dia já a ignora, e deixar a
+    // trava aceitá-la fazia as duas contas discordarem — vendia-se o dia inteiro
+    // com um caixa que, para a conferência, nunca tinha sido aberto.
+    where: { loja, dia, tipo: "abertura", AND: [NAO_CANCELADO] },
     select: { id: true },
   })
   return abertura !== null
@@ -151,7 +186,7 @@ export async function lancarMovimentoDeCaixa(entrada: {
         loja: entrada.loja,
         dia: entrada.dia,
         tipo: "abertura",
-        AND: [{ OR: [{ canceladoEm: null }, { canceladoEm: { isSet: false } }] }],
+        AND: [NAO_CANCELADO],
       },
     })
     // Duas aberturas dobrariam o troco no esperado. Reforço é o lançamento certo
@@ -429,6 +464,23 @@ export function listarFechamentos(lojasPermitidas: string[], limite = 90) {
   })
 }
 
+/**
+ * Dias reabertos e ainda não fechados de novo.
+ *
+ * Precisam de lista própria: eles saem de `listarFechamentos` (não estão
+ * fechados) e cairiam em `diasSemFechamento` como se nunca tivessem sido
+ * conferidos — apagando da tela justamente a informação que a reabertura
+ * passou a guardar. Sem esta consulta, o registro existe no banco e não tem
+ * como ser alcançado pela interface.
+ */
+export function reabertosPendentes(lojasPermitidas: string[]) {
+  return db.fechamentoCaixa.findMany({
+    where: { loja: { in: lojasPermitidas }, NOT: { reabertoEm: null } },
+    orderBy: { reabertoEm: "desc" },
+    take: 30,
+  })
+}
+
 /** Dias com movimento que ninguém fechou — a lista que cobra o gerente. */
 export async function diasSemFechamento(lojasPermitidas: string[], desde: string) {
   const vendas = await db.venda.findMany({
@@ -443,14 +495,16 @@ export async function diasSemFechamento(lojasPermitidas: string[], desde: string
     comMovimento.add(`${v.loja}|${dia}`)
   }
 
+  /**
+   * Reaberto conta como "já tratado" aqui, mesmo não estando fechado: ele
+   * aparece na lista própria de reabertos, com o histórico. Deixá-lo nas duas
+   * listas faria o mesmo dia cobrar duas vezes, e na lista errada ele perderia
+   * a informação de que já houve uma contagem.
+   */
   const fechados = new Set(
     (
       await db.fechamentoCaixa.findMany({
-        where: {
-          loja: { in: lojasPermitidas },
-          dia: { gte: desde },
-          AND: [{ OR: [{ reabertoEm: null }, { reabertoEm: { isSet: false } }] }],
-        },
+        where: { loja: { in: lojasPermitidas }, dia: { gte: desde } },
         select: { loja: true, dia: true },
       })
     ).map((f) => `${f.loja}|${f.dia}`)

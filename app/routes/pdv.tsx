@@ -415,6 +415,23 @@ export async function action({ request }: Route.ActionArgs) {
      * balcão. Recusar antes do QR custa uma consulta; recusar depois custa um
      * estorno.
      */
+    /**
+     * Caixa fechado barra ANTES de existir QR na tela, pelo mesmo motivo da
+     * liberação do gerente: a venda em Pix só é gravada depois de o banco
+     * confirmar, e recusar lá deixaria o cliente pagando uma venda que não
+     * entra.
+     */
+    if (!(await caixaAberto(eu.loja, diaDeHoje()))) {
+      return data(
+        {
+          ok: false as const,
+          tipo: "pix" as const,
+          erro: `O caixa de ${eu.loja} não foi aberto hoje — lance o troco da gaveta antes de vender`,
+        },
+        { status: 400 }
+      )
+    }
+
     const recusa = await recusaPorFaltaDeLiberacao({
       clienteId: pedido.clienteId,
       desconto: pedido.desconto,
