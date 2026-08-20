@@ -227,6 +227,29 @@ export default function Fechamento({ loaderData, actionData }: Route.ComponentPr
           </p>
         ) : null}
 
+        {/* O dia foi reaberto: quem chega aqui precisa saber que está refazendo
+            uma contagem, e qual foi a anterior. */}
+        {resumo.reabertura ? (
+          <div className="mt-4 max-w-2xl rounded-xl border-2 border-primary/40 bg-primary/5 px-4 py-3">
+            <p className="text-sm">
+              <b>Este caixa foi reaberto</b> por {resumo.reabertura.por} em{" "}
+              {new Date(resumo.reabertura.em).toLocaleString("pt-BR")}.
+            </p>
+            {resumo.reabertura.ultima ? (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Na contagem anterior, {resumo.reabertura.ultima.fechadoPor} contou{" "}
+                <b className="font-mono">{moeda(resumo.reabertura.ultima.contado)}</b> para{" "}
+                <span className="font-mono">{moeda(resumo.reabertura.ultima.esperado)}</span>{" "}
+                esperados
+                {diferencaRelevante(resumo.reabertura.ultima.diferenca)
+                  ? ` — ${resumo.reabertura.ultima.diferenca > 0 ? "sobra" : "falta"} de ${moeda(Math.abs(resumo.reabertura.ultima.diferenca))}`
+                  : ""}
+                . Confira de novo e feche.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
         {fechado ? (
           <div className="mt-4 flex max-w-2xl flex-wrap items-center gap-3 rounded-xl border border-border bg-muted/40 px-4 py-3">
             <Lock className="size-4 shrink-0 text-muted-foreground" aria-hidden />
@@ -309,7 +332,30 @@ export default function Fechamento({ loaderData, actionData }: Route.ComponentPr
                 </dd>
               </div>
 
-              {fechado ? (
+              {/* O dia foi reaberto: quem chega aqui precisa saber que está refazendo
+            uma contagem, e qual foi a anterior. */}
+        {resumo.reabertura ? (
+          <div className="mt-4 max-w-2xl rounded-xl border-2 border-primary/40 bg-primary/5 px-4 py-3">
+            <p className="text-sm">
+              <b>Este caixa foi reaberto</b> por {resumo.reabertura.por} em{" "}
+              {new Date(resumo.reabertura.em).toLocaleString("pt-BR")}.
+            </p>
+            {resumo.reabertura.ultima ? (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Na contagem anterior, {resumo.reabertura.ultima.fechadoPor} contou{" "}
+                <b className="font-mono">{moeda(resumo.reabertura.ultima.contado)}</b> para{" "}
+                <span className="font-mono">{moeda(resumo.reabertura.ultima.esperado)}</span>{" "}
+                esperados
+                {diferencaRelevante(resumo.reabertura.ultima.diferenca)
+                  ? ` — ${resumo.reabertura.ultima.diferenca > 0 ? "sobra" : "falta"} de ${moeda(Math.abs(resumo.reabertura.ultima.diferenca))}`
+                  : ""}
+                . Confira de novo e feche.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
+        {fechado ? (
                 <>
                   <div className="mt-3 flex items-baseline justify-between border-t border-border pt-2">
                     <dt className="text-muted-foreground">Contado</dt>

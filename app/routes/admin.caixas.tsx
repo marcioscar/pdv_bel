@@ -5,7 +5,12 @@ import type { Route } from "./+types/admin.caixas"
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
 import { diferencaRelevante } from "~/lib/caixa"
-import { diasSemFechamento, listarFechamentos, reabrirCaixa } from "~/lib/caixa.server"
+import {
+  diasSemFechamento,
+  listarFechamentos,
+  reabertosPendentes,
+  reabrirCaixa,
+} from "~/lib/caixa.server"
 import { diaAtras, diaEmTexto } from "~/lib/dia"
 import { moeda } from "~/lib/moeda"
 import { exigirGerente } from "~/lib/sessao.server"
@@ -30,12 +35,13 @@ const DIAS_VIGIADOS = 30
 export async function loader({ request }: Route.LoaderArgs) {
   const eu = await exigirGerente(request, "reabrirCaixa")
 
-  const [fechamentos, semFechar] = await Promise.all([
+  const [fechamentos, semFechar, reabertos] = await Promise.all([
     listarFechamentos(eu.lojasPermitidas),
     diasSemFechamento(eu.lojasPermitidas, diaAtras(DIAS_VIGIADOS)),
+    reabertosPendentes(eu.lojasPermitidas),
   ])
 
-  return { fechamentos, semFechar }
+  return { fechamentos, semFechar, reabertos }
 }
 
 export async function action({ request }: Route.ActionArgs) {
@@ -60,7 +66,7 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function AdminCaixas({ loaderData, actionData }: Route.ComponentProps) {
-  const { fechamentos, semFechar } = loaderData
+  const { fechamentos, semFechar, reabertos } = loaderData
   const navegacao = useNavigation()
 
   const comDiferenca = fechamentos.filter((f) => diferencaRelevante(f.diferenca))
@@ -100,6 +106,56 @@ export default function AdminCaixas({ loaderData, actionData }: Route.ComponentP
         >
           {actionData.ok ? actionData.mensagem : actionData.erro}
         </p>
+      ) : null}
+
+      {/*
+        * Reaberto não está fechado nem foi esquecido: é um terceiro estado, e
+        * some das duas outras listas. Sem esta seção, a contagem desfeita ficava
+        * gravada e inalcançável pela tela.
+        */}
+      {reabertos.length > 0 ? (
+        <section className="mt-6">
+          <h2 className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <Unlock className="size-3.5" aria-hidden />
+            Reabertos, esperando nova conferência
+          </h2>
+          <div className="mt-3 grid gap-2">
+            {reabertos.map((r) => (
+              <Link
+                key={r.id}
+                to={`/admin/caixas/${r.id}`}
+                className="flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-xl border border-border bg-muted/30 px-4 py-3 text-sm hover:bg-muted/60"
+              >
+                <Badge variant="outline" className="font-mono text-[10px]">{r.loja}</Badge>
+                <span className="font-mono tabular-nums">{diaEmTexto(r.dia)}</span>
+                <span className="text-xs text-muted-foreground">
+                  reaberto por <b>{r.reabertoPor}</b> em{" "}
+                  {r.reabertoEm
+                    ? new Date(r.reabertoEm).toLocaleString("pt-BR", {
+                        dateStyle: "short",
+                        timeStyle: "short",
+                      })
+                    : ""}
+                </span>
+                <span className="ml-auto text-xs">
+                  {r.tentativas.length}{" "}
+                  {r.tentativas.length === 1 ? "contagem desfeita" : "contagens desfeitas"}
+                  {r.tentativas.length > 0 ? (
+                    <b
+                      className={cn(
+                        "ml-2 font-mono",
+                        diferencaRelevante(r.tentativas[r.tentativas.length - 1].diferenca) &&
+                          "text-destructive"
+                      )}
+                    >
+                      última: {moeda(r.tentativas[r.tentativas.length - 1].diferenca)}
+                    </b>
+                  ) : null}
+                </span>
+              </Link>
+            ))}
+          </div>
+        </section>
       ) : null}
 
       {semFechar.length > 0 ? (
