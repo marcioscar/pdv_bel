@@ -453,6 +453,10 @@ model MovimentoCaixa {
   canceladoEm  DateTime?
   canceladoPor String?
 
+  /// Quem liberou, quando o valor exigiu gerente. Fica no comprovante impresso:
+  /// é o nome que a segunda pessoa assina embaixo.
+  autorizadaPor String?
+
   @@index([loja, dia])
   @@map("movimentos_caixa")
 }

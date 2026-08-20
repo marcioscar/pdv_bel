@@ -36,6 +36,23 @@ export function tipoDeCaixaValido(valor: unknown): valor is TipoMovimentoDeCaixa
 }
 
 /**
+ * Sangria acima disto exige a senha de um gerente na hora.
+ *
+ * Sem um teto, qualquer operador registrava a saída de qualquer quantia — e o
+ * fechamento do dia BATIA, porque o esperado caía junto com o dinheiro que
+ * saiu. A conferência não pega esse caso; o que pega é uma segunda pessoa.
+ *
+ * O valor é generoso de propósito para as retiradas de rotina passarem direto:
+ * um teto que dispara todo dia vira senha digitada no automático, que é o mesmo
+ * que não ter teto.
+ */
+export const SANGRIA_SEM_AUTORIZACAO = 500
+
+export function sangriaExigeGerente(tipo: string, valor: number) {
+  return tipo === "sangria" && valor > SANGRIA_SEM_AUTORIZACAO
+}
+
+/**
  * A partir de quanto uma diferença deixa de ser arredondamento e vira problema.
  *
  * Um real. Abaixo disso é moeda de troco que ficou no bolso de alguém e voltou

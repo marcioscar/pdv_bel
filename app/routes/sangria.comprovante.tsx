@@ -54,6 +54,11 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
     ${movimento.observacao ? `<p class="motivo"><b>Motivo:</b> ${escapar(movimento.observacao)}</p>` : ""}
     <p class="motivo"><b>Lançado por:</b> ${escapar(movimento.operador)}</p>
+    ${
+      movimento.autorizadaPor
+        ? `<p class="motivo"><b>Liberado por:</b> ${escapar(movimento.autorizadaPor)}</p>`
+        : ""
+    }
 
     <div class="assinaturas">
       <div>${escapar(assina)}</div>
