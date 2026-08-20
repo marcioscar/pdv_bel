@@ -81,6 +81,43 @@ export default function AdminCaixa({ loaderData }: Route.ComponentProps) {
         </p>
       ) : null}
 
+      {/*
+        * As contagens desfeitas por reabertura.
+        *
+        * É a informação que a reabertura escondia quando apagava o fechamento:
+        * um caixa que precisou de três tentativas até bater conta uma história
+        * diferente de um que fechou certo na primeira.
+        */}
+      {f.tentativas.length > 0 ? (
+        <section className="mt-4 max-w-2xl rounded-xl border border-destructive/40 bg-destructive/5 p-4">
+          <h2 className="text-[10px] font-semibold uppercase tracking-wider text-destructive">
+            Fechado {f.tentativas.length + 1}× · contagens desfeitas
+          </h2>
+          <ul className="mt-2 space-y-2">
+            {f.tentativas.map((t, i) => (
+              <li key={i} className="text-xs">
+                <span className="font-mono tabular-nums">
+                  {new Date(t.fechadoEm).toLocaleString("pt-BR")}
+                </span>{" "}
+                · {t.fechadoPor} contou{" "}
+                <b className="font-mono">{moeda(t.contado)}</b> para{" "}
+                <span className="font-mono">{moeda(t.esperado)}</span> esperados
+                {" "}
+                <b className={cn("font-mono", diferencaRelevante(t.diferenca) && "text-destructive")}>
+                  ({t.diferenca > 0 ? "+" : ""}
+                  {moeda(t.diferenca)})
+                </b>
+                {t.observacao ? <span className="block text-muted-foreground">“{t.observacao}”</span> : null}
+                <span className="block text-muted-foreground">
+                  reaberto por {t.reabertoPor} em{" "}
+                  {new Date(t.reabertoEm).toLocaleString("pt-BR")}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
       <div className="mt-5 grid max-w-5xl gap-5 lg:grid-cols-[minmax(0,22rem)_1fr]">
         <section>
           <h2 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">

@@ -41,13 +41,14 @@ export async function resumoDoDia(loja: string, dia: string) {
     db.fechamentoCaixa.findUnique({ where: { loja_dia: { loja, dia } } }),
   ])
 
+  // Cancelado continua na lista para quem lê a tela, mas fora de toda soma.
+  const valendo = movimentos.filter((m) => !m.canceladoEm)
+
   const por = (forma: string) =>
     arredondar(porForma.find((f) => f.forma === forma)?._sum.total ?? 0)
 
   const soma = (tipo: TipoMovimentoDeCaixa) =>
-    arredondar(
-      movimentos.filter((m) => m.tipo === tipo).reduce((acc, m) => acc + m.valor, 0)
-    )
+    arredondar(valendo.filter((m) => m.tipo === tipo).reduce((acc, m) => acc + m.valor, 0))
 
   const abertura = soma("abertura")
   const sangrias = soma("sangria")
@@ -70,7 +71,12 @@ export async function resumoDoDia(loja: string, dia: string) {
     quantidadeVendas: porForma.reduce((a, f) => a + f._count._all, 0),
     canceladas,
     movimentos,
-    fechamento,
+    /**
+     * Reaberto é o mesmo que não fechado: o documento continua no banco com o
+     * histórico das contagens, mas o dia volta a aceitar lançamento e a pedir
+     * uma conferência nova.
+     */
+    fechamento: fechamento && !fechamento.reabertoEm ? fechamento : null,
   }
 }
 
@@ -106,8 +112,20 @@ export async function lancarMovimentoDeCaixa(entrada: {
     return { ok: false as const, erro: "Informe um valor maior que zero" }
   }
 
-  const jaFechado = await db.fechamentoCaixa.findUnique({
-    where: { loja_dia: { loja: entrada.loja, dia: entrada.dia } },
+  /**
+   * Reaberto NÃO conta como fechado.
+   *
+   * A checagem olhava só a existência do documento, e depois de reabrir ele
+   * continua lá — então nada podia ser lançado, e a reabertura não servia para
+   * nada. `findFirst` com o filtro, e não `findUnique`, porque a condição agora
+   * é composta.
+   */
+  const jaFechado = await db.fechamentoCaixa.findFirst({
+    where: {
+      loja: entrada.loja,
+      dia: entrada.dia,
+      AND: [{ OR: [{ reabertoEm: null }, { reabertoEm: { isSet: false } }] }],
+    },
   })
   if (jaFechado) {
     return {
@@ -118,7 +136,13 @@ export async function lancarMovimentoDeCaixa(entrada: {
 
   if (entrada.tipo === "abertura") {
     const jaAbriu = await db.movimentoCaixa.findFirst({
-      where: { loja: entrada.loja, dia: entrada.dia, tipo: "abertura" },
+      // Abertura cancelada não conta: quem errou o valor cancela e lança de novo.
+      where: {
+        loja: entrada.loja,
+        dia: entrada.dia,
+        tipo: "abertura",
+        AND: [{ OR: [{ canceladoEm: null }, { canceladoEm: { isSet: false } }] }],
+      },
     })
     // Duas aberturas dobrariam o troco no esperado. Reforço é o lançamento certo
     // para pôr mais dinheiro depois de o dia ter começado.
@@ -145,21 +169,42 @@ export async function lancarMovimentoDeCaixa(entrada: {
   return { ok: true as const }
 }
 
-/** Desfaz um lançamento errado, enquanto o dia não fechou. */
-export async function apagarMovimentoDeCaixa(id: string, loja: string) {
+/**
+ * Desfaz um lançamento errado — marcando, nunca apagando.
+ *
+ * Apagar de verdade era o caminho mais curto para sumir com dinheiro: lançar a
+ * sangria, imprimir o comprovante para justificar a saída com alguém, e depois
+ * apagar o registro. O papel existia, o sistema não sabia de nada. Cancelado
+ * fica na lista, riscado, com o nome de quem cancelou.
+ */
+export async function cancelarMovimentoDeCaixa(
+  id: string,
+  loja: string,
+  operador: string
+) {
   const movimento = await db.movimentoCaixa.findUnique({ where: { id } })
   if (!movimento || movimento.loja !== loja) {
     return { ok: false as const, erro: "Lançamento não encontrado" }
   }
+  if (movimento.canceladoEm) {
+    return { ok: false as const, erro: "Este lançamento já foi cancelado" }
+  }
 
-  const fechado = await db.fechamentoCaixa.findUnique({
-    where: { loja_dia: { loja, dia: movimento.dia } },
+  const fechado = await db.fechamentoCaixa.findFirst({
+    where: {
+      loja,
+      dia: movimento.dia,
+      AND: [{ OR: [{ reabertoEm: null }, { reabertoEm: { isSet: false } }] }],
+    },
   })
   if (fechado) {
     return { ok: false as const, erro: "Este dia já foi fechado" }
   }
 
-  await db.movimentoCaixa.delete({ where: { id } })
+  await db.movimentoCaixa.update({
+    where: { id },
+    data: { canceladoEm: new Date(), canceladoPor: operador },
+  })
   return { ok: true as const }
 }
 
@@ -197,9 +242,11 @@ export async function fecharCaixa(entrada: {
   const contado = arredondar(entrada.contado)
   const diferenca = arredondar(contado - resumo.esperado)
 
-  try {
-    const doc = await db.fechamentoCaixa.create({
-      data: {
+  const anterior = await db.fechamentoCaixa.findUnique({
+    where: { loja_dia: { loja: entrada.loja, dia: entrada.dia } },
+  })
+
+  const dados = {
         loja: entrada.loja,
         dia: entrada.dia,
         fechadoPor: entrada.operador,
@@ -219,8 +266,21 @@ export async function fecharCaixa(entrada: {
         quantidadeVendas: resumo.quantidadeVendas,
         canceladas: resumo.canceladas,
         observacao: entrada.observacao?.trim() || null,
-      },
-    })
+  }
+
+  try {
+    /**
+     * Dia reaberto reaproveita o MESMO documento, para as contagens anteriores
+     * continuarem penduradas nele. Criar um novo esbarraria no índice único —
+     * que é justamente o que impede dois fechamentos do mesmo expediente.
+     */
+    const doc = anterior
+      ? await db.fechamentoCaixa.update({
+          where: { id: anterior.id },
+          data: { ...dados, fechadoEm: new Date(), reabertoEm: null, reabertoPor: null },
+        })
+      : await db.fechamentoCaixa.create({ data: dados })
+
     return { ok: true, id: doc.id, diferenca }
   } catch (erro) {
     // O índice único é a trava de verdade contra duas abas fechando o mesmo dia.
@@ -232,15 +292,46 @@ export async function fecharCaixa(entrada: {
 }
 
 /**
- * Reabre o dia, apagando o fechamento.
+ * Reabre o dia — GUARDANDO a contagem desfeita.
  *
  * Existe porque fechar com o número errado acontece, e a alternativa seria o
- * operador "consertar" com uma sangria falsa — que estragaria o histórico em vez
- * de corrigi-lo. É ação de gerente, e o papel já impresso deixa de valer.
+ * operador "consertar" com uma sangria falsa. Mas apagar o fechamento anterior,
+ * como esta função fazia, abria coisa pior: dava para fechar, ver que faltavam
+ * R$ 300, reabrir, lançar uma sangria que explicasse a falta e fechar com a
+ * gaveta batendo — sem nenhum vestígio da primeira contagem.
+ *
+ * Agora cada contagem desfeita vai para `tentativas`, e o histórico do gerente
+ * passa a poder dizer "este caixa foi fechado três vezes até bater", que é
+ * exatamente o que a reabertura silenciosa escondia.
  */
-export async function reabrirCaixa(loja: string, dia: string) {
-  const { count } = await db.fechamentoCaixa.deleteMany({ where: { loja, dia } })
-  return count > 0
+export async function reabrirCaixa(loja: string, dia: string, operador: string) {
+  const atual = await db.fechamentoCaixa.findUnique({ where: { loja_dia: { loja, dia } } })
+  if (!atual || atual.reabertoEm) return false
+
+  const agora = new Date()
+  await db.fechamentoCaixa.update({
+    where: { id: atual.id },
+    data: {
+      reabertoEm: agora,
+      reabertoPor: operador,
+      tentativas: {
+        set: [
+          ...atual.tentativas,
+          {
+            fechadoEm: atual.fechadoEm,
+            fechadoPor: atual.fechadoPor,
+            esperado: atual.esperado,
+            contado: atual.contado,
+            diferenca: atual.diferenca,
+            observacao: atual.observacao,
+            reabertoEm: agora,
+            reabertoPor: operador,
+          },
+        ],
+      },
+    },
+  })
+  return true
 }
 
 /**
@@ -289,7 +380,11 @@ export type FechamentoListado = Awaited<ReturnType<typeof listarFechamentos>>[nu
 
 export function listarFechamentos(lojasPermitidas: string[], limite = 90) {
   return db.fechamentoCaixa.findMany({
-    where: { loja: { in: lojasPermitidas } },
+    where: {
+      loja: { in: lojasPermitidas },
+      // Reaberto não está fechado: aparece como dia pendente, não como concluído.
+      AND: [{ OR: [{ reabertoEm: null }, { reabertoEm: { isSet: false } }] }],
+    },
     orderBy: [{ dia: "desc" }, { loja: "asc" }],
     take: limite,
   })
@@ -312,7 +407,11 @@ export async function diasSemFechamento(lojasPermitidas: string[], desde: string
   const fechados = new Set(
     (
       await db.fechamentoCaixa.findMany({
-        where: { loja: { in: lojasPermitidas }, dia: { gte: desde } },
+        where: {
+          loja: { in: lojasPermitidas },
+          dia: { gte: desde },
+          AND: [{ OR: [{ reabertoEm: null }, { reabertoEm: { isSet: false } }] }],
+        },
         select: { loja: true, dia: true },
       })
     ).map((f) => `${f.loja}|${f.dia}`)

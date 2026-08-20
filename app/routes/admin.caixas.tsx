@@ -49,13 +49,13 @@ export async function action({ request }: Route.ActionArgs) {
     return data({ ok: false as const, erro: "Loja fora do seu alcance" }, { status: 403 })
   }
 
-  const reaberto = await reabrirCaixa(loja, dia)
+  const reaberto = await reabrirCaixa(loja, dia, eu.nome)
   if (!reaberto) {
     return data({ ok: false as const, erro: "Este dia não estava fechado" }, { status: 400 })
   }
   return {
     ok: true as const,
-    mensagem: `${loja} de ${diaEmTexto(dia)} reaberto — o papel já impresso deixa de valer`,
+    mensagem: `${loja} de ${diaEmTexto(dia)} reaberto — a contagem anterior fica registrada, e o papel já impresso deixa de valer`,
   }
 }
 

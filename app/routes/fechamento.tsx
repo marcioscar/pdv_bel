@@ -14,7 +14,7 @@ import {
   TIPOS_DE_MOVIMENTO_DE_CAIXA,
 } from "~/lib/caixa"
 import {
-  apagarMovimentoDeCaixa,
+  cancelarMovimentoDeCaixa,
   fecharCaixa,
   lancarMovimentoDeCaixa,
   resumoDoDia,
@@ -92,9 +92,13 @@ export async function action({ request }: Route.ActionArgs) {
   }
 
   if (intencao === "apagar") {
-    const r = await apagarMovimentoDeCaixa(String(formulario.get("id") ?? ""), eu.loja)
+    const r = await cancelarMovimentoDeCaixa(
+      String(formulario.get("id") ?? ""),
+      eu.loja,
+      eu.nome
+    )
     if (!r.ok) return data({ ok: false as const, erro: r.erro }, { status: 400 })
-    return { ok: true as const, mensagem: "Lançamento removido" }
+    return { ok: true as const, mensagem: "Lançamento cancelado — fica riscado na lista" }
   }
 
   if (intencao === "fechar") {
@@ -427,12 +431,25 @@ export default function Fechamento({ loaderData, actionData }: Route.ComponentPr
             {resumo.movimentos.length > 0 ? (
               <ul className="mt-4 divide-y divide-border border-y border-border">
                 {resumo.movimentos.map((m) => (
-                  <li key={m.id} className="flex items-center gap-2 py-2 text-sm">
-                    <Badge variant="outline" className="shrink-0 text-[10px]">
-                      {rotuloDoMovimento(m.tipo)}
+                  <li
+                    key={m.id}
+                    className={cn(
+                      "flex items-center gap-2 py-2 text-sm",
+                      // Cancelado fica visível e riscado: sumir da lista seria o
+                      // mesmo que apagar, só que com passo a mais.
+                      m.canceladoEm && "opacity-60"
+                    )}
+                  >
+                    <Badge
+                      variant={m.canceladoEm ? "destructive" : "outline"}
+                      className="shrink-0 text-[10px]"
+                    >
+                      {m.canceladoEm ? "cancelado" : rotuloDoMovimento(m.tipo)}
                     </Badge>
                     <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                      {m.observacao ?? ""}
+                      {m.canceladoEm
+                        ? `${rotuloDoMovimento(m.tipo)} cancelada por ${m.canceladoPor}`
+                        : (m.observacao ?? "")}
                       <span className="ml-1 font-mono">
                         {new Date(m.criadoEm).toLocaleTimeString("pt-BR", {
                           hour: "2-digit",
@@ -444,7 +461,8 @@ export default function Fechamento({ loaderData, actionData }: Route.ComponentPr
                     <span
                       className={cn(
                         "shrink-0 font-mono tabular-nums",
-                        m.tipo === "sangria" && "text-destructive"
+                        m.tipo === "sangria" && !m.canceladoEm && "text-destructive",
+                        m.canceladoEm && "line-through"
                       )}
                     >
                       {m.tipo === "sangria" ? "−" : "+"}
@@ -453,8 +471,8 @@ export default function Fechamento({ loaderData, actionData }: Route.ComponentPr
                     {/* O comprovante que acompanha o dinheiro. Vale para a
                         sangria (sai) e para o reforço (entra): nos dois casos
                         alguém carregou dinheiro de um lugar para outro. */}
-                    <BotaoComprovante id={m.id} />
-                    {!fechado ? (
+                    {!m.canceladoEm ? <BotaoComprovante id={m.id} /> : null}
+                    {!fechado && !m.canceladoEm ? (
                       <Form method="post" className="shrink-0">
                         <input type="hidden" name="intencao" value="apagar" />
                         <input type="hidden" name="dia" value={dia} />

@@ -334,6 +334,18 @@ type AutorizacaoItem {
   subtotal   Float
 }
 
+/// Uma contagem de gaveta que foi desfeita por uma reabertura.
+type ContagemDesfeita {
+  fechadoEm   DateTime
+  fechadoPor  String
+  esperado    Float
+  contado     Float
+  diferenca   Float
+  observacao  String?
+  reabertoEm  DateTime
+  reabertoPor String
+}
+
 /// Remessa de mercadoria de uma loja para outra.
 ///
 /// É um DOCUMENTO, e não um par de movimentos soltos, porque entre a saída e a
@@ -432,6 +444,15 @@ model MovimentoCaixa {
   operadorId String @db.ObjectId
   observacao String?
 
+  /// Lançamento errado é CANCELADO, nunca apagado.
+  ///
+  /// Apagar de verdade abria o caminho mais curto para sumir com dinheiro:
+  /// lançar a sangria, imprimir o comprovante para justificar a saída com
+  /// alguém, e depois apagar o registro — o papel existia, o sistema não sabia
+  /// de nada. Cancelado fica na lista, riscado, com quem cancelou.
+  canceladoEm  DateTime?
+  canceladoPor String?
+
   @@index([loja, dia])
   @@map("movimentos_caixa")
 }
@@ -474,6 +495,20 @@ model FechamentoCaixa {
   canceladas       Int @default(0)
 
   observacao String?
+
+  /// Reaberto: o fechamento deixou de valer e o dia aceita lançamento de novo.
+  ///
+  /// Antes, reabrir APAGAVA o fechamento. Dava para fechar, ver que faltavam
+  /// R$ 300, reabrir, lançar uma sangria que explicasse a falta e fechar com a
+  /// gaveta batendo — sem vestígio da primeira contagem. Agora o documento fica,
+  /// marcado, e as contagens anteriores ficam guardadas em `tentativas`.
+  reabertoEm  DateTime?
+  reabertoPor String?
+
+  /// Cada contagem que foi desfeita por uma reabertura, na ordem em que
+  /// aconteceram. É o que permite ver "este caixa foi fechado três vezes até
+  /// bater" — a informação que a reabertura silenciosa escondia.
+  tentativas ContagemDesfeita[]
 
   /// Um por loja por dia. É o índice que impede dois fechamentos do mesmo
   /// expediente — e não uma checagem na tela, que duas abas contornam. Serve
