@@ -81,6 +81,35 @@ export function meta(_: Route.MetaArgs) {
 
 const CAIXA = "01"
 
+/** Espera entre um documento e o outro na impressão em sequência. */
+const ENTRE_IMPRESSOES = 1500
+
+/**
+ * Imprime vários documentos um após o outro.
+ *
+ * `imprimirDocumento` resolve assim que o iframe é montado, não quando a caixa
+ * de impressão fecha — então dois disparos seguidos abrem dois diálogos ao mesmo
+ * tempo e um se perde. O intervalo dá tempo de o primeiro assumir o foco.
+ *
+ * Com o Chrome do caixa em `--kiosk-printing` não há diálogo nenhum, e a espera
+ * só separa os dois trabalhos na fila da impressora.
+ */
+async function imprimirEmSequencia(urls: string[]): Promise<string | null> {
+  let problema: string | null = null
+
+  for (const [indice, url] of urls.entries()) {
+    if (indice > 0) {
+      await new Promise((pronto) => setTimeout(pronto, ENTRE_IMPRESSOES))
+    }
+    const erro = await imprimirDocumento(url)
+    // Guarda o primeiro erro e segue: falhar o comprovante não pode impedir o
+    // cupom, que é o papel que o cliente leva.
+    if (erro && !problema) problema = erro
+  }
+
+  return problema
+}
+
 export async function loader({ request }: Route.LoaderArgs) {
   const eu = await exigirUsuario(request)
 
@@ -1150,14 +1179,24 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     setCliente(null)
     setForma("pix")
 
-    // O Pix grava a venda por outro caminho (a confirmação do banco), então o
-    // cupom precisa ser disparado aqui também — senão só a venda em Pix sairia
-    // sem comprovante, que é o tipo de diferença que ninguém nota até faltar.
-    if (imprimirCupom) {
-      imprimirDocumento(`/vendas/${r.vendaId}/cupom`).then((erro) => {
-        if (erro) avisar(erro, "erro")
-      })
-    }
+    /**
+     * Pix pago sai com DOIS papéis: o comprovante do recebimento e o cupom.
+     *
+     * São coisas diferentes — um diz que o dinheiro entrou, o outro o que o
+     * cliente levou — e quem paga por Pix costuma querer os dois, principalmente
+     * quem paga por outra pessoa.
+     *
+     * Em sequência, e não ao mesmo tempo: `imprimirDocumento` devolve o controle
+     * antes de a caixa de impressão abrir, então disparar os dois juntos põe dois
+     * diálogos brigando pelo foco, e um deles se perde. O comprovante vem
+     * primeiro porque é o que o cliente confere ali, com o celular na mão.
+     */
+    imprimirEmSequencia([
+      `/vendas/${r.vendaId}/comprovante-pix`,
+      ...(imprimirCupom ? [`/vendas/${r.vendaId}/cupom`] : []),
+    ]).then((erro) => {
+      if (erro) avisar(erro, "erro")
+    })
 
     setPix((atual) =>
       atual ? { ...atual, concluida: { numero: r.numero, pagoEm: r.pagoEm }, motivoPendente: null } : atual

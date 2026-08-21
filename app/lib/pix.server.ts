@@ -21,6 +21,9 @@ type CobRespostaInter = {
     valor: string
     horario: string
     devolucoes?: unknown[]
+    /** Quem pagou. O Banco Central manda quando o participante informa. */
+    pagador?: { nome?: string; cpf?: string; cnpj?: string }
+    infoPagador?: string
   }[]
 }
 
@@ -37,6 +40,15 @@ export type PixImediato = {
   /** O Inter devolve o valor como string; guardamos numérico para comparar. */
   valorPago: number | null
   devolucoes: number
+  /**
+   * Quem pagou, quando o banco informa.
+   *
+   * Nem toda transação traz — depende do participante de origem. O comprovante
+   * omite a linha em vez de imprimir "não informado", que só ocuparia espaço na
+   * bobina para dizer que não sabe.
+   */
+  pagadorNome: string | null
+  pagadorDocumento: string | null
 }
 
 async function paraSaida(dados: CobRespostaInter): Promise<PixImediato> {
@@ -54,6 +66,8 @@ async function paraSaida(dados: CobRespostaInter): Promise<PixImediato> {
     expiracaoSegundos: dados.calendario?.expiracao ?? 0,
     pagoEm: recebido?.horario ?? null,
     endToEndId: recebido?.endToEndId ?? null,
+    pagadorNome: recebido?.pagador?.nome ?? null,
+    pagadorDocumento: recebido?.pagador?.cpf ?? recebido?.pagador?.cnpj ?? null,
     valorPago: recebido ? Number(recebido.valor) : null,
     devolucoes: recebido?.devolucoes?.length ?? 0,
   }

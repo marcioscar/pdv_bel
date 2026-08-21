@@ -20,6 +20,8 @@ export default [
   route("transferencias/:transferenciaId/romaneio", "routes/transferencia.romaneio.tsx"),
   route("vendas/:vendaId/boleto.pdf", "routes/boleto.tsx"),
   route("vendas/:vendaId/cupom", "routes/cupom.tsx"),
+  // O cupom diz o que o cliente levou; este diz que o dinheiro entrou.
+  route("vendas/:vendaId/comprovante-pix", "routes/comprovante.pix.tsx"),
 
   // Escritório: o layout de admin cobra a permissão declarada em lib/permissoes.
   ...prefix("admin", [

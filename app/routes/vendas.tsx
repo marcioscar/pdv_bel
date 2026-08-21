@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { data, useFetcher, useRevalidator } from "react-router"
-import { Receipt } from "lucide-react"
+import { Loader2, Printer, Receipt } from "lucide-react"
 
 import type { Route } from "./+types/vendas"
 import { Topo } from "~/components/pdv/topo"
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
 import { Kbd } from "~/components/ui/kbd"
+import { imprimirDocumento } from "~/lib/impressao"
 import { db } from "~/lib/db.server"
 import { CobrancaDialogo } from "~/components/pdv/cobranca-dialogo"
 import { ItensDaVenda, SituacaoCobrancas } from "~/components/pdv/venda-celulas"
@@ -484,6 +485,9 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                                     minute: "2-digit",
                                   })}
                                 </span>
+                                {/* O cliente costuma pedir depois — principalmente
+                                    quem pagou por outra pessoa. */}
+                                <BotaoComprovantePix vendaId={venda.id} />
                               </span>
                             ) : (
                               <span
@@ -650,5 +654,41 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
         </div>
       ) : null}
     </main>
+  )
+}
+
+/**
+ * Reimprime o comprovante do Pix recebido.
+ *
+ * Vai direto para a impressora, como o cupom: quem está no balcão não vai
+ * procurar a aba, apertar Ctrl+P e fechá-la com o cliente esperando.
+ */
+function BotaoComprovantePix({ vendaId }: { vendaId: string }) {
+  const [gerando, setGerando] = useState(false)
+
+  return (
+    <Button
+      type="button"
+      size="icon-sm"
+      variant="ghost"
+      tabIndex={-1}
+      disabled={gerando}
+      aria-label="Imprimir comprovante do Pix"
+      title="Imprimir o comprovante do Pix recebido"
+      className="text-muted-foreground"
+      onClick={async (evento) => {
+        // A linha inteira abre o detalhe da venda; o botão faz outra coisa.
+        evento.stopPropagation()
+        setGerando(true)
+        await imprimirDocumento(`/vendas/${vendaId}/comprovante-pix`)
+        setGerando(false)
+      }}
+    >
+      {gerando ? (
+        <Loader2 className="size-3.5 animate-spin" aria-hidden />
+      ) : (
+        <Printer className="size-3.5" aria-hidden />
+      )}
+    </Button>
   )
 }
