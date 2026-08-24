@@ -10,6 +10,13 @@ import {
   type Urgencia,
 } from "~/lib/compras"
 
+export type FornecedorAlternativo = {
+  fornecedorId: string
+  nome: string
+  custo: number
+  ultimaCompra: Date
+}
+
 export type LinhaDeCompra = {
   produtoId: string
   codigo: string
@@ -28,8 +35,19 @@ export type LinhaDeCompra = {
   comprar: number
   /** Em quantos dias o saldo acaba no ritmo medido. null se o produto não gira. */
   diasRestantes: number | null
-  /** Quanto custa a compra sugerida, a preço de venda — serve para dimensionar. */
+  /**
+   * Custo unitário para dimensionar a compra: o da última compra registrada
+   * quando existe, senão o preço de venda como aproximação — melhor que nada,
+   * mas superestima, então `temCusto` diz qual dos dois é este número.
+   */
+  custoUnitario: number
+  temCusto: boolean
   valorEstimado: number
+  /** Quem forneceu por último. null quando o histórico não traz ninguém. */
+  fornecedorId: string | null
+  fornecedorNome: string | null
+  /** Os demais, para comparar preço na hora de decidir. Sem o principal. */
+  outrosFornecedores: FornecedorAlternativo[]
   urgencia: Urgencia
   diasComVenda: number
   diasAnalisados: number
@@ -63,6 +81,21 @@ export async function listaDeCompra(opcoes: { incluirSuficientes?: boolean } = {
   })
   const porId = new Map(produtos.map((p) => [p.id, p]))
 
+  const fornecimentos = await db.fornecimento.findMany({
+    where: { produtoId: { in: produtos.map((p) => p.id) } },
+  })
+  const fornecedores = await db.fornecedor.findMany({
+    where: { id: { in: [...new Set(fornecimentos.map((f) => f.fornecedorId))] } },
+  })
+  const nomeDoFornecedor = new Map(
+    fornecedores.map((f) => [f.id, f.nomeFantasia || f.razaoSocial])
+  )
+  const fornecimentosPorProduto = new Map<string, typeof fornecimentos>()
+  for (const f of fornecimentos) {
+    if (!fornecimentosPorProduto.has(f.produtoId)) fornecimentosPorProduto.set(f.produtoId, [])
+    fornecimentosPorProduto.get(f.produtoId)!.push(f)
+  }
+
   const linhas: LinhaDeCompra[] = []
 
   for (const politica of politicas) {
@@ -81,6 +114,22 @@ export async function listaDeCompra(opcoes: { incluirSuficientes?: boolean } = {
 
     const comprar = quantoComprar(politica, estoque, emTransito)
 
+    const doProduto = (fornecimentosPorProduto.get(produto.id) ?? [])
+      .slice()
+      .sort((a, b) => (a.principal ? -1 : b.principal ? 1 : 0))
+    const principal = doProduto.find((f) => f.principal) ?? doProduto[0] ?? null
+    const outros = doProduto
+      .filter((f) => f !== principal)
+      .map((f) => ({
+        fornecedorId: f.fornecedorId,
+        nome: nomeDoFornecedor.get(f.fornecedorId) ?? "—",
+        custo: f.ultimoCusto,
+        ultimaCompra: f.ultimaCompra,
+      }))
+
+    const temCusto = principal !== null
+    const custoUnitario = principal?.ultimoCusto ?? produto.preco
+
     linhas.push({
       produtoId: politica.produtoId,
       codigo: produto.codigo,
@@ -95,7 +144,12 @@ export async function listaDeCompra(opcoes: { incluirSuficientes?: boolean } = {
       pontoDePedido: politica.pontoDePedido,
       comprar,
       diasRestantes: diasDeCobertura(politica.consumoMedioDiario, estoque),
-      valorEstimado: comprar * produto.preco,
+      custoUnitario,
+      temCusto,
+      valorEstimado: comprar * custoUnitario,
+      fornecedorId: principal?.fornecedorId ?? null,
+      fornecedorNome: principal ? (nomeDoFornecedor.get(principal.fornecedorId) ?? "—") : null,
+      outrosFornecedores: outros,
       urgencia: situacao,
       diasComVenda: politica.diasComVenda,
       diasAnalisados: politica.diasAnalisados,

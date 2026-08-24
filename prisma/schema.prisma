@@ -625,3 +625,89 @@ model Fornecedor {
 
   @@map("fornecedores")
 }
+
+/// Quem já forneceu um produto, por quanto e quando.
+///
+/// Derivado do histórico de compra, como a política: some e volta a cada
+/// importação. Um produto pode ter vários fornecedores — 117 têm — e é por isso
+/// que isto é uma tabela e não um campo `fornecedorId` no `Produto`. Um campo só
+/// obrigaria a escolher um e jogar fora a alternativa, que é exatamente a
+/// informação que serve na hora de negociar preço.
+model Fornecimento {
+  id           String @id @default(auto()) @map("_id") @db.ObjectId
+  produtoId    String @db.ObjectId
+  fornecedorId String @db.ObjectId
+
+  /// O custo unitário da compra mais recente deste produto neste fornecedor.
+  /// É o que a tela de compras usa para estimar o desembolso — preço de venda
+  /// superestima, e um custo médio de dois anos ignora o reajuste do ano.
+  ultimoCusto  Float
+  ultimaCompra DateTime
+
+  /// O acumulado, que mede a relevância: um fornecedor que entregou o produto
+  /// trinta vezes é o de sempre; o que entregou uma foi quebra-galho.
+  quantidadeTotal Float
+  compras         Int
+
+  /// O de sempre para este produto: quem forneceu por último. Exatamente um por
+  /// produto. É ele que entra no pedido quando ninguém escolhe outro.
+  principal Boolean @default(false)
+
+  @@unique([produtoId, fornecedorId])
+  @@index([fornecedorId])
+  @@index([produtoId, principal])
+  @@map("fornecimentos")
+}
+
+/// Um pedido de compra: o que se pediu, a quem, por quanto.
+///
+/// Nasce da tela de compras e vira papel. A situação existe porque um pedido
+/// tem vida: é montado, é mandado ao fornecedor, e um dia a mercadoria chega —
+/// e enquanto não chega, o que foi pedido conta como estoque a caminho, do
+/// mesmo jeito que a transferência em trânsito.
+model PedidoDeCompra {
+  id     String @id @default(auto()) @map("_id") @db.ObjectId
+  /// Sequência única da rede: a compra é central, e um número por loja faria o
+  /// mesmo pedido ter nomes diferentes dependendo de quem olha.
+  numero Int    @unique
+
+  fornecedorId String @db.ObjectId
+  /// O nome como estava no dia do pedido. Desnormalizado de propósito: o
+  /// cadastro pode ser corrigido depois, e o papel já impresso não muda.
+  fornecedorNome String
+
+  /// "rascunho" | "enviado" | "recebido" | "cancelado"
+  situacao String @default("rascunho")
+
+  itens PedidoItem[]
+  total Float
+
+  criadoEm   DateTime @default(now())
+  criadoPor  String
+  observacao String?
+
+  enviadoEm  DateTime?
+  enviadoPor String?
+
+  recebidoEm  DateTime?
+  recebidoPor String?
+
+  canceladoEm  DateTime?
+  canceladoPor String?
+
+  @@index([situacao, criadoEm])
+  @@index([fornecedorId])
+  @@map("pedidos_de_compra")
+}
+
+type PedidoItem {
+  produtoId String @db.ObjectId
+  codigo    String
+  descricao String
+  unidade   String
+  quantidade Float
+  /// O custo esperado no dia do pedido. O que a nota cobrar pode divergir — e é
+  /// justamente por guardar o esperado que a divergência fica visível depois.
+  custoUnitario Float
+  total         Float
+}
