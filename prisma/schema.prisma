@@ -546,3 +546,41 @@ model AlteracaoDePreco {
   @@index([criadoEm])
   @@map("alteracoes_preco")
 }
+
+/// A política de compra de um produto, calculada a partir do histórico de venda.
+///
+/// Fica separada do `Produto` porque é DERIVADA: some e volta a cada recálculo,
+/// enquanto código, descrição e preço são cadastro que alguém digitou. Misturar
+/// as duas coisas faria uma rotina de importação passar por cima de dado humano.
+///
+/// Os números são da REDE somada, não de cada loja: a compra é central (a matriz
+/// compra e distribui, e é isso que as transferências no histórico mostram).
+model PoliticaDeCompra {
+  id        String @id @default(auto()) @map("_id") @db.ObjectId
+  produtoId String @unique @db.ObjectId
+
+  /// Quanto sai por dia, em média, na rede toda. É a base de todo o resto.
+  consumoMedioDiario Float
+
+  /// Abaixo disto o produto está em risco: é o que cobre o atraso do fornecedor
+  /// e a semana em que a venda vem acima da média.
+  estoqueMinimo Float
+
+  /// Quando o saldo cruza para baixo daqui, é hora de comprar — o que resta
+  /// cobre só o tempo até a mercadoria nova chegar.
+  pontoDePedido Float
+
+  /// Quanto comprar quando chega a hora, antes de descontar o que já existe.
+  loteDeCompra Float
+
+  /// De onde saíram os números, para ninguém confiar num cálculo velho sem saber.
+  calculadoEm   DateTime @default(now())
+  diasAnalisados Int
+  /// Em quantos dias distintos houve venda. Um produto vendido em 2 dias de 365
+  /// tem média baixa e comportamento errático — a média sozinha não conta isso.
+  diasComVenda  Int
+  /// Total vendido no período analisado, para conferir a conta de fora.
+  vendidoNoPeriodo Float
+
+  @@map("politicas_de_compra")
+}

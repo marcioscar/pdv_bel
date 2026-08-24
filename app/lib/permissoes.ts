@@ -116,6 +116,12 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         descricao: "O que saiu de uma loja e não chegou na outra, por rota",
         somenteGerente: true,
       },
+      {
+        para: "/admin/compras",
+        rotulo: "Compras",
+        descricao: "O que repor: ponto de pedido e quanto comprar, da rede toda",
+        somenteGerente: true,
+      },
     ],
   },
   {
