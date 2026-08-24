@@ -89,6 +89,50 @@ layer de imagem Docker, então `certificados/` está no `.dockerignore`.
 `GET /saude` diz qual build está no ar, se o banco responde e contra qual
 ambiente do Inter a aplicação aponta.
 
+## Impressão sem diálogo no caixa
+
+Cupom, comprovante de Pix, boleto e romaneio são impressos pelo navegador. Por
+padrão o Chrome abre a caixa de impressão a cada documento — inaceitável no
+balcão, onde saem dois papéis por venda em Pix.
+
+`--kiosk-printing` faz o Chrome imprimir direto na **impressora padrão do
+sistema**, sem perguntar nada. Duas condições que costumam ser esquecidas: a
+impressora padrão do Windows precisa ser a térmica, e **todas** as janelas do
+Chrome precisam estar fechadas antes de abrir com a flag — com uma instância já
+rodando, o Chrome só abre outra aba no processo existente e a flag é ignorada.
+
+**Windows** — atalho na área de trabalho, botão direito → Propriedades → Destino:
+
+```
+"C:\Program Files\Google\Chrome\Application\chrome.exe" --kiosk-printing --user-data-dir="C:\pdv-chrome" --app=https://pdv.brassaco.com
+```
+
+**macOS**:
+
+```bash
+open -na "Google Chrome" --args --kiosk-printing \
+  --user-data-dir="$HOME/.pdv-chrome" --app=https://pdv.brassaco.com
+```
+
+**Linux**:
+
+```bash
+google-chrome --kiosk-printing --user-data-dir=~/.pdv-chrome \
+  --app=https://pdv.brassaco.com &
+```
+
+As outras duas opções não são enfeite. `--user-data-dir` cria um perfil só do
+caixa: separa a sessão do PDV do Chrome pessoal de quem usa o computador e
+garante que a flag valha, já que é outra instância. `--app` abre sem barra de
+endereço nem abas — o operador não navega para lugar nenhum, e ninguém fecha o
+sistema sem querer clicando na aba errada.
+
+Para conferir se pegou: abra `chrome://version` e procure `--kiosk-printing` na
+linha de comando. Se não estiver lá, sobrou uma janela aberta antes.
+
+O tamanho do papel (80mm) e as margens vêm do driver da impressora, não do
+navegador: configure na impressora térmica em Dispositivos e Impressoras.
+
 ## Integração com o Banco Inter
 
 - Autenticação **mTLS** via dispatcher do undici — o `fetch` do Node não aceita

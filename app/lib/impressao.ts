@@ -17,8 +17,11 @@
  *   automatizado desse caminho precisa de navegador de verdade.
  * - se o `print()` falhar, abre numa aba — um passo extra é melhor que nada.
  *
- * Para não aparecer a caixa de impressão a cada venda, o Chrome do caixa pode ser
- * aberto com `--kiosk-printing`: aí ele imprime direto na impressora padrão.
+ * Para não aparecer a caixa de impressão a cada venda, o Chrome do caixa deve ser
+ * aberto com `--kiosk-printing`: aí ele imprime direto na impressora padrão. O
+ * README tem o atalho pronto por sistema, e as duas pegadinhas — a impressora
+ * padrão precisa ser a térmica, e nenhuma janela do Chrome pode estar aberta
+ * antes, senão a flag é ignorada.
  */
 export async function imprimirDocumento(url: string): Promise<string | null> {
   let endereco: string
