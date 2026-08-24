@@ -177,6 +177,12 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         somenteGerente: false,
       },
       {
+        para: "/admin/fornecedores",
+        rotulo: "Fornecedores",
+        descricao: "De quem se compra, e desde quando",
+        somenteGerente: true,
+      },
+      {
         para: "/admin/usuarios",
         rotulo: "Usuários",
         descricao: "Quem entra no sistema e com que papel",

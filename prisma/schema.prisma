@@ -584,3 +584,44 @@ model PoliticaDeCompra {
 
   @@map("politicas_de_compra")
 }
+
+/// De quem se compra.
+///
+/// A chave é o `codigo` do sistema antigo, e não o documento. Parece natural
+/// usar CNPJ — é o que identifica a empresa no mundo — mas o cadastro real não
+/// coopera: onze fornecedores foram cadastrados com o placeholder
+/// `000.000.000-00`, e um mesmo CNPJ aparece em dois códigos diferentes (um
+/// cadastro antigo e o atual da mesma empresa). Um índice único no documento
+/// recusaria a importação de doze cadastros legítimos.
+model Fornecedor {
+  id     String @id @default(auto()) @map("_id") @db.ObjectId
+  codigo String @unique
+
+  razaoSocial String
+  /// Metade dos cadastros não tem: a tela cai na razão social quando falta.
+  nomeFantasia String?
+
+  cidade String
+  bairro String
+
+  /// Só os dígitos, e ausente quando o cadastro veio com placeholder. Guardar
+  /// `00000000000` seria guardar uma mentira que parece um documento — e um dia
+  /// alguém emitiria algo com ela.
+  documento  String?
+  /// "FISICA" | "JURIDICA", derivado do documento. Nulo quando não há documento.
+  tipoPessoa String?
+
+  /// A data da última compra, do sistema antigo. É o que separa fornecedor vivo
+  /// de cadastro dormente: 69 dos 128 nunca compraram nada.
+  ultimaCompra DateTime?
+
+  /// Fornecedor não é apagado — assim como produto e cliente. Quando houver
+  /// compra registrada, apagar deixaria a compra órfã.
+  ativo      Boolean @default(true)
+  observacao String?
+
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  @@map("fornecedores")
+}
