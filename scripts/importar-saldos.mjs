@@ -1,8 +1,8 @@
 /**
  * Importa a posição de estoque de um arquivo do sistema antigo, por loja.
  *
- *   node scripts/importar-saldos.mjs public/stq029_1_2.json          # ensaio
- *   node scripts/importar-saldos.mjs public/stq029_1_2.json --gravar # grava
+ *   node scripts/importar-saldos.mjs dados/stq029_1_2.json          # ensaio
+ *   node scripts/importar-saldos.mjs dados/stq029_1_2.json --gravar # grava
  *
  * Quatro decisões que valem explicação:
  *

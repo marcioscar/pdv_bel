@@ -12,5 +12,10 @@
 # Dumps feitos antes de apagar dados
 /backups
 
+# Exportações do sistema antigo: faturamento com razão social e CNPJ de cliente.
+# Ficam na máquina, fora do repositório — e fora de /public, que o servidor
+# entrega a quem pedir pela URL.
+/dados/
+
 # Permissões que o Claude Code grava por máquina
 /.claude/settings.local.json
