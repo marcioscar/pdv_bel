@@ -1,6 +1,7 @@
 import { db } from "~/lib/db.server"
 import { saldosPorProdutoELoja } from "~/lib/estoque.server"
 import { saldosEmTransito } from "~/lib/transferencias.server"
+import { saldosPedidos } from "~/lib/pedidos-compra.server"
 import {
   calcularPolitica,
   diasDeCobertura,
@@ -27,6 +28,8 @@ export type LinhaDeCompra = {
   estoque: number
   /** O que já saiu de uma loja e ainda não foi conferido na outra. */
   emTransito: number
+  /** O que já foi pedido a um fornecedor e ainda não chegou. */
+  emPedido: number
   /** Por loja, para quem compra ver se falta em todas ou só numa. */
   porLoja: Record<string, number>
   consumoMedioDiario: number
@@ -68,10 +71,11 @@ const ORDEM_DE_URGENCIA: Record<Urgencia, number> = {
  * cima dele. Produto novo aparece na lista depois do primeiro recálculo.
  */
 export async function listaDeCompra(opcoes: { incluirSuficientes?: boolean } = {}) {
-  const [politicas, saldos, transito] = await Promise.all([
+  const [politicas, saldos, transito, pedidos] = await Promise.all([
     db.politicaDeCompra.findMany(),
     saldosPorProdutoELoja(),
     saldosEmTransito(),
+    saldosPedidos(),
   ])
 
   if (politicas.length === 0) return []
@@ -108,11 +112,15 @@ export async function listaDeCompra(opcoes: { incluirSuficientes?: boolean } = {
     const porLoja = Object.fromEntries(porLojaMapa)
     const estoque = [...porLojaMapa.values()].reduce((soma, v) => soma + v, 0)
     const emTransito = transito.get(politica.produtoId) ?? 0
+    const emPedido = pedidos.get(politica.produtoId) ?? 0
 
     const situacao = urgencia(politica, estoque)
     if (situacao === "ok" && !opcoes.incluirSuficientes) continue
 
-    const comprar = quantoComprar(politica, estoque, emTransito)
+    // O pedido conta como estoque a caminho pela mesma razão que a transferência
+    // conta: já foi comprometido, e sem descontar os dois a lista sugeriria
+    // comprar de novo o que já está encomendado.
+    const comprar = quantoComprar(politica, estoque, emTransito + emPedido)
 
     const doProduto = (fornecimentosPorProduto.get(produto.id) ?? [])
       .slice()
@@ -138,6 +146,7 @@ export async function listaDeCompra(opcoes: { incluirSuficientes?: boolean } = {
       preco: produto.preco,
       estoque,
       emTransito,
+      emPedido,
       porLoja,
       consumoMedioDiario: politica.consumoMedioDiario,
       estoqueMinimo: politica.estoqueMinimo,
