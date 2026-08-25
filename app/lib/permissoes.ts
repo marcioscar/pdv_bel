@@ -164,6 +164,12 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         descricao: "Boletos por vencimento: em aberto, vencidos e recebidos",
         somenteGerente: true,
       },
+      {
+        para: "/admin/pedidos-de-compra",
+        rotulo: "Pedidos de compra",
+        descricao: "Todo pedido gerado, por fornecedor, período e situação",
+        somenteGerente: true,
+      },
     ],
   },
   {

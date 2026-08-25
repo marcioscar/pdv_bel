@@ -1,23 +1,19 @@
 import { useMemo, useState } from "react"
 import { data, Link, useFetcher } from "react-router"
-import { CheckCircle2, PackageCheck, Printer, Send, ShoppingBag, ShoppingCart, X } from "lucide-react"
+import { CheckCircle2, Printer, Send, ShoppingBag, ShoppingCart, X } from "lucide-react"
 
 import type { Route } from "./+types/admin.compras"
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
+import { ReceberPedido } from "~/components/pdv/pedido-compra"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { cn } from "~/lib/utils"
 import { exigirGerente } from "~/lib/sessao.server"
 import { db } from "~/lib/db.server"
 import { listaDeCompra, origemDaPolitica, type LinhaDeCompra } from "~/lib/compras.server"
-import {
-  criarPedido,
-  listarPedidos,
-  marcarEnviado,
-  marcarRecebido,
-  cancelarPedido,
-} from "~/lib/pedidos-compra.server"
+import { criarPedido, listarPedidos, aplicarSituacao } from "~/lib/pedidos-compra.server"
+import { rotuloDaSituacaoPedido } from "~/lib/pedidos-compra"
 import {
   DIAS_DE_COBERTURA,
   DIAS_DE_ENTREGA,
@@ -44,7 +40,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     listaDeCompra({ incluirSuficientes: true }),
     origemDaPolitica(),
     listarLojas(),
-    listarPedidos(20),
+    listarPedidos(6),
     db.fornecedor.findMany({
       where: { ativo: true },
       orderBy: [{ ultimaCompra: "desc" }, { razaoSocial: "asc" }],
@@ -124,17 +120,9 @@ export async function action({ request }: Route.ActionArgs) {
   }
 
   if (intencao === "situacao") {
-    const id = String(form.get("id") ?? "")
-    const passo = String(form.get("passo") ?? "")
+    const resultado = await aplicarSituacao(form, eu.nome)
     const loja = String(form.get("loja") ?? "")
-    const resultado =
-      passo === "enviar"
-        ? await marcarEnviado(id, eu.nome)
-        : passo === "receber"
-          ? await marcarRecebido(id, loja, eu.nome)
-          : passo === "cancelar"
-            ? await cancelarPedido(id, eu.nome)
-            : { ok: false as const, erro: "Ação inválida" }
+    const passo = String(form.get("passo") ?? "")
 
     return resultado.ok
       ? {
@@ -152,13 +140,6 @@ const CORES: Record<Urgencia, string> = {
   critico: "bg-amber-500/15 text-amber-700 dark:text-amber-400",
   comprar: "bg-primary/10 text-foreground",
   ok: "bg-muted text-muted-foreground",
-}
-
-const ROTULO_SITUACAO: Record<string, string> = {
-  rascunho: "Rascunho",
-  enviado: "Enviado",
-  recebido: "Recebido",
-  cancelado: "Cancelado",
 }
 
 export default function AdminCompras({ loaderData }: Route.ComponentProps) {
@@ -721,9 +702,17 @@ function PedidosRecentes({
 
   return (
     <section className="mt-8">
-      <h2 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-        Pedidos recentes
-      </h2>
+      <div className="flex items-baseline justify-between">
+        <h2 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Pedidos recentes
+        </h2>
+        <Link
+          to="/admin/pedidos-de-compra"
+          className="text-xs text-muted-foreground underline hover:text-foreground"
+        >
+          Ver todos, com filtro →
+        </Link>
+      </div>
       <ul className="mt-3 divide-y divide-border rounded-xl border border-border">
         {pedidos.map((p) => (
           <li key={p.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5">
@@ -740,7 +729,7 @@ function PedidosRecentes({
               variant={p.situacao === "cancelado" ? "destructive" : "outline"}
               className="text-[10px]"
             >
-              {ROTULO_SITUACAO[p.situacao] ?? p.situacao}
+              {rotuloDaSituacaoPedido(p.situacao)}
             </Badge>
 
             <div className="ml-auto flex items-center gap-1">
@@ -792,56 +781,6 @@ function PedidosRecentes({
         ))}
       </ul>
     </section>
-  )
-}
-
-/**
- * Recebe exige escolher a loja: a compra é da rede, mas o caminhão do
- * fornecedor para numa loja física, e é lá que o estoque precisa dar entrada.
- * Sem a loja escolhida o botão fica desabilitado — a alternativa era assumir
- * uma loja padrão, e advinhar errado creditaria mercadoria numa prateleira que
- * não a recebeu.
- */
-function ReceberPedido({
-  lojas,
-  gravando,
-  onReceber,
-}: {
-  lojas: string[]
-  gravando: boolean
-  onReceber: (loja: string) => void
-}) {
-  const [loja, setLoja] = useState("")
-
-  return (
-    <div className="flex items-center gap-1">
-      <select
-        value={loja}
-        onChange={(e) => setLoja(e.target.value)}
-        className={cn(
-          "h-8 rounded-lg border bg-background px-1.5 text-xs",
-          loja ? "border-border" : "border-destructive/50"
-        )}
-        aria-label="Loja que recebeu a mercadoria"
-      >
-        <option value="">Loja…</option>
-        {lojas.map((l) => (
-          <option key={l} value={l}>
-            {l}
-          </option>
-        ))}
-      </select>
-      <Button
-        type="button"
-        variant="ghost"
-        size="xs"
-        disabled={gravando || !loja}
-        onClick={() => onReceber(loja)}
-      >
-        <PackageCheck className="size-3.5" />
-        Recebido
-      </Button>
-    </div>
   )
 }
 

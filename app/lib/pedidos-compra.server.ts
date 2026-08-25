@@ -1,8 +1,17 @@
+import type { Prisma } from "@prisma/client"
+
 import { db } from "~/lib/db.server"
 import { arredondar } from "~/lib/moeda"
 import { saldosPorProdutoELoja } from "~/lib/estoque.server"
 import { saldosEmTransito } from "~/lib/transferencias.server"
 import { diasDeCobertura, quantoComprar, urgencia, type Urgencia } from "~/lib/compras"
+import {
+  PRIMEIRO_DIA,
+  ULTIMO_DIA,
+  depoisDoDia,
+  inicioDoDia,
+} from "~/lib/dia"
+import { SITUACOES_PEDIDO, type FiltroPedidos, type SituacaoPedido } from "~/lib/pedidos-compra"
 
 /**
  * O pedido de compra: o que se pediu, a quem, por quanto.
@@ -224,6 +233,109 @@ export function listarPedidos(limite = 60) {
   })
 }
 
+export const PEDIDOS_POR_PAGINA = 30
+
+const DIA = /^\d{4}-\d{2}-\d{2}$/
+
+/**
+ * Lê o filtro da URL, no mesmo padrão de `lerFiltroRecebiveis`.
+ *
+ * O padrão é "tudo": ao contrário da carteira de boletos, que cresce todo dia
+ * às centenas, pedido de compra nasce às dezenas por mês. Um período restrito
+ * por padrão esconderia o pedido de duas semanas atrás sem necessidade — aqui
+ * quem pagina é a lista, não o calendário.
+ */
+export function lerFiltroPedidos(url: URL): FiltroPedidos {
+  const params = url.searchParams
+  const texto = (nome: string) => (params.get(nome) ?? "").trim()
+
+  const temDe = DIA.test(texto("de"))
+  const temAte = DIA.test(texto("ate"))
+  const de = temDe ? texto("de") : temAte ? texto("ate") : PRIMEIRO_DIA
+  const ateBruto = temAte ? texto("ate") : temDe ? texto("de") : ULTIMO_DIA
+  const [inicio, fim] = ateBruto < de ? [ateBruto, de] : [de, ateBruto]
+
+  const situacao = texto("situacao")
+
+  return {
+    de: inicio,
+    ate: fim,
+    numero: texto("numero").replace(/\D/g, "").slice(0, 9),
+    fornecedor: texto("fornecedor").slice(0, 60),
+    situacao: SITUACOES_PEDIDO.some((s) => s.id === situacao)
+      ? (situacao as SituacaoPedido)
+      : "todas",
+    pagina: Math.max(1, Math.trunc(Number(params.get("pagina"))) || 1),
+  }
+}
+
+/**
+ * Os pedidos que casam com o filtro, uma página de cada vez.
+ *
+ * O resumo ignora de propósito o seletor de situação — como em contas a
+ * receber, os três cartões SÃO a repartição por situação daquele período e
+ * daquele fornecedor. Obedecer ao seletor faria dois dos três serem sempre
+ * zero.
+ */
+export async function consultarPedidos(filtro: FiltroPedidos) {
+  const periodo: Prisma.PedidoDeCompraWhereInput = {
+    criadoEm: { gte: inicioDoDia(filtro.de), lt: depoisDoDia(filtro.ate) },
+  }
+  const conteudo: Prisma.PedidoDeCompraWhereInput[] = []
+  if (filtro.numero) conteudo.push({ numero: Number(filtro.numero) })
+  if (filtro.fornecedor) {
+    conteudo.push({ fornecedorNome: { contains: filtro.fornecedor, mode: "insensitive" } })
+  }
+
+  const base: Prisma.PedidoDeCompraWhereInput = { AND: [periodo, ...conteudo] }
+  const where: Prisma.PedidoDeCompraWhereInput =
+    filtro.situacao === "todas" ? base : { AND: [periodo, ...conteudo, { situacao: filtro.situacao }] }
+
+  const emAberto = { AND: [base, { situacao: { in: ["rascunho", "enviado"] } }] }
+  const recebidos = { AND: [base, { situacao: "recebido" }] }
+  const cancelados = { AND: [base, { situacao: "cancelado" }] }
+
+  const [pagina, total, abertoAg, recebidoAg, canceladoAg] = await Promise.all([
+    db.pedidoDeCompra.findMany({
+      where,
+      orderBy: { criadoEm: "desc" },
+      skip: (filtro.pagina - 1) * PEDIDOS_POR_PAGINA,
+      take: PEDIDOS_POR_PAGINA,
+    }),
+    db.pedidoDeCompra.count({ where }),
+    db.pedidoDeCompra.aggregate({ where: emAberto, _sum: { total: true }, _count: { _all: true } }),
+    db.pedidoDeCompra.aggregate({ where: recebidos, _sum: { total: true }, _count: { _all: true } }),
+    db.pedidoDeCompra.aggregate({ where: cancelados, _sum: { total: true }, _count: { _all: true } }),
+  ])
+
+  // Quando a busca por número ou fornecedor não acha nada no período, dizer
+  // isso é melhor que uma tela vazia que parece defeito — a mesma escolha já
+  // feita em contas a receber e em vendas.
+  const foraDoPeriodo =
+    total === 0 && (filtro.numero || filtro.fornecedor)
+      ? await db.pedidoDeCompra.count({
+          where: filtro.situacao === "todas" ? { AND: conteudo } : { AND: [...conteudo, { situacao: filtro.situacao }] },
+        })
+      : 0
+
+  return {
+    pedidos: pagina,
+    total,
+    foraDoPeriodo,
+    paginas: Math.max(1, Math.ceil(total / PEDIDOS_POR_PAGINA)),
+    resumo: {
+      aberto: abertoAg._sum.total ?? 0,
+      abertoQuantidade: abertoAg._count._all,
+      recebido: recebidoAg._sum.total ?? 0,
+      recebidoQuantidade: recebidoAg._count._all,
+      cancelado: canceladoAg._sum.total ?? 0,
+      canceladoQuantidade: canceladoAg._count._all,
+    },
+  }
+}
+
+export type PedidoDaConsulta = Awaited<ReturnType<typeof consultarPedidos>>["pedidos"][number]
+
 export function pedidoPorId(id: string) {
   if (!/^[0-9a-fA-F]{24}$/.test(id)) return null
   return db.pedidoDeCompra.findUnique({ where: { id } })
@@ -321,4 +433,30 @@ export async function cancelarPedido(id: string, operador: string): Promise<Resu
     data: { situacao: "cancelado", canceladoEm: new Date(), canceladoPor: operador },
   })
   return { ok: true }
+}
+
+/**
+ * Lê `passo`/`id`/`loja` de um FormData e despacha para a transição certa.
+ *
+ * Duas telas mudam a situação de um pedido — Compras e a consulta — e as duas
+ * fazem exatamente o mesmo POST. Uma dispatcher só aqui é o que impede as duas
+ * actions de divergirem no formato do formulário com o tempo.
+ */
+export async function aplicarSituacao(
+  form: FormData,
+  operador: string
+): Promise<ResultadoSituacao> {
+  const id = String(form.get("id") ?? "")
+  const passo = String(form.get("passo") ?? "")
+
+  switch (passo) {
+    case "enviar":
+      return marcarEnviado(id, operador)
+    case "receber":
+      return marcarRecebido(id, String(form.get("loja") ?? ""), operador)
+    case "cancelar":
+      return cancelarPedido(id, operador)
+    default:
+      return { ok: false, erro: "Ação inválida" }
+  }
 }
