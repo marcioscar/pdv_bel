@@ -126,17 +126,21 @@ export async function action({ request }: Route.ActionArgs) {
   if (intencao === "situacao") {
     const id = String(form.get("id") ?? "")
     const passo = String(form.get("passo") ?? "")
+    const loja = String(form.get("loja") ?? "")
     const resultado =
       passo === "enviar"
         ? await marcarEnviado(id, eu.nome)
         : passo === "receber"
-          ? await marcarRecebido(id, eu.nome)
+          ? await marcarRecebido(id, loja, eu.nome)
           : passo === "cancelar"
             ? await cancelarPedido(id, eu.nome)
             : { ok: false as const, erro: "Ação inválida" }
 
     return resultado.ok
-      ? { ok: true as const, mensagem: "Atualizado" }
+      ? {
+          ok: true as const,
+          mensagem: passo === "receber" ? `Estoque de ${loja} atualizado` : "Atualizado",
+        }
       : data({ ok: false as const, erro: resultado.erro }, { status: 400 })
   }
 
@@ -218,8 +222,12 @@ export default function AdminCompras({ loaderData }: Route.ComponentProps) {
     setSelecionados({})
   }
 
-  function mudarSituacao(id: string, passo: "enviar" | "receber" | "cancelar") {
+  function mudarSituacao(id: string, passo: "enviar" | "cancelar") {
     pedidoFetcher.submit({ intencao: "situacao", id, passo }, { method: "post" })
+  }
+
+  function receberPedido(id: string, loja: string) {
+    pedidoFetcher.submit({ intencao: "situacao", id, passo: "receber", loja }, { method: "post" })
   }
 
   if (!origem) return <SemPolitica />
@@ -309,7 +317,13 @@ export default function AdminCompras({ loaderData }: Route.ComponentProps) {
         ) : null}
       </p>
 
-      <PedidosRecentes pedidos={pedidos} onMudarSituacao={mudarSituacao} gravando={gerando} />
+      <PedidosRecentes
+        pedidos={pedidos}
+        lojas={lojas}
+        onMudarSituacao={mudarSituacao}
+        onReceber={receberPedido}
+        gravando={gerando}
+      />
 
       {pedidoFetcher.data ? (
         <p
@@ -685,11 +699,15 @@ function Cartaozinho({
 
 function PedidosRecentes({
   pedidos,
+  lojas,
   onMudarSituacao,
+  onReceber,
   gravando,
 }: {
   pedidos: Awaited<ReturnType<typeof listarPedidos>>
-  onMudarSituacao: (id: string, passo: "enviar" | "receber" | "cancelar") => void
+  lojas: string[]
+  onMudarSituacao: (id: string, passo: "enviar" | "cancelar") => void
+  onReceber: (id: string, loja: string) => void
   gravando: boolean
 }) {
   if (pedidos.length === 0) return null
@@ -753,16 +771,11 @@ function PedidosRecentes({
                 </>
               ) : null}
               {p.situacao === "enviado" ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="xs"
-                  disabled={gravando}
-                  onClick={() => onMudarSituacao(p.id, "receber")}
-                >
-                  <PackageCheck className="size-3.5" />
-                  Recebido
-                </Button>
+                <ReceberPedido
+                  lojas={lojas}
+                  gravando={gravando}
+                  onReceber={(loja) => onReceber(p.id, loja)}
+                />
               ) : null}
               {p.situacao === "recebido" ? (
                 <CheckCircle2 className="size-4 text-muted-foreground" aria-hidden />
@@ -772,6 +785,56 @@ function PedidosRecentes({
         ))}
       </ul>
     </section>
+  )
+}
+
+/**
+ * Recebe exige escolher a loja: a compra é da rede, mas o caminhão do
+ * fornecedor para numa loja física, e é lá que o estoque precisa dar entrada.
+ * Sem a loja escolhida o botão fica desabilitado — a alternativa era assumir
+ * uma loja padrão, e advinhar errado creditaria mercadoria numa prateleira que
+ * não a recebeu.
+ */
+function ReceberPedido({
+  lojas,
+  gravando,
+  onReceber,
+}: {
+  lojas: string[]
+  gravando: boolean
+  onReceber: (loja: string) => void
+}) {
+  const [loja, setLoja] = useState("")
+
+  return (
+    <div className="flex items-center gap-1">
+      <select
+        value={loja}
+        onChange={(e) => setLoja(e.target.value)}
+        className={cn(
+          "h-8 rounded-lg border bg-background px-1.5 text-xs",
+          loja ? "border-border" : "border-destructive/50"
+        )}
+        aria-label="Loja que recebeu a mercadoria"
+      >
+        <option value="">Loja…</option>
+        {lojas.map((l) => (
+          <option key={l} value={l}>
+            {l}
+          </option>
+        ))}
+      </select>
+      <Button
+        type="button"
+        variant="ghost"
+        size="xs"
+        disabled={gravando || !loja}
+        onClick={() => onReceber(loja)}
+      >
+        <PackageCheck className="size-3.5" />
+        Recebido
+      </Button>
+    </div>
   )
 }
 

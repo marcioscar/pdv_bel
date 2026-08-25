@@ -150,10 +150,16 @@ model MovimentoEstoque {
   /// eles. Texto numa observação se lê, mas não se navega nem se agrupa.
   transferenciaId     String? @db.ObjectId
   transferenciaNumero Int?
+  /// O pedido de compra que gerou este movimento, quando foi um recebimento.
+  /// Mesma razão do campo de transferência: navegar até o documento, não só ler
+  /// um número solto na observação.
+  pedidoDeCompraId     String? @db.ObjectId
+  pedidoDeCompraNumero Int?
   observacao String?
 
   @@index([produtoId, loja])
   @@index([transferenciaId])
+  @@index([pedidoDeCompraId])
   @@index([loja, criadoEm])
   @@index([vendaId])
   @@map("movimentos_estoque")

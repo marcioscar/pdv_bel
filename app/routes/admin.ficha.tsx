@@ -326,6 +326,16 @@ function Ficha({
                           transferência #{l.transferenciaNumero}
                         </a>
                       ) : null}
+                      {l.pedidoDeCompraNumero ? (
+                        <a
+                          href={`/pedidos-de-compra/${l.pedidoDeCompraId}/impressao`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="font-mono text-[11px] underline"
+                        >
+                          pedido #{l.pedidoDeCompraNumero}
+                        </a>
+                      ) : null}
                       {l.observacao ? (
                         <span className="block max-w-[22rem] text-[11px] text-muted-foreground">
                           {l.observacao}

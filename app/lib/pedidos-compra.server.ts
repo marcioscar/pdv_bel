@@ -153,17 +153,51 @@ export async function marcarEnviado(id: string, operador: string): Promise<Resul
   return { ok: true }
 }
 
-export async function marcarRecebido(id: string, operador: string): Promise<ResultadoSituacao> {
+/**
+ * Recebe o pedido: muda a situação e dá entrada no estoque, na mesma transação.
+ *
+ * A compra é da rede, mas a mercadoria chega fisicamente numa loja — é lá que o
+ * caminhão do fornecedor para. Sem uma loja, o pedido recebido mudaria de
+ * situação sem o saldo em lugar nenhum mudar junto, e a mercadoria que acabou de
+ * chegar continuaria não existindo para o sistema. Depois de receber, quem
+ * quiser levar para as outras lojas usa a transferência, como sempre.
+ *
+ * O tipo do movimento é "entrada", o mesmo de uma entrada manual — só que este
+ * carrega o `pedidoDeCompraId`, e é isso que a ficha do produto usa para
+ * navegar até o pedido em vez de mostrar um número solto.
+ */
+export async function marcarRecebido(
+  id: string,
+  loja: string,
+  operador: string
+): Promise<ResultadoSituacao> {
   const pedido = await pedidoPorId(id)
   if (!pedido) return { ok: false, erro: "Pedido não encontrado" }
   if (pedido.situacao !== "enviado") {
     return { ok: false, erro: "Só um pedido enviado pode ser marcado como recebido" }
   }
+  if (!loja) return { ok: false, erro: "Escolha a loja que recebeu a mercadoria" }
 
-  await db.pedidoDeCompra.update({
-    where: { id },
-    data: { situacao: "recebido", recebidoEm: new Date(), recebidoPor: operador },
+  await db.$transaction(async (tx) => {
+    await tx.pedidoDeCompra.update({
+      where: { id },
+      data: { situacao: "recebido", recebidoEm: new Date(), recebidoPor: operador },
+    })
+
+    await tx.movimentoEstoque.createMany({
+      data: pedido.itens.map((item) => ({
+        produtoId: item.produtoId,
+        loja,
+        tipo: "entrada",
+        quantidade: item.quantidade,
+        operador,
+        pedidoDeCompraId: pedido.id,
+        pedidoDeCompraNumero: pedido.numero,
+        observacao: `Pedido de compra #${pedido.numero} — ${pedido.fornecedorNome}`,
+      })),
+    })
   })
+
   return { ok: true }
 }
 
