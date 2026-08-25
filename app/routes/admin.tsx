@@ -5,6 +5,7 @@ import {
   Menu,
   Package,
   Receipt,
+  ShoppingCart,
   Users,
   Wallet,
   X,
@@ -28,6 +29,7 @@ import { cn } from "~/lib/utils"
 /** Um ícone por GRUPO, não por tela: o submenu já é lido pelo texto indentado. */
 const ICONES: Record<string, LucideIcon> = {
   produtos: Package,
+  compras: ShoppingCart,
   vendas: Receipt,
   financeiro: Wallet,
   cadastros: Users,

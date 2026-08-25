@@ -116,10 +116,25 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         descricao: "O que saiu de uma loja e não chegou na outra, por rota",
         somenteGerente: true,
       },
+    ],
+  },
+  {
+    // Separado de "Produtos" porque compra é conversa com fornecedor — mais
+    // telas vêm por aqui (recebimento, cotação) sem inchar o grupo de catálogo
+    // e estoque, que já é o mais cheio dos quatro.
+    id: "compras",
+    rotulo: "Compras",
+    secoes: [
       {
         para: "/admin/compras",
         rotulo: "Compras",
         descricao: "O que repor: ponto de pedido e quanto comprar, da rede toda",
+        somenteGerente: true,
+      },
+      {
+        para: "/admin/pedidos-de-compra",
+        rotulo: "Pedidos de compra",
+        descricao: "Todo pedido gerado, por fornecedor, período e situação",
         somenteGerente: true,
       },
     ],
@@ -162,12 +177,6 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         para: "/admin/contas-a-receber",
         rotulo: "Contas a receber",
         descricao: "Boletos por vencimento: em aberto, vencidos e recebidos",
-        somenteGerente: true,
-      },
-      {
-        para: "/admin/pedidos-de-compra",
-        rotulo: "Pedidos de compra",
-        descricao: "Todo pedido gerado, por fornecedor, período e situação",
         somenteGerente: true,
       },
     ],
