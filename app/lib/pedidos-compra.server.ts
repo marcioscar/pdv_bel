@@ -1,5 +1,8 @@
 import { db } from "~/lib/db.server"
 import { arredondar } from "~/lib/moeda"
+import { saldosPorProdutoELoja } from "~/lib/estoque.server"
+import { saldosEmTransito } from "~/lib/transferencias.server"
+import { diasDeCobertura, quantoComprar, urgencia, type Urgencia } from "~/lib/compras"
 
 /**
  * O pedido de compra: o que se pediu, a quem, por quanto.
@@ -93,6 +96,111 @@ export async function criarPedido(entrada: {
   })
 
   return { ok: true, numero: pedidoDeCompra.numero, id: pedidoDeCompra.id }
+}
+
+export type ItemDoFornecedor = {
+  produtoId: string
+  codigo: string
+  descricao: string
+  unidade: string
+  custoUnitario: number
+  ultimaCompra: Date
+  /** O que já foi comprado deste fornecedor — mede relevância, não urgência. */
+  quantidadeTotal: number
+  /** Se este é o fornecedor principal do produto, ou uma alternativa. */
+  principal: boolean
+  estoque: number
+  porLoja: Record<string, number>
+  emTransito: number
+  emPedido: number
+  /** null quando o produto não tem política — sem histórico de venda para medir. */
+  urgencia: Urgencia | null
+  diasRestantes: number | null
+  /** Sugestão de quanto pedir. 0 quando não há política: nada para sugerir. */
+  sugestao: number
+}
+
+/**
+ * O que este fornecedor vende, com a mesma régua de urgência da tela de
+ * Compras — só que virada: em vez de "o que falta, de quem", "de quem, o que
+ * falta". É o catálogo que a tela de novo pedido oferece depois de escolhido
+ * o fornecedor.
+ *
+ * Produto que ele já forneceu mas nunca teve venda registrada entra do mesmo
+ * jeito, só sem sugestão — o gerente pode pedir por conhecimento do negócio
+ * mesmo sem o sistema ter medido consumo ainda.
+ */
+export async function catalogoDoFornecedor(fornecedorId: string): Promise<ItemDoFornecedor[]> {
+  const fornecimentos = await db.fornecimento.findMany({ where: { fornecedorId } })
+  if (fornecimentos.length === 0) return []
+
+  const produtoIds = fornecimentos.map((f) => f.produtoId)
+
+  const [produtos, politicas, saldos, transito, pedidos] = await Promise.all([
+    db.produto.findMany({ where: { id: { in: produtoIds }, ativo: true } }),
+    db.politicaDeCompra.findMany({ where: { produtoId: { in: produtoIds } } }),
+    saldosPorProdutoELoja(),
+    saldosEmTransito(),
+    saldosPedidos(),
+  ])
+  const porId = new Map(produtos.map((p) => [p.id, p]))
+  const politicaPorProduto = new Map(politicas.map((p) => [p.produtoId, p]))
+
+  const itens: ItemDoFornecedor[] = []
+
+  for (const f of fornecimentos) {
+    const produto = porId.get(f.produtoId)
+    // Desativado depois do vínculo ser gravado: não faz sentido oferecer para
+    // pedir de novo o que saiu do catálogo.
+    if (!produto) continue
+
+    const porLojaMapa = saldos.get(f.produtoId) ?? new Map<string, number>()
+    const porLoja = Object.fromEntries(porLojaMapa)
+    const estoque = [...porLojaMapa.values()].reduce((soma, v) => soma + v, 0)
+    const emTransito = transito.get(f.produtoId) ?? 0
+    const emPedido = pedidos.get(f.produtoId) ?? 0
+
+    const politica = politicaPorProduto.get(f.produtoId)
+    const situacao = politica ? urgencia(politica, estoque) : null
+    const sugestao = politica ? quantoComprar(politica, estoque, emTransito + emPedido) : 0
+    const diasRestantes = politica ? diasDeCobertura(politica.consumoMedioDiario, estoque) : null
+
+    itens.push({
+      produtoId: produto.id,
+      codigo: produto.codigo,
+      descricao: produto.descricao,
+      unidade: produto.unidade,
+      custoUnitario: f.ultimoCusto,
+      ultimaCompra: f.ultimaCompra,
+      quantidadeTotal: f.quantidadeTotal,
+      principal: f.principal,
+      estoque,
+      porLoja,
+      emTransito,
+      emPedido,
+      urgencia: situacao,
+      diasRestantes,
+      sugestao,
+    })
+  }
+
+  const ORDEM: Record<Urgencia, number> = { sem_estoque: 0, critico: 1, comprar: 2, ok: 3 }
+
+  // Quem precisa primeiro; produto sem necessidade (ou sem política, que é a
+  // mesma coisa vista de outro ângulo) vai depois, por quanto já se comprou dele
+  // — é a ordem que reflete o catálogo de sempre desse fornecedor.
+  itens.sort((a, b) => {
+    const pa = a.urgencia && a.urgencia !== "ok" ? ORDEM[a.urgencia] : 9
+    const pb = b.urgencia && b.urgencia !== "ok" ? ORDEM[b.urgencia] : 9
+    if (pa !== pb) return pa - pb
+    if (pa < 9) {
+      const porDias = (a.diasRestantes ?? Infinity) - (b.diasRestantes ?? Infinity)
+      if (porDias !== 0) return porDias
+    }
+    return b.quantidadeTotal - a.quantidadeTotal
+  })
+
+  return itens
 }
 
 /**

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { data, useFetcher } from "react-router"
-import { Check, Plus, Search, Truck, X } from "lucide-react"
+import { data, Link, useFetcher } from "react-router"
+import { Check, Plus, Search, ShoppingBag, Truck, X } from "lucide-react"
 
 import type { Route } from "./+types/admin.fornecedores"
 import { Badge } from "~/components/ui/badge"
@@ -222,11 +222,18 @@ export default function AdminFornecedores({ loaderData }: Route.ComponentProps) 
             {inativos === 1 ? "" : "s"}
           </Button>
         ) : null}
+        <Link
+          to="/admin/pedido-novo"
+          className="ml-auto inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-border px-3 text-xs font-medium hover:bg-accent"
+        >
+          <ShoppingBag className="size-3.5" aria-hidden />
+          Fazer pedido
+        </Link>
         <Button
           type="button"
           size="sm"
           onClick={() => setForm(VAZIO)}
-          className="ml-auto shrink-0 rounded-lg"
+          className="shrink-0 rounded-lg"
         >
           <Plus className="size-4" />
           Novo

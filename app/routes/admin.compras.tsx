@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react"
-import { data, useFetcher } from "react-router"
-import { CheckCircle2, PackageCheck, Printer, Send, ShoppingCart, X } from "lucide-react"
+import { data, Link, useFetcher } from "react-router"
+import { CheckCircle2, PackageCheck, Printer, Send, ShoppingBag, ShoppingCart, X } from "lucide-react"
 
 import type { Route } from "./+types/admin.compras"
 import { Badge } from "~/components/ui/badge"
@@ -242,6 +242,13 @@ export default function AdminCompras({ loaderData }: Route.ComponentProps) {
         <span className="text-xs text-muted-foreground">
           {aComprar.length} {aComprar.length === 1 ? "produto" : "produtos"} para repor
         </span>
+        <Link
+          to="/admin/pedido-novo"
+          className="ml-auto inline-flex h-9 items-center gap-1.5 rounded-lg border border-border px-3 text-xs font-medium hover:bg-accent"
+        >
+          <ShoppingBag className="size-3.5" aria-hidden />
+          Pedir por fornecedor
+        </Link>
       </div>
 
       <p className="mt-1 max-w-2xl text-xs text-muted-foreground">
