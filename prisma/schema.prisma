@@ -717,3 +717,66 @@ type PedidoItem {
   custoUnitario Float
   total         Float
 }
+
+/// Até onde a sincronização de NF-e da SEFAZ (`distNSU`) avançou, por loja.
+///
+/// O NSU é o cursor de paginação do webservice de Distribuição de DF-e: cada
+/// chamada devolve até 50 documentos a partir dele. Sem guardar onde parou,
+/// toda sincronização recomeçaria do zero — e do zero é literalmente "desde
+/// que o CNPJ existe para a SEFAZ", não "desde a última vez que rodamos isto".
+model SincronizacaoSefaz {
+  id   String @id @default(auto()) @map("_id") @db.ObjectId
+  loja String @unique
+
+  /// Sempre 15 dígitos, com zeros à esquerda — é o formato que a SEFAZ pede de
+  /// volta em `ultNSU`. Guardado como veio, para não reintroduzir um bug de
+  /// padding numa conversão de ida e volta.
+  ultNsu String
+  /// O que a SEFAZ tinha disponível na última consulta — só para a tela dizer
+  /// "sincronizado" ou "ainda falta X documentos", não é usado para nada além disso.
+  maxNsu String
+
+  atualizadoEm DateTime @updatedAt
+
+  @@map("sincronizacoes_sefaz")
+}
+
+/// Uma NF-e de fornecedor, indexada localmente a partir da sincronização com a
+/// SEFAZ — não é a entrada de estoque em si (isso é fase 3), é o catálogo do
+/// que está disponível para escolher.
+///
+/// O XML completo (com itens) só vem preenchido quando a própria sincronização
+/// já trouxe um `procNFe` — a maioria das notas recentes vem assim, de graça,
+/// sem chamada extra. Nota mais antiga que a SEFAZ já podou da distribuição
+/// chega como resumo (`resNFe`): sem itens, e sem uma segunda chamada que
+/// resolva isso, porque o documento completo já não está mais lá para buscar.
+model NotaFiscalRecebida {
+  id          String @id @default(auto()) @map("_id") @db.ObjectId
+  /// Código da loja/CNPJ destinatário — QI, QNE, NRT, SDS.
+  loja        String
+  chaveAcesso String @unique
+  /// O NSU sob o qual a SEFAZ devolveu este documento — não é usado para nada
+  /// depois de gravado; fica só para auditoria de quando isto chegou.
+  nsu         String
+
+  emitenteCnpj String
+  emitenteNome String
+  numero       Int?
+  serie        Int?
+  dataEmissao  DateTime?
+  valorTotal   Float?
+
+  /// "resumo" | "completa" — se `xml` tem os itens ou só os dados de cabeçalho.
+  situacaoXml String
+  /// Só preenchido quando `situacaoXml` é "completa". Guardado para não ter
+  /// que buscar de novo na SEFAZ toda vez que o gerente abrir a nota.
+  xml String?
+
+  /// "disponivel" | "recebida" | "ignorada"
+  situacao String @default("disponivel")
+
+  criadoEm DateTime @default(now())
+
+  @@index([loja, situacao, criadoEm])
+  @@map("notas_fiscais_recebidas")
+}

@@ -1,6 +1,6 @@
 import { useEffect } from "react"
 import { Link, useFetcher, useLocation } from "react-router"
-import { Clock, PackageX, ShieldAlert, ShieldCheck, Truck } from "lucide-react"
+import { Clock, KeyRound, PackageX, ShieldAlert, ShieldCheck, Truck } from "lucide-react"
 
 import { Button } from "~/components/ui/button"
 import { ehGerente } from "~/lib/permissoes"
@@ -34,6 +34,7 @@ export function AvisosDoTopo({ papel }: { papel: string }) {
     respondidas: number
     cargas: number
     faltas: number
+    certificados: { rotulo: string; diasParaVencer: number }[]
   }>()
   const { pathname } = useLocation()
 
@@ -61,6 +62,7 @@ export function AvisosDoTopo({ papel }: { papel: string }) {
   const respondidas = fetcher.data?.respondidas ?? 0
   const cargas = fetcher.data?.cargas ?? 0
   const faltas = fetcher.data?.faltas ?? 0
+  const certificados = fetcher.data?.certificados ?? []
 
   // O gerente também vende: se ele tem pedido próprio respondido, os dois avisos
   // aparecem, e cada um leva para a sua tela.
@@ -139,6 +141,28 @@ export function AvisosDoTopo({ papel }: { papel: string }) {
         >
           <PackageX className="size-4" aria-hidden />
           {faltas} {faltas === 1 ? "falta" : "faltas"}
+        </Button>
+      ) : null}
+
+      {/* Âmbar, não vermelho: ainda há margem (só aparece a menos de 30 dias do
+          vencimento) — mas precisa de ação de alguém, diferente de cargas e
+          faltas, que o próprio fluxo do dia a dia resolve. */}
+      {certificados.length > 0 ? (
+        <Button
+          render={<Link to="/admin/certificados" />}
+          nativeButton={false}
+          tabIndex={-1}
+          size="sm"
+          variant="outline"
+          className={cn(
+            "rounded-lg font-semibold",
+            "border-amber-400 bg-amber-100 text-amber-950 hover:bg-amber-200",
+            "dark:border-amber-500/50 dark:bg-amber-500/20 dark:text-amber-200 dark:hover:bg-amber-500/30"
+          )}
+          title={certificados.map((c) => `${c.rotulo}: vence em ${c.diasParaVencer} dia(s)`).join(" · ")}
+        >
+          <KeyRound className="size-4" aria-hidden />
+          {certificados.length} {certificados.length === 1 ? "certificado vencendo" : "certificados vencendo"}
         </Button>
       ) : null}
 

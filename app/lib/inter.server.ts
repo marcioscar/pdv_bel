@@ -192,6 +192,17 @@ export function interConfigurado(conta: string) {
 }
 
 /**
+ * Esquece a config e o agente mTLS guardados em memória para esta conta —
+ * chamado depois de uma renovação salvar um certificado novo no mesmo
+ * caminho. Sem isto, o processo continuaria autenticando com o certificado
+ * antigo até reiniciar.
+ */
+export function invalidarConfigInter(conta: string) {
+  configPorConta.delete(conta)
+  agentePorConta.delete(conta)
+}
+
+/**
  * O que o certificado da conta diz sobre si: de quem é e até quando vale.
  *
  * Serve ao /saude, e existe porque certificado do Inter vale um ano e vence

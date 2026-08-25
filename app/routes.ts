@@ -37,6 +37,7 @@ export default [
       route("compras", "routes/admin.compras.tsx"),
       route("pedido-novo", "routes/admin.pedido-novo.tsx"),
       route("pedidos-de-compra", "routes/admin.pedidos-de-compra.tsx"),
+      route("notas-de-entrada", "routes/admin.notas-de-entrada.tsx"),
       route("vendas", "routes/admin.vendas.tsx"),
       route("caixas", "routes/admin.caixas.tsx"),
       route("caixas/:fechamentoId", "routes/admin.caixa.tsx"),
@@ -44,6 +45,7 @@ export default [
       route("autorizacoes", "routes/admin.autorizacoes.tsx"),
       route("relatorios", "routes/admin.relatorios.tsx"),
       route("usuarios", "routes/admin.usuarios.tsx"),
+      route("certificados", "routes/admin.certificados.tsx"),
     ]),
 
     // Fora do layout de propósito: é folha para imprimir, e dentro dele sairia

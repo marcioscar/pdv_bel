@@ -137,6 +137,12 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         descricao: "Todo pedido gerado, por fornecedor, período e situação",
         somenteGerente: true,
       },
+      {
+        para: "/admin/notas-de-entrada",
+        rotulo: "Notas de entrada",
+        descricao: "Buscar o XML de uma nota do fornecedor na SEFAZ, pela chave de acesso",
+        somenteGerente: true,
+      },
     ],
   },
   {
@@ -203,6 +209,12 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         descricao: "Quem entra no sistema e com que papel",
         somenteGerente: true,
       },
+      {
+        para: "/admin/certificados",
+        rotulo: "Certificados",
+        descricao: "Certificado do Inter e da SEFAZ, por loja — validade e renovação",
+        somenteGerente: true,
+      },
     ],
   },
 ]
@@ -265,6 +277,8 @@ export const ACOES_DE_GERENTE = {
   reabrirCaixa: "Só gerente reabre um caixa já fechado — o papel assinado deixa de valer",
   resolverFaltaDeTransferencia:
     "Só gerente decide o que houve com a mercadoria que não chegou",
+  buscarNotaFiscal: "Só gerente busca nota fiscal na SEFAZ — é dado fiscal da empresa",
+  gerenciarCertificados: "Só gerente mexe em certificado — é credencial de acesso a banco e ao fisco",
 } as const
 
 export type AcaoDeGerente = keyof typeof ACOES_DE_GERENTE

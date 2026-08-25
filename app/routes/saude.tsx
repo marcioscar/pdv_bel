@@ -5,6 +5,7 @@ import {
   chavePixConfigurada,
   interConfigurado,
 } from "~/lib/inter.server"
+import { certificadoSefazDaLoja, sefazConfigurado } from "~/lib/sefaz.server"
 import { diagnosticoSessao } from "~/lib/sessao.server"
 import { diagnosticoTelegram } from "~/lib/telegram.server"
 
@@ -44,6 +45,25 @@ export async function loader(_: Route.LoaderArgs) {
     }
   } catch {
     contas = {}
+  }
+
+  // Por LOJA, e não por conta: ao contrário do Inter, a SEFAZ trata cada CNPJ
+  // como interessado à parte, e QI/QNE têm CNPJs diferentes mesmo dividindo
+  // conta corrente no Inter.
+  let lojasSefaz: Record<
+    string,
+    { configurado: boolean; certificado: ReturnType<typeof certificadoSefazDaLoja> }
+  > = {}
+  try {
+    const lojas = await db.loja.findMany({ where: { ativo: true }, select: { codigo: true } })
+    for (const { codigo } of lojas) {
+      lojasSefaz[codigo] = {
+        configurado: await sefazConfigurado(codigo),
+        certificado: certificadoSefazDaLoja(codigo),
+      }
+    }
+  } catch {
+    lojasSefaz = {}
   }
 
   let banco: string
@@ -94,6 +114,16 @@ export async function loader(_: Route.LoaderArgs) {
               (!c.certificado.ambienteConfere || c.certificado.chaveCombina === false)
           )
           .map(([nome]) => nome),
+      },
+      sefaz: {
+        lojas: Object.keys(lojasSefaz).length,
+        prontas: Object.values(lojasSefaz).filter((l) => l.configurado).length,
+        certificadosARenovar: Object.entries(lojasSefaz)
+          .filter(([, l]) => l.certificado?.renovar)
+          .map(([codigo]) => codigo),
+        certificadosIncompativeis: Object.entries(lojasSefaz)
+          .filter(([, l]) => l.certificado && l.certificado.chaveCombina === false)
+          .map(([codigo]) => codigo),
       },
     },
     { headers: { "cache-control": "no-store" } }
