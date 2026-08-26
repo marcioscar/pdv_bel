@@ -37,12 +37,30 @@ export async function sincronizarNotasDaLoja(
   maxPaginas = PAGINAS_POR_SINCRONIZACAO
 ): Promise<ResultadoSincronizacao> {
   const cursor = await db.sincronizacaoSefaz.findUnique({ where: { loja } })
-  let ultNsu = cursor?.ultNsu ?? "0".padStart(15, "0")
+
+  if (cursor?.proximaConsultaEm && cursor.proximaConsultaEm > new Date()) {
+    const minutos = Math.ceil((cursor.proximaConsultaEm.getTime() - Date.now()) / 60_000)
+    return {
+      ok: false,
+      novas: 0,
+      erro:
+        `Já está em dia com a SEFAZ. Ela bloqueia o CNPJ por uma hora quando se pergunta ` +
+        `sem ter novidade — pode tentar de novo em ${minutos} min.`,
+    }
+  }
+
+  let ultNsu = normalizarNsu(cursor?.ultNsu ?? "0")
   let novas = 0
 
   for (let pagina = 0; pagina < maxPaginas; pagina++) {
     const resultado = await consultarNsuNaSefaz(loja, ultNsu)
     if (!resultado.ok) {
+      // A recusa por consumo indevido vale para o CNPJ inteiro e dura uma
+      // hora: registrar aqui evita que o próximo clique gaste outra tentativa
+      // à toa e estenda o castigo.
+      if (/consumo indevido|limite de consultas/i.test(resultado.erro)) {
+        await guardarCursor(loja, ultNsu, ultNsu, esperaDeUmaHora())
+      }
       return { ok: false, erro: resultado.erro, novas }
     }
 
@@ -53,20 +71,44 @@ export async function sincronizarNotasDaLoja(
       if (await gravarNota(loja, doc.schema, doc.xml)) novas++
     }
 
-    const semProgresso = resultado.ultNSU === ultNsu
-    ultNsu = resultado.ultNSU
-    await db.sincronizacaoSefaz.upsert({
-      where: { loja },
-      update: { ultNsu, maxNsu: resultado.maxNSU },
-      create: { loja, ultNsu, maxNsu: resultado.maxNSU },
-    })
+    // Comparação numérica, e não de texto: a SEFAZ devolve o NSU com zeros à
+    // esquerda ("000000000021930") e o cursor já foi gravado sem eles
+    // ("21930"). Comparar como texto dava "diferente" para o mesmo número, o
+    // laço nunca via que tinha chegado ao fim e repetia a mesma consulta até
+    // a SEFAZ bloquear o CNPJ por consumo indevido.
+    const anterior = ultNsu
+    ultNsu = normalizarNsu(resultado.ultNSU)
+    const maxNsu = normalizarNsu(resultado.maxNSU)
 
-    if (semProgresso || ultNsu === resultado.maxNSU) {
+    const semProgresso = Number(ultNsu) <= Number(anterior)
+    const emDia = Number(ultNsu) >= Number(maxNsu)
+
+    // Sem novidade, a SEFAZ manda esperar uma hora antes de perguntar de novo.
+    await guardarCursor(loja, ultNsu, maxNsu, semProgresso || emDia ? esperaDeUmaHora() : null)
+
+    if (semProgresso || emDia) {
       return { ok: true, novas, paginas: pagina + 1, completo: true }
     }
   }
 
   return { ok: true, novas, paginas: maxPaginas, completo: false }
+}
+
+/** Os 15 dígitos com zeros à esquerda que a SEFAZ usa — um formato só, sempre. */
+function normalizarNsu(valor: string) {
+  return (valor.replace(/\D/g, "") || "0").padStart(15, "0").slice(-15)
+}
+
+function esperaDeUmaHora() {
+  return new Date(Date.now() + 60 * 60_000)
+}
+
+function guardarCursor(loja: string, ultNsu: string, maxNsu: string, proximaConsultaEm: Date | null) {
+  return db.sincronizacaoSefaz.upsert({
+    where: { loja },
+    update: { ultNsu, maxNsu, proximaConsultaEm },
+    create: { loja, ultNsu, maxNsu, proximaConsultaEm },
+  })
 }
 
 /**

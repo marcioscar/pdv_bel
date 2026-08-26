@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react"
 import { data, Link, useFetcher } from "react-router"
-import { CheckCircle2, Printer, Send, ShoppingBag, ShoppingCart, X } from "lucide-react"
+import { CheckCircle2, GitCompare, Printer, Send, ShoppingBag, ShoppingCart, X } from "lucide-react"
 
 import type { Route } from "./+types/admin.compras"
 import { Badge } from "~/components/ui/badge"
@@ -11,6 +11,7 @@ import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { cn } from "~/lib/utils"
 import { exigirGerente } from "~/lib/sessao.server"
 import { db } from "~/lib/db.server"
+import { pedidosComNotaDisponivel } from "~/lib/conciliacao.server"
 import { listaDeCompra, origemDaPolitica, type LinhaDeCompra } from "~/lib/compras.server"
 import { criarPedido, listarPedidos, aplicarSituacao } from "~/lib/pedidos-compra.server"
 import { rotuloDaSituacaoPedido } from "~/lib/pedidos-compra"
@@ -48,11 +49,14 @@ export async function loader({ request }: Route.LoaderArgs) {
     }),
   ])
 
+  const comNota = await pedidosComNotaDisponivel(pedidos)
+
   return {
     linhas,
     origem,
     lojas: lojas.map((l) => l.codigo),
     pedidos,
+    pedidosComNota: [...comNota],
     fornecedores: fornecedores.map((f) => ({ id: f.id, nome: f.nomeFantasia || f.razaoSocial })),
   }
 }
@@ -143,7 +147,7 @@ const CORES: Record<Urgencia, string> = {
 }
 
 export default function AdminCompras({ loaderData }: Route.ComponentProps) {
-  const { linhas, origem, lojas, pedidos, fornecedores } = loaderData
+  const { linhas, origem, lojas, pedidos, pedidosComNota, fornecedores } = loaderData
   const [busca, setBusca] = useState("")
   const [mostrarTudo, setMostrarTudo] = useState(false)
   const [selecionados, setSelecionados] = useState<Record<string, boolean>>({})
@@ -308,6 +312,7 @@ export default function AdminCompras({ loaderData }: Route.ComponentProps) {
       <PedidosRecentes
         pedidos={pedidos}
         lojas={lojas}
+        pedidosComNota={pedidosComNota}
         onMudarSituacao={mudarSituacao}
         onReceber={receberPedido}
         gravando={gerando}
@@ -688,12 +693,14 @@ function Cartaozinho({
 function PedidosRecentes({
   pedidos,
   lojas,
+  pedidosComNota,
   onMudarSituacao,
   onReceber,
   gravando,
 }: {
   pedidos: Awaited<ReturnType<typeof listarPedidos>>
   lojas: string[]
+  pedidosComNota: string[]
   onMudarSituacao: (id: string, passo: "enviar" | "cancelar") => void
   onReceber: (id: string, loja: string) => void
   gravando: boolean
@@ -766,12 +773,30 @@ function PedidosRecentes({
                   </Button>
                 </>
               ) : null}
+              {p.situacao === "enviado" || p.situacao === "parcial" || p.situacao === "recebido" ? (
+                <Link
+                  to={`/admin/pedidos-de-compra/${p.id}/conciliacao`}
+                  className="inline-flex h-8 items-center gap-1 rounded-lg px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+                >
+                  <GitCompare className="size-3.5" aria-hidden />
+                  Conciliar NF
+                </Link>
+              ) : null}
               {p.situacao === "enviado" ? (
-                <ReceberPedido
-                  lojas={lojas}
-                  gravando={gravando}
-                  onReceber={(loja) => onReceber(p.id, loja)}
-                />
+                pedidosComNota.includes(p.id) ? (
+                  <span
+                    className="text-xs text-muted-foreground"
+                    title="Já tem nota do fornecedor sincronizada — receba pela conciliação, com quantidade e custo reais"
+                  >
+                    receber pela conciliação →
+                  </span>
+                ) : (
+                  <ReceberPedido
+                    lojas={lojas}
+                    gravando={gravando}
+                    onReceber={(loja) => onReceber(p.id, loja)}
+                  />
+                )
               ) : null}
               {p.situacao === "recebido" ? (
                 <CheckCircle2 className="size-4 text-muted-foreground" aria-hidden />

@@ -9,12 +9,15 @@ import { PRIMEIRO_DIA, ULTIMO_DIA } from "~/lib/dia"
  * pacote do navegador.
  */
 
-export type SituacaoPedido = "todas" | "rascunho" | "enviado" | "recebido" | "cancelado"
+export type SituacaoPedido = "todas" | "rascunho" | "enviado" | "parcial" | "recebido" | "cancelado"
 
 export const SITUACOES_PEDIDO = [
   { id: "todas", rotulo: "Todas" },
   { id: "rascunho", rotulo: "Rascunho" },
   { id: "enviado", rotulo: "Enviado" },
+  // Chegou alguma coisa, mas não tudo — a mercadoria que falta continua sendo
+  // esperada, e a conciliação fica aberta para o resto chegar.
+  { id: "parcial", rotulo: "Parcial" },
   { id: "recebido", rotulo: "Recebido" },
   { id: "cancelado", rotulo: "Cancelado" },
 ] as const satisfies { id: SituacaoPedido; rotulo: string }[]

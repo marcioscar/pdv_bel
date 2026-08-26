@@ -98,10 +98,18 @@ export default function AdminNotasDeEntrada({ loaderData }: Route.ComponentProps
     setSearchParams(loja ? { loja, nota: id } : {})
   }
 
-  const faltam =
-    sincronizacao && sincronizacao.ultNsu !== sincronizacao.maxNsu
-      ? Number(sincronizacao.maxNsu) - Number(sincronizacao.ultNsu)
-      : 0
+  const faltam = sincronizacao
+    ? Math.max(0, Number(sincronizacao.maxNsu) - Number(sincronizacao.ultNsu))
+    : 0
+
+  // A SEFAZ bloqueia o CNPJ por uma hora quando se pergunta sem ter novidade.
+  // Desabilitar o botão é mais honesto que deixar clicar e levar a recusa.
+  const esperarAte = sincronizacao?.proximaConsultaEm
+    ? new Date(sincronizacao.proximaConsultaEm)
+    : null
+  const minutosDeEspera = esperarAte
+    ? Math.max(0, Math.ceil((esperarAte.getTime() - Date.now()) / 60_000))
+    : 0
 
   return (
     <div className="p-4 sm:p-6">
@@ -135,13 +143,22 @@ export default function AdminNotasDeEntrada({ loaderData }: Route.ComponentProps
           <sincFetcher.Form method="post">
             <input type="hidden" name="loja" value={loja} />
             <input type="hidden" name="intencao" value="sincronizar" />
-            <Button type="submit" variant="outline" disabled={sincronizando}>
+            <Button
+              type="submit"
+              variant="outline"
+              disabled={sincronizando || minutosDeEspera > 0}
+              title={
+                minutosDeEspera > 0
+                  ? `A SEFAZ pede uma hora de intervalo quando não há novidade — libera em ${minutosDeEspera} min`
+                  : undefined
+              }
+            >
               {sincronizando ? (
                 <Loader2 className="size-4 animate-spin" />
               ) : (
                 <RefreshCw className="size-4" />
               )}
-              Sincronizar
+              {minutosDeEspera > 0 ? `Sincronizar (${minutosDeEspera} min)` : "Sincronizar"}
             </Button>
           </sincFetcher.Form>
         ) : null}
@@ -161,6 +178,9 @@ export default function AdminNotasDeEntrada({ loaderData }: Route.ComponentProps
         <p className="mt-2 text-xs text-muted-foreground">
           Sincronizado até NSU {Number(sincronizacao.ultNsu)}
           {faltam > 0 ? ` — faltam ~${faltam} documentos (clique em Sincronizar de novo)` : " — em dia"}
+          {minutosDeEspera > 0
+            ? ` · a SEFAZ pede 1h de intervalo sem novidade; libera em ${minutosDeEspera} min`
+            : ""}
         </p>
       ) : null}
 

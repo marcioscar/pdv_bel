@@ -6,6 +6,7 @@ export type ProdutoEntrada = {
   descricao: string
   unidade: string
   preco: number
+  ncm: string | null
 }
 
 /**
@@ -41,6 +42,7 @@ export function lerProduto(form: FormData): ProdutoEntrada | { erro: string } {
   const descricao = texto(form.get("descricao"))
   const unidade = texto(form.get("unidade")).toUpperCase()
   const preco = interpretarValor(texto(form.get("preco")))
+  const ncm = texto(form.get("ncm")).replace(/\D/g, "")
 
   if (!codigo) return { erro: "Informe o código" }
   if (codigo.length > 20) return { erro: "Código longo demais" }
@@ -48,8 +50,12 @@ export function lerProduto(form: FormData): ProdutoEntrada | { erro: string } {
   if (!unidade) return { erro: "Informe a unidade (PC, UN, CX…)" }
   if (unidade.length > 6) return { erro: "Unidade longa demais" }
   if (preco === null || preco < 0) return { erro: "Preço inválido" }
+  // Vazio é aceito (o campo é opcional), mas preenchido pela metade não: um NCM
+  // de 6 dígitos rejeita a NF-e inteira na SEFAZ, e o erro só apareceria na
+  // emissão — longe daqui, com o cliente esperando.
+  if (ncm && ncm.length !== 8) return { erro: "NCM precisa ter 8 dígitos" }
 
-  return { codigo, descricao, unidade, preco }
+  return { codigo, descricao, unidade, preco, ncm: ncm || null }
 }
 
 export async function criarProduto(entrada: ProdutoEntrada): Promise<ResultadoProduto> {

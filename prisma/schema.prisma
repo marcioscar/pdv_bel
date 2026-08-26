@@ -62,6 +62,11 @@ model Produto {
   descricao String
   unidade   String
   preco     Float
+  /// Classificação fiscal (8 dígitos), obrigatória em cada item da NF-e que a
+  /// rede emitir. Veio do sistema antigo; opcional porque produto cadastrado
+  /// aqui pelo balcão pode nascer sem ela, e travar o cadastro por causa de um
+  /// código fiscal seria impedir a venda por causa da contabilidade.
+  ncm       String?
   /// Produto não é apagado: sai das buscas e do caixa, e o histórico das vendas
   /// que o incluem continua íntegro. Apagar deixaria itens órfãos no relatório.
   ativo     Boolean @default(true)
@@ -155,11 +160,23 @@ model MovimentoEstoque {
   /// um número solto na observação.
   pedidoDeCompraId     String? @db.ObjectId
   pedidoDeCompraNumero Int?
+  /// A nota fiscal que gerou este movimento, quando o recebimento foi
+  /// conciliado com a NF-e real do fornecedor (em vez da entrada simples pela
+  /// quantidade esperada do pedido). Mesmo padrão do pedido de compra: navegar
+  /// até o documento, não só ler um número solto na observação.
+  notaFiscalRecebidaId String? @db.ObjectId
+  notaFiscalNumero     Int?
+  /// O custo unitário real desta entrada — produto mais impostos que somam por
+  /// fora (IPI, ICMS-ST) mais o rateio de frete e outras despesas da nota,
+  /// calculado na conciliação. Só existe quando `notaFiscalRecebidaId` existe:
+  /// a entrada simples usa o custo esperado do pedido, que já está lá.
+  custoUnitario Float?
   observacao String?
 
   @@index([produtoId, loja])
   @@index([transferenciaId])
   @@index([pedidoDeCompraId])
+  @@index([notaFiscalRecebidaId])
   @@index([loja, criadoEm])
   @@index([vendaId])
   @@map("movimentos_estoque")
@@ -682,7 +699,11 @@ model PedidoDeCompra {
   /// cadastro pode ser corrigido depois, e o papel já impresso não muda.
   fornecedorNome String
 
-  /// "rascunho" | "enviado" | "recebido" | "cancelado"
+  /// "rascunho" | "enviado" | "parcial" | "recebido" | "cancelado"
+  /// "parcial": chegou parte da mercadoria (conciliada com NF-e real) e o
+  /// resto continua esperado — o quanto já chegou é derivado do próprio
+  /// `MovimentoEstoque` (`pedidoDeCompraId` + tipo "entrada"), não um campo
+  /// aqui, para não ter dois números que podem discordar.
   situacao String @default("rascunho")
 
   itens PedidoItem[]
@@ -729,12 +750,21 @@ model SincronizacaoSefaz {
   loja String @unique
 
   /// Sempre 15 dígitos, com zeros à esquerda — é o formato que a SEFAZ pede de
-  /// volta em `ultNSU`. Guardado como veio, para não reintroduzir um bug de
-  /// padding numa conversão de ida e volta.
+  /// volta em `ultNSU`. Normalizado na gravação: comparar "21930" com
+  /// "000000000021930" como texto já rendeu um loop de consultas repetidas
+  /// que a SEFAZ puniu como consumo indevido.
   ultNsu String
   /// O que a SEFAZ tinha disponível na última consulta — só para a tela dizer
   /// "sincronizado" ou "ainda falta X documentos", não é usado para nada além disso.
   maxNsu String
+
+  /// Antes disto, não adianta perguntar de novo.
+  ///
+  /// A SEFAZ trata consulta sem novidade como consumo indevido e bloqueia o
+  /// CNPJ por uma hora (cStat 656) — a regra é esperar quando não veio nada.
+  /// Guardar o horário aqui é o que impede a tela de gastar o bloqueio da
+  /// empresa inteira num clique impaciente.
+  proximaConsultaEm DateTime?
 
   atualizadoEm DateTime @updatedAt
 
@@ -774,6 +804,8 @@ model NotaFiscalRecebida {
 
   /// "disponivel" | "recebida" | "ignorada"
   situacao String @default("disponivel")
+  recebidoEm  DateTime?
+  recebidoPor String?
 
   criadoEm DateTime @default(now())
 

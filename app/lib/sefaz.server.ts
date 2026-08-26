@@ -199,6 +199,14 @@ const parser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: "@_",
   removeNSPrefix: true,
+  // Sem isto, o parser converte texto que "parece número" para Number — e
+  // destrói exatamente os campos que mais importam aqui: CNPJ com zero à
+  // esquerda perde o zero (`00909913000125` vira `909913000125`), e a chave
+  // de acesso (44 dígitos) estoura a precisão seguro do JS e vira notação
+  // científica, ilegível e inútil. Todo campo numérico que este arquivo
+  // precisa já é convertido explicitamente com `Number(...)` — não há nada
+  // aqui que dependa da conversão automática.
+  parseTagValue: false,
 })
 
 type DocZip = { schema: string; xml: string }
@@ -490,15 +498,37 @@ export function resumoDoProcNFe(xml: string) {
     destinatarioCnpj: dest.CNPJ ?? dest.CPF ? String(dest.CNPJ ?? dest.CPF) : null,
     destinatarioNome: dest.xNome ? String(dest.xNome) : null,
     valorTotal: total.vNF ? Number(total.vNF) : null,
+    // Despesas que a nota lança no total, não item a item — é o que o rateio
+    // de custo precisa distribuir entre os itens proporcionalmente.
+    vFrete: Number(total.vFrete ?? 0),
+    vSeg: Number(total.vSeg ?? 0),
+    vDesc: Number(total.vDesc ?? 0),
+    vOutro: Number(total.vOutro ?? 0),
     quantidadeItens: itens.length,
-    itens: itens.map((item: any) => ({
-      codigo: item.prod?.cProd ? String(item.prod.cProd) : null,
-      descricao: item.prod?.xProd ? String(item.prod.xProd) : null,
-      ean: item.prod?.cEAN ? String(item.prod.cEAN) : null,
-      unidade: item.prod?.uCom ? String(item.prod.uCom) : null,
-      quantidade: item.prod?.qCom ? Number(item.prod.qCom) : null,
-      valorUnitario: item.prod?.vUnCom ? Number(item.prod.vUnCom) : null,
-      valorTotal: item.prod?.vProd ? Number(item.prod.vProd) : null,
-    })),
+    itens: itens.map((item: any) => {
+      // O sub-objeto do ICMS muda de nome com o CST/CSOSN (ICMS00, ICMS60,
+      // ICMSSN101...) — o valor que importa está sempre um nível abaixo, e
+      // pegar o primeiro valor do objeto evita listar as ~20 variantes.
+      const icms: any = Object.values(item.imposto?.ICMS ?? {})[0] ?? {}
+      const ipi = item.imposto?.IPI?.IPITrib
+
+      return {
+        codigo: item.prod?.cProd ? String(item.prod.cProd) : null,
+        descricao: item.prod?.xProd ? String(item.prod.xProd) : null,
+        ean: item.prod?.cEAN ? String(item.prod.cEAN) : null,
+        // A classificação fiscal que o fornecedor usou. É o melhor palpite
+        // para o produto que ainda não tem NCM cadastrado — vem da nota de
+        // quem fabrica, não de um chute nosso.
+        ncm: item.prod?.NCM ? String(item.prod.NCM) : null,
+        unidade: item.prod?.uCom ? String(item.prod.uCom) : null,
+        quantidade: item.prod?.qCom ? Number(item.prod.qCom) : null,
+        valorUnitario: item.prod?.vUnCom ? Number(item.prod.vUnCom) : null,
+        valorTotal: item.prod?.vProd ? Number(item.prod.vProd) : null,
+        // Somam por fora do valor do produto — ICMS "normal" não entra aqui
+        // porque já vem embutido no preço negociado (`vUnCom`/`vProd`).
+        vIPI: Number(ipi?.vIPI ?? 0),
+        vICMSST: Number(icms.vICMSST ?? 0),
+      }
+    }),
   }
 }

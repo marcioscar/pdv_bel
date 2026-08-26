@@ -90,9 +90,10 @@ type EmEdicao = {
   descricao: string
   unidade: string
   preco: string
+  ncm: string
 }
 
-const NOVO: EmEdicao = { id: null, codigo: "", descricao: "", unidade: "", preco: "" }
+const NOVO: EmEdicao = { id: null, codigo: "", descricao: "", unidade: "", preco: "", ncm: "" }
 
 export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
   const { produtos } = loaderData
@@ -169,6 +170,7 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
         descricao: edicao.descricao,
         unidade: edicao.unidade,
         preco: edicao.preco,
+        ncm: edicao.ncm,
       },
       { method: "post" }
     )
@@ -238,11 +240,17 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
             className="col-span-1"
           />
           <CampoEdicao
+            rotulo="NCM"
+            valor={edicao.ncm}
+            onChange={(v) => setEdicao({ ...edicao, ncm: v.replace(/\D/g, "").slice(0, 8) })}
+            className="col-span-1"
+          />
+          <CampoEdicao
             rotulo="Preço"
             valor={edicao.preco}
             onChange={(v) => setEdicao({ ...edicao, preco: v })}
             onEnter={salvar}
-            className="col-span-2"
+            className="col-span-1"
           />
           <div className="col-span-2 flex gap-2">
             <Button
@@ -360,6 +368,7 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
                           unidade: produto.unidade,
                           // Vírgula, como se digita — interpretarValor aceita as duas.
                           preco: produto.preco.toFixed(2).replace(".", ","),
+                          ncm: produto.ncm ?? "",
                         })
                       }
                     >

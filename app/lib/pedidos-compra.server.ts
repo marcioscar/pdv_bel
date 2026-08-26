@@ -291,7 +291,7 @@ export async function consultarPedidos(filtro: FiltroPedidos) {
   const where: Prisma.PedidoDeCompraWhereInput =
     filtro.situacao === "todas" ? base : { AND: [periodo, ...conteudo, { situacao: filtro.situacao }] }
 
-  const emAberto = { AND: [base, { situacao: { in: ["rascunho", "enviado"] } }] }
+  const emAberto = { AND: [base, { situacao: { in: ["rascunho", "enviado", "parcial"] } }] }
   const recebidos = { AND: [base, { situacao: "recebido" }] }
   const cancelados = { AND: [base, { situacao: "cancelado" }] }
 
@@ -341,17 +341,55 @@ export function pedidoPorId(id: string) {
   return db.pedidoDeCompra.findUnique({ where: { id } })
 }
 
-/** Soma, por produto, a quantidade pedida em pedidos ainda não recebidos. */
+/**
+ * Quanto já entrou no estoque por conta de um pedido, por produto — direto do
+ * livro de movimentos, não de um contador à parte. Um pedido "parcial" tem
+ * parte disto maior que zero e parte menor que o pedido; é essa diferença que
+ * diz o que ainda falta chegar.
+ */
+export async function recebidoPorProduto(pedidoId: string): Promise<Map<string, number>> {
+  const movimentos = await db.movimentoEstoque.findMany({
+    where: { pedidoDeCompraId: pedidoId, tipo: "entrada" },
+    select: { produtoId: true, quantidade: true },
+  })
+  const mapa = new Map<string, number>()
+  for (const m of movimentos) {
+    mapa.set(m.produtoId, arredondar((mapa.get(m.produtoId) ?? 0) + m.quantidade))
+  }
+  return mapa
+}
+
+/**
+ * Soma, por produto, o que falta chegar em pedidos ainda em aberto — pedido
+ * "parcial" conta só o restante, não o total original: a parte que já chegou
+ * já virou saldo de verdade (`MovimentoEstoque`), contar de novo aqui seria
+ * contar a mesma mercadoria duas vezes.
+ */
 export async function saldosPedidos(): Promise<Map<string, number>> {
   const abertos = await db.pedidoDeCompra.findMany({
-    where: { situacao: { in: ["rascunho", "enviado"] } },
-    select: { itens: true },
+    where: { situacao: { in: ["rascunho", "enviado", "parcial"] } },
+    select: { id: true, itens: true },
   })
+  if (abertos.length === 0) return new Map()
+
+  const movimentos = await db.movimentoEstoque.findMany({
+    where: { pedidoDeCompraId: { in: abertos.map((p) => p.id) }, tipo: "entrada" },
+    select: { pedidoDeCompraId: true, produtoId: true, quantidade: true },
+  })
+  const recebidoPorPedidoEProduto = new Map<string, number>()
+  for (const m of movimentos) {
+    const chave = `${m.pedidoDeCompraId}:${m.produtoId}`
+    recebidoPorPedidoEProduto.set(chave, (recebidoPorPedidoEProduto.get(chave) ?? 0) + m.quantidade)
+  }
 
   const mapa = new Map<string, number>()
-  for (const doc of abertos) {
-    for (const item of doc.itens) {
-      mapa.set(item.produtoId, arredondar((mapa.get(item.produtoId) ?? 0) + item.quantidade))
+  for (const pedido of abertos) {
+    for (const item of pedido.itens) {
+      const jaRecebido = recebidoPorPedidoEProduto.get(`${pedido.id}:${item.produtoId}`) ?? 0
+      const faltando = Math.max(0, item.quantidade - jaRecebido)
+      if (faltando > 0) {
+        mapa.set(item.produtoId, arredondar((mapa.get(item.produtoId) ?? 0) + faltando))
+      }
     }
   }
   return mapa

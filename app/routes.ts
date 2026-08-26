@@ -37,6 +37,10 @@ export default [
       route("compras", "routes/admin.compras.tsx"),
       route("pedido-novo", "routes/admin.pedido-novo.tsx"),
       route("pedidos-de-compra", "routes/admin.pedidos-de-compra.tsx"),
+      route(
+        "pedidos-de-compra/:pedidoId/conciliacao",
+        "routes/admin.pedidos-de-compra.conciliacao.tsx"
+      ),
       route("notas-de-entrada", "routes/admin.notas-de-entrada.tsx"),
       route("vendas", "routes/admin.vendas.tsx"),
       route("caixas", "routes/admin.caixas.tsx"),

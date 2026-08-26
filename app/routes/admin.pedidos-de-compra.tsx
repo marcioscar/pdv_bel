@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { data, Link, useFetcher, useNavigation, useSearchParams } from "react-router"
-import { ClipboardList, Printer, Search, ShoppingBag } from "lucide-react"
+import { ClipboardList, GitCompare, Printer, Search, ShoppingBag } from "lucide-react"
 
 import type { Route } from "./+types/admin.pedidos-de-compra"
 import { Atalho, Campo, ESTILO_CAMPO, Pagina } from "~/components/pdv/filtros"
@@ -25,6 +25,7 @@ import {
   type PedidoDaConsulta,
 } from "~/lib/pedidos-compra.server"
 import { listarLojas } from "~/lib/lojas.server"
+import { pedidosComNotaDisponivel } from "~/lib/conciliacao.server"
 import { exigirGerente } from "~/lib/sessao.server"
 import { cn } from "~/lib/utils"
 
@@ -42,8 +43,14 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   const filtro = lerFiltroPedidos(new URL(request.url))
   const [consulta, lojas] = await Promise.all([consultarPedidos(filtro), listarLojas()])
+  const comNota = await pedidosComNotaDisponivel(consulta.pedidos)
 
-  return { filtro, lojas: lojas.map((l) => l.codigo), ...consulta }
+  return {
+    filtro,
+    lojas: lojas.map((l) => l.codigo),
+    pedidosComNota: [...comNota],
+    ...consulta,
+  }
 }
 
 export async function action({ request }: Route.ActionArgs) {
@@ -63,7 +70,7 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function AdminPedidosDeCompra({ loaderData }: Route.ComponentProps) {
-  const { filtro, lojas, pedidos, total, foraDoPeriodo, paginas, resumo } = loaderData
+  const { filtro, lojas, pedidos, pedidosComNota, total, foraDoPeriodo, paginas, resumo } = loaderData
 
   const [params, setParams] = useSearchParams()
   const navegacao = useNavigation()
@@ -270,6 +277,7 @@ export default function AdminPedidosDeCompra({ loaderData }: Route.ComponentProp
                 pedido={p}
                 lojas={lojas}
                 gravando={gravando}
+                temNota={pedidosComNota.includes(p.id)}
                 onMudarSituacao={mudarSituacao}
                 onReceber={receberPedido}
               />
@@ -303,12 +311,14 @@ function LinhaPedido({
   pedido: p,
   lojas,
   gravando,
+  temNota,
   onMudarSituacao,
   onReceber,
 }: {
   pedido: PedidoDaConsulta
   lojas: string[]
   gravando: boolean
+  temNota: boolean
   onMudarSituacao: (id: string, passo: "enviar" | "cancelar") => void
   onReceber: (id: string, loja: string) => void
 }) {
@@ -341,6 +351,15 @@ function LinhaPedido({
           <Printer className="size-3.5" aria-hidden />
           Imprimir
         </a>
+        {p.situacao === "enviado" || p.situacao === "parcial" || p.situacao === "recebido" ? (
+          <Link
+            to={`/admin/pedidos-de-compra/${p.id}/conciliacao`}
+            className="inline-flex h-8 items-center gap-1 rounded-lg px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+          >
+            <GitCompare className="size-3.5" aria-hidden />
+            Conciliar NF
+          </Link>
+        ) : null}
         {p.situacao === "rascunho" ? (
           <>
             <Button
@@ -365,7 +384,16 @@ function LinhaPedido({
           </>
         ) : null}
         {p.situacao === "enviado" ? (
-          <ReceberPedido lojas={lojas} gravando={gravando} onReceber={(loja) => onReceber(p.id, loja)} />
+          temNota ? (
+            <span
+              className="text-xs text-muted-foreground"
+              title="Já tem nota do fornecedor sincronizada — receba pela conciliação, com quantidade e custo reais"
+            >
+              receber pela conciliação →
+            </span>
+          ) : (
+            <ReceberPedido lojas={lojas} gravando={gravando} onReceber={(loja) => onReceber(p.id, loja)} />
+          )
         ) : null}
       </div>
     </li>
