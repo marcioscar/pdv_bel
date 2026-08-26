@@ -1,4 +1,12 @@
+import type { Prisma } from "@prisma/client"
+
 import { db } from "~/lib/db.server"
+import { PRIMEIRO_DIA, ULTIMO_DIA, depoisDoDia, inicioDoDia } from "~/lib/dia"
+import {
+  SITUACOES_NOTA,
+  type FiltroNotas,
+  type SituacaoNota,
+} from "~/lib/notas-fiscais"
 import {
   consultarChaveNaSefaz,
   consultarNsuNaSefaz,
@@ -122,7 +130,11 @@ function guardarCursor(loja: string, ultNsu: string, maxNsu: string, proximaCons
 async function gravarNota(loja: string, schema: string, xml: string): Promise<boolean> {
   const completa = schema.startsWith("procNFe")
   const resumo = completa ? resumoDoProcNFe(xml) : resumoDoResNFe(xml)
-  if (!resumo?.chaveAcesso) return false
+  // Chave que não tem 44 dígitos é chave corrompida, não chave estranha: já
+  // aconteceu (o parser convertia para número e estourava a precisão) e o
+  // estrago foi gravar 49 duplicatas inúteis, porque a chave é a identidade
+  // do documento. Melhor recusar do que guardar lixo com aparência de nota.
+  if (!resumo?.chaveAcesso || !/^\d{44}$/.test(resumo.chaveAcesso)) return false
 
   const decodificada = decodificarChave(resumo.chaveAcesso)
   const numero = "numero" in resumo && resumo.numero ? Number(resumo.numero) : decodificada?.numero ?? null
@@ -130,7 +142,9 @@ async function gravarNota(loja: string, schema: string, xml: string): Promise<bo
 
   const dados = {
     loja,
-    emitenteCnpj: resumo.emitenteCnpj ?? decodificada?.cnpjEmitente ?? "",
+    // 14 dígitos sempre: CNPJ que começa com zero perdia o zero e virava um
+    // segundo "fornecedor" na lista, que nunca casava com o cadastro.
+    emitenteCnpj: normalizarCnpj(resumo.emitenteCnpj ?? decodificada?.cnpjEmitente ?? ""),
     emitenteNome: resumo.emitenteNome ?? "",
     numero,
     serie,
@@ -148,11 +162,144 @@ async function gravarNota(loja: string, schema: string, xml: string): Promise<bo
   return true
 }
 
+/** CNPJ com 14 dígitos, zeros à esquerda inclusive — o formato do cadastro. */
+function normalizarCnpj(valor: string) {
+  const digitos = (valor ?? "").replace(/\D/g, "")
+  return digitos ? digitos.padStart(14, "0") : ""
+}
+
 export function listarNotasDaLoja(loja: string) {
   return db.notaFiscalRecebida.findMany({
     where: { loja },
     orderBy: { dataEmissao: "desc" },
   })
+}
+
+export const NOTAS_POR_PAGINA = 40
+
+const DIA = /^\d{4}-\d{2}-\d{2}$/
+
+/**
+ * Lê o filtro da URL, no mesmo padrão de `lerFiltroPedidos`.
+ *
+ * O padrão é "tudo": nota de fornecedor chega às dezenas por mês, e um
+ * período curto por padrão esconderia a nota do mês passado que é justamente
+ * a que se está procurando.
+ */
+export function lerFiltroNotas(url: URL): FiltroNotas {
+  const params = url.searchParams
+  const texto = (nome: string) => (params.get(nome) ?? "").trim()
+
+  const temDe = DIA.test(texto("de"))
+  const temAte = DIA.test(texto("ate"))
+  const de = temDe ? texto("de") : temAte ? texto("ate") : PRIMEIRO_DIA
+  const ateBruto = temAte ? texto("ate") : temDe ? texto("de") : ULTIMO_DIA
+  const [inicio, fim] = ateBruto < de ? [ateBruto, de] : [de, ateBruto]
+
+  const situacao = texto("situacao")
+
+  return {
+    loja: texto("loja").slice(0, 10),
+    de: inicio,
+    ate: fim,
+    fornecedor: texto("fornecedor").slice(0, 60),
+    numero: texto("numero").replace(/\D/g, "").slice(0, 9),
+    situacao: SITUACOES_NOTA.some((s) => s.id === situacao) ? (situacao as SituacaoNota) : "todas",
+    pagina: Math.max(1, Math.trunc(Number(params.get("pagina"))) || 1),
+  }
+}
+
+/**
+ * As notas que casam com o filtro, uma página de cada vez.
+ *
+ * O resumo ignora de propósito o seletor de situação — como em contas a
+ * receber e em pedidos, os cartões SÃO a repartição por situação daquele
+ * período e daquele fornecedor. Obedecer ao seletor faria os outros serem
+ * sempre zero.
+ */
+export async function consultarNotas(filtro: FiltroNotas) {
+  const periodo: Prisma.NotaFiscalRecebidaWhereInput = {
+    dataEmissao: { gte: inicioDoDia(filtro.de), lt: depoisDoDia(filtro.ate) },
+  }
+  const conteudo: Prisma.NotaFiscalRecebidaWhereInput[] = [{ loja: filtro.loja }]
+
+  if (filtro.numero) conteudo.push({ numero: Number(filtro.numero) })
+  if (filtro.fornecedor) {
+    // Um campo só para nome e CNPJ: quem procura tem um ou outro na mão, e
+    // dois campos separados obrigariam a saber de antemão qual deles serve.
+    const digitos = filtro.fornecedor.replace(/\D/g, "")
+    conteudo.push({
+      OR: [
+        { emitenteNome: { contains: filtro.fornecedor, mode: "insensitive" } },
+        ...(digitos.length >= 3 ? [{ emitenteCnpj: { contains: digitos } }] : []),
+      ],
+    })
+  }
+
+  const base: Prisma.NotaFiscalRecebidaWhereInput = { AND: [periodo, ...conteudo] }
+  const where: Prisma.NotaFiscalRecebidaWhereInput =
+    filtro.situacao === "todas" ? base : { AND: [periodo, ...conteudo, { situacao: filtro.situacao }] }
+
+  const [pagina, total, agregado, disponiveis, recebidas] = await Promise.all([
+    db.notaFiscalRecebida.findMany({
+      where,
+      orderBy: { dataEmissao: "desc" },
+      skip: (filtro.pagina - 1) * NOTAS_POR_PAGINA,
+      take: NOTAS_POR_PAGINA,
+    }),
+    db.notaFiscalRecebida.count({ where }),
+    db.notaFiscalRecebida.aggregate({ where, _sum: { valorTotal: true } }),
+    db.notaFiscalRecebida.aggregate({
+      where: { AND: [base, { situacao: "disponivel" }] },
+      _sum: { valorTotal: true },
+      _count: { _all: true },
+    }),
+    db.notaFiscalRecebida.aggregate({
+      where: { AND: [base, { situacao: "recebida" }] },
+      _sum: { valorTotal: true },
+      _count: { _all: true },
+    }),
+  ])
+
+  // Quando a busca não acha nada no período, dizer isso é melhor que uma tela
+  // vazia que parece defeito — a mesma escolha já feita nas outras consultas.
+  const foraDoPeriodo =
+    total === 0 && (filtro.numero || filtro.fornecedor)
+      ? await db.notaFiscalRecebida.count({ where: { AND: conteudo } })
+      : 0
+
+  return {
+    notas: pagina,
+    total,
+    foraDoPeriodo,
+    paginas: Math.max(1, Math.ceil(total / NOTAS_POR_PAGINA)),
+    resumo: {
+      valor: agregado._sum.valorTotal ?? 0,
+      disponivel: disponiveis._sum.valorTotal ?? 0,
+      disponivelQuantidade: disponiveis._count._all,
+      recebida: recebidas._sum.valorTotal ?? 0,
+      recebidaQuantidade: recebidas._count._all,
+    },
+  }
+}
+
+export type NotaDaConsulta = Awaited<ReturnType<typeof consultarNotas>>["notas"][number]
+
+/** Os fornecedores que já mandaram nota para esta loja, para o seletor da tela. */
+export async function fornecedoresComNota(loja: string) {
+  const notas = await db.notaFiscalRecebida.findMany({
+    where: { loja },
+    select: { emitenteCnpj: true, emitenteNome: true },
+  })
+
+  const porCnpj = new Map<string, { cnpj: string; nome: string; notas: number }>()
+  for (const n of notas) {
+    const atual = porCnpj.get(n.emitenteCnpj)
+    if (atual) atual.notas++
+    else porCnpj.set(n.emitenteCnpj, { cnpj: n.emitenteCnpj, nome: n.emitenteNome, notas: 1 })
+  }
+
+  return [...porCnpj.values()].sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"))
 }
 
 export function situacaoSincronizacao(loja: string) {

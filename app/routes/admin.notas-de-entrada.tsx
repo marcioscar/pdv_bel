@@ -1,17 +1,28 @@
-import { useState } from "react"
-import { useFetcher, useSearchParams } from "react-router"
-import { FileSearch, Loader2, RefreshCw } from "lucide-react"
+import { useMemo, useState } from "react"
+import { useFetcher, useNavigation, useSearchParams } from "react-router"
+import { FileSearch, Loader2, RefreshCw, Search } from "lucide-react"
 
 import type { Route } from "./+types/admin.notas-de-entrada"
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
-import { ESTILO_CAMPO } from "~/components/pdv/filtros"
+import { Atalho, Campo, ESTILO_CAMPO, Pagina } from "~/components/pdv/filtros"
+import { diaAtras, diaDeHoje } from "~/lib/dia"
+import { formatarCpfCnpj } from "~/lib/documento"
 import { listarLojas } from "~/lib/lojas.server"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import {
+  PERIODO_TODO,
+  SITUACOES_NOTA,
+  rotuloDaSituacaoNota,
+  type FiltroNotas,
+} from "~/lib/notas-fiscais"
+import {
   buscarNotaPorChave,
-  listarNotasDaLoja,
+  consultarNotas,
+  fornecedoresComNota,
+  lerFiltroNotas,
+  notaPorId,
   sincronizarNotasDaLoja,
   situacaoSincronizacao,
   type ResultadoSincronizacao,
@@ -37,23 +48,40 @@ export async function loader({ request }: Route.LoaderArgs) {
   await exigirGerente(request, "buscarNotaFiscal")
 
   const url = new URL(request.url)
-  const loja = url.searchParams.get("loja") ?? ""
+  const filtro = lerFiltroNotas(url)
+  const loja = filtro.loja
   const notaId = url.searchParams.get("nota") ?? ""
 
   const lojas = await listarLojas()
   const configuradas: Record<string, boolean> = {}
   for (const l of lojas) configuradas[l.codigo] = await sefazConfigurado(l.codigo)
 
-  const notas = loja ? await listarNotasDaLoja(loja) : []
+  const consulta = loja
+    ? await consultarNotas(filtro)
+    : { notas: [], total: 0, foraDoPeriodo: 0, paginas: 1, resumo: null }
   const sincronizacao = loja ? await situacaoSincronizacao(loja) : null
+  const fornecedores = loja ? await fornecedoresComNota(loja) : []
 
-  const notaSelecionada = notaId ? (notas.find((n) => n.id === notaId) ?? null) : null
+  // Buscado à parte, e não achado na página: a nota escolhida pode estar fora
+  // do filtro atual (o gerente estreitou a busca depois de abrir uma), e
+  // fazê-la sumir do painel por isso seria perder o que ele estava lendo.
+  const notaSelecionada = notaId ? await notaPorId(notaId) : null
   const itensDaNota =
     notaSelecionada?.xml && notaSelecionada.situacaoXml === "completa"
       ? (resumoDoProcNFe(notaSelecionada.xml)?.itens ?? [])
       : null
 
-  return { lojas, configuradas, loja, notas, sincronizacao, notaSelecionada, itensDaNota }
+  return {
+    lojas,
+    configuradas,
+    filtro,
+    loja,
+    fornecedores,
+    sincronizacao,
+    notaSelecionada,
+    itensDaNota,
+    ...consulta,
+  }
 }
 
 type RespostaAction =
@@ -80,8 +108,25 @@ export async function action({ request }: Route.ActionArgs): Promise<RespostaAct
 }
 
 export default function AdminNotasDeEntrada({ loaderData }: Route.ComponentProps) {
-  const { lojas, configuradas, loja, notas, sincronizacao, notaSelecionada, itensDaNota } = loaderData
-  const [, setSearchParams] = useSearchParams()
+  const {
+    lojas,
+    configuradas,
+    filtro,
+    loja,
+    fornecedores,
+    notas,
+    total,
+    foraDoPeriodo,
+    paginas,
+    resumo,
+    sincronizacao,
+    notaSelecionada,
+    itensDaNota,
+  } = loaderData
+
+  const [params, setParams] = useSearchParams()
+  const navegacao = useNavigation()
+  const consultando = navegacao.state === "loading"
   const sincFetcher = useFetcher<RespostaAction>()
   const chaveFetcher = useFetcher<RespostaAction>()
   const [chave, setChave] = useState("")
@@ -90,12 +135,32 @@ export default function AdminNotasDeEntrada({ loaderData }: Route.ComponentProps
   const sincronizando = sincFetcher.state !== "idle"
   const buscandoChave = chaveFetcher.state !== "idle"
 
+  /**
+   * Muda um pedaço do filtro e volta para a primeira página.
+   *
+   * Preservar a página ao trocar o fornecedor levaria para a página 4 de uma
+   * consulta que talvez só tenha uma — tela vazia que parece defeito.
+   */
+  function mudarFiltro(mudancas: Partial<Record<keyof FiltroNotas, string>>) {
+    const proximos = new URLSearchParams(params)
+    for (const [chave, valor] of Object.entries(mudancas)) {
+      if (valor) proximos.set(chave, valor)
+      else proximos.delete(chave)
+    }
+    proximos.delete("pagina")
+    // Trocar o filtro fecha a nota aberta: ela pode não estar mais na lista.
+    proximos.delete("nota")
+    setParams(proximos)
+  }
+
   function escolherLoja(novaLoja: string) {
-    setSearchParams(novaLoja ? { loja: novaLoja } : {})
+    setParams(novaLoja ? { loja: novaLoja } : {})
   }
 
   function escolherNota(id: string) {
-    setSearchParams(loja ? { loja, nota: id } : {})
+    const proximos = new URLSearchParams(params)
+    proximos.set("nota", id)
+    setParams(proximos)
   }
 
   const faltam = sincronizacao
@@ -223,6 +288,95 @@ export default function AdminNotasDeEntrada({ loaderData }: Route.ComponentProps
       ) : null}
 
       {loja ? (
+        <>
+          <div className="mt-4 flex flex-wrap items-end gap-3 rounded-xl border border-border p-3">
+            <Campo rotulo="Fornecedor">
+              <BuscaDeFornecedor
+                fornecedores={fornecedores}
+                valor={filtro.fornecedor}
+                onEscolher={(fornecedor) => mudarFiltro({ fornecedor })}
+              />
+            </Campo>
+
+            <Campo rotulo="Nº da nota">
+              <Input
+                defaultValue={filtro.numero}
+                onBlur={(e) => mudarFiltro({ numero: e.target.value })}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") mudarFiltro({ numero: e.currentTarget.value })
+                }}
+                className="w-28"
+              />
+            </Campo>
+
+            <Campo rotulo="De">
+              <input
+                type="date"
+                value={filtro.de === PERIODO_TODO.de ? "" : filtro.de}
+                onChange={(e) => mudarFiltro({ de: e.target.value })}
+                className={ESTILO_CAMPO}
+              />
+            </Campo>
+            <Campo rotulo="Até">
+              <input
+                type="date"
+                value={filtro.ate === PERIODO_TODO.ate ? "" : filtro.ate}
+                onChange={(e) => mudarFiltro({ ate: e.target.value })}
+                className={ESTILO_CAMPO}
+              />
+            </Campo>
+
+            <Campo rotulo="Situação">
+              <select
+                value={filtro.situacao}
+                onChange={(e) => mudarFiltro({ situacao: e.target.value })}
+                className={cn(ESTILO_CAMPO, "w-36")}
+              >
+                {SITUACOES_NOTA.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.rotulo}
+                  </option>
+                ))}
+              </select>
+            </Campo>
+
+            <div className="flex gap-1.5">
+              <Atalho rotulo="30 dias" onClick={() => mudarFiltro({ de: diaAtras(30), ate: diaDeHoje() })} />
+              <Atalho rotulo="90 dias" onClick={() => mudarFiltro({ de: diaAtras(90), ate: diaDeHoje() })} />
+              <Atalho
+                rotulo="Limpar"
+                onClick={() =>
+                  mudarFiltro({ fornecedor: "", numero: "", de: "", ate: "", situacao: "" })
+                }
+              />
+            </div>
+
+            {consultando ? <Search className="size-4 animate-pulse text-muted-foreground" /> : null}
+          </div>
+
+          {resumo ? (
+            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+              <span>
+                <strong className="text-foreground">{total}</strong>{" "}
+                {total === 1 ? "nota" : "notas"} · {moeda(resumo.valor)}
+              </span>
+              <span>
+                disponíveis: {resumo.disponivelQuantidade} · {moeda(resumo.disponivel)}
+              </span>
+              <span>
+                recebidas: {resumo.recebidaQuantidade} · {moeda(resumo.recebida)}
+              </span>
+              {foraDoPeriodo > 0 ? (
+                <span className="text-amber-600 dark:text-amber-500">
+                  nada no período — mas há {foraDoPeriodo} fora dele
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+        </>
+      ) : null}
+
+      {loja ? (
         <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_1.2fr]">
           <div className="overflow-x-auto rounded-lg border">
             <table className="w-full text-xs">
@@ -239,7 +393,9 @@ export default function AdminNotasDeEntrada({ loaderData }: Route.ComponentProps
                 {notas.length === 0 ? (
                   <tr>
                     <td colSpan={5} className="px-2 py-4 text-center text-muted-foreground">
-                      Nenhuma nota sincronizada ainda.
+                      {filtro.fornecedor || filtro.numero || filtro.situacao !== "todas"
+                        ? "Nenhuma nota com esse filtro."
+                        : "Nenhuma nota sincronizada ainda."}
                     </td>
                   </tr>
                 ) : (
@@ -264,15 +420,34 @@ export default function AdminNotasDeEntrada({ loaderData }: Route.ComponentProps
                         {n.valorTotal != null ? moeda(n.valorTotal) : "—"}
                       </td>
                       <td className="px-2 py-1.5">
-                        <Badge variant={n.situacaoXml === "completa" ? "default" : "secondary"}>
-                          {n.situacaoXml === "completa" ? "itens" : "resumo"}
-                        </Badge>
+                        <div className="flex items-center gap-1">
+                          <Badge variant={n.situacaoXml === "completa" ? "default" : "secondary"}>
+                            {n.situacaoXml === "completa" ? "itens" : "resumo"}
+                          </Badge>
+                          {n.situacao !== "disponivel" ? (
+                            <Badge variant="outline">{rotuloDaSituacaoNota(n.situacao)}</Badge>
+                          ) : null}
+                        </div>
                       </td>
                     </tr>
                   ))
                 )}
               </tbody>
             </table>
+
+            {paginas > 1 ? (
+              <div className="flex items-center gap-3 border-t px-2 py-2 text-xs text-muted-foreground">
+                <Pagina params={params} para={filtro.pagina - 1} ativa={filtro.pagina > 1}>
+                  ‹ Anteriores
+                </Pagina>
+                <span className="font-mono tabular-nums">
+                  página {filtro.pagina} de {paginas}
+                </span>
+                <Pagina params={params} para={filtro.pagina + 1} ativa={filtro.pagina < paginas}>
+                  Próximas ›
+                </Pagina>
+              </div>
+            ) : null}
           </div>
 
           <div className="rounded-lg border p-4">
@@ -340,6 +515,108 @@ export default function AdminNotasDeEntrada({ loaderData }: Route.ComponentProps
             )}
           </div>
         </div>
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * Escolhe o fornecedor digitando — o mesmo padrão da busca de produto na ficha
+ * de estoque: campo de texto com a lista suspensa filtrando enquanto se digita.
+ *
+ * Um `<select>` puro não servia: são dezenas de fornecedores com razão social
+ * longa e parecida ("COMERCIAL … LTDA"), e achar o certo numa lista rolante é
+ * pior que digitar três letras. Procura por nome e por CNPJ no mesmo campo,
+ * porque quem procura tem um ou outro na mão — o que dispensa o segundo campo
+ * que existia aqui antes.
+ */
+function BuscaDeFornecedor({
+  fornecedores,
+  valor,
+  onEscolher,
+}: {
+  fornecedores: { cnpj: string; nome: string; notas: number }[]
+  valor: string
+  onEscolher: (fornecedor: string) => void
+}) {
+  const [termo, setTermo] = useState(valor)
+  const [aberto, setAberto] = useState(false)
+
+  const achados = useMemo(() => {
+    const busca = termo.trim().toLowerCase()
+    if (!busca) return fornecedores.slice(0, 12)
+    const digitos = busca.replace(/\D/g, "")
+    return fornecedores
+      .filter(
+        (f) =>
+          f.nome.toLowerCase().includes(busca) ||
+          (digitos.length >= 3 && f.cnpj.includes(digitos))
+      )
+      .slice(0, 12)
+  }, [fornecedores, termo])
+
+  function escolher(nome: string) {
+    setTermo(nome)
+    setAberto(false)
+    onEscolher(nome)
+  }
+
+  return (
+    <div className="relative w-72">
+      <Search
+        className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+        aria-hidden
+      />
+      <Input
+        value={termo}
+        onChange={(e) => {
+          setTermo(e.target.value)
+          setAberto(true)
+        }}
+        onFocus={() => setAberto(true)}
+        // `onBlur` com atraso: o clique num item da lista dispara o blur antes
+        // do próprio clique, e fechar na hora engoliria a escolha.
+        onBlur={() => setTimeout(() => setAberto(false), 150)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") escolher(e.currentTarget.value)
+          if (e.key === "Escape") setAberto(false)
+        }}
+        placeholder="Todos — nome ou CNPJ"
+        type="search"
+        autoComplete="off"
+        className="pl-8"
+      />
+
+      {aberto ? (
+        <ul className="absolute z-20 mt-1 max-h-72 w-full overflow-y-auto divide-y divide-border rounded-lg border border-border bg-card shadow-lg">
+          <li>
+            <button
+              type="button"
+              onClick={() => escolher("")}
+              className="flex w-full items-center px-3 py-2 text-left text-sm text-muted-foreground hover:bg-muted/50"
+            >
+              Todos os fornecedores
+            </button>
+          </li>
+          {achados.map((f) => (
+            <li key={f.cnpj}>
+              <button
+                type="button"
+                onClick={() => escolher(f.nome)}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-muted/50"
+              >
+                <span className="min-w-0 flex-1 truncate">{f.nome}</span>
+                <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+                  {formatarCpfCnpj(f.cnpj)}
+                </span>
+                <span className="shrink-0 text-xs text-muted-foreground">{f.notas}</span>
+              </button>
+            </li>
+          ))}
+          {achados.length === 0 ? (
+            <li className="px-3 py-2 text-sm text-muted-foreground">Nenhum fornecedor com esse termo.</li>
+          ) : null}
+        </ul>
       ) : null}
     </div>
   )
