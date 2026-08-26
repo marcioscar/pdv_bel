@@ -820,8 +820,52 @@ model NotaFiscalRecebida {
   recebidoEm  DateTime?
   recebidoPor String?
 
+  /// Quando as duplicatas desta nota já viraram conta a pagar (`Despesa`).
+  /// Existe só para não deixar gerar duas vezes por engano — duplicar título
+  /// a pagar é o tipo de erro que só aparece quando alguém já pagou os dois.
+  despesasGeradasEm  DateTime?
+  despesasGeradasPor String?
+
   criadoEm DateTime @default(now())
 
   @@index([loja, situacao, criadoEm])
   @@map("notas_fiscais_recebidas")
+}
+
+/// Uma conta a pagar — a coleção não nasceu com este projeto, é do sistema de
+/// contas a pagar que a rede já usa (o mesmo onde alguém anexa o boleto e o
+/// comprovante depois de pagar). Aqui só GERAMOS a partir da NF-e recebida;
+/// marcar como pago e anexar arquivo continua sendo feito lá.
+///
+/// Por isso os campos livres (`conta`, `tipo`, `contaCorrente`) são o que já
+/// existe de verdade no banco, não um vocabulário novo — inventar uma
+/// grafia diferente ("Revenda" vs "revenda", "variável" vs "variavel") criaria
+/// uma categoria fantasma que o outro sistema não reconhece nos relatórios.
+model Despesa {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  conta         String
+  valor         Float
+  descricao     String
+  fornecedor    String
+  tipo          String
+  data          DateTime
+  /// Preenchidos por quem paga, no outro sistema — nascem vazios aqui.
+  boleto        String?
+  comprovante   String?
+  pago          Boolean  @default(false)
+  loja          String?
+  contaCorrente String?
+
+  @@map("despesas")
+}
+
+/// As categorias de despesa que o sistema de contas a pagar já oferece —
+/// `conta` é o valor gravado, `etiqueta` é como aparece pro usuário lá.
+/// Fonte da verdade em vez de uma lista inventada aqui que divergiria da de lá.
+model CategoriaDeDespesa {
+  id       String @id @default(auto()) @map("_id") @db.ObjectId
+  etiqueta String
+  conta    String
+
+  @@map("contas")
 }

@@ -279,6 +279,7 @@ export const ACOES_DE_GERENTE = {
     "Só gerente decide o que houve com a mercadoria que não chegou",
   buscarNotaFiscal: "Só gerente busca nota fiscal na SEFAZ — é dado fiscal da empresa",
   gerenciarCertificados: "Só gerente mexe em certificado — é credencial de acesso a banco e ao fisco",
+  gerarDespesas: "Só gerente gera conta a pagar a partir da nota — é dinheiro comprometido",
 } as const
 
 export type AcaoDeGerente = keyof typeof ACOES_DE_GERENTE

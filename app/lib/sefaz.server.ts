@@ -495,6 +495,8 @@ export function resumoDoProcNFe(xml: string) {
     dataEmissao: ide.dhEmi ? String(ide.dhEmi) : null,
     emitenteCnpj: emit.CNPJ ? String(emit.CNPJ) : null,
     emitenteNome: emit.xNome ? String(emit.xNome) : null,
+    emitenteCidade: emit.enderEmit?.xMun ? String(emit.enderEmit.xMun) : null,
+    emitenteBairro: emit.enderEmit?.xBairro ? String(emit.enderEmit.xBairro) : null,
     destinatarioCnpj: dest.CNPJ ?? dest.CPF ? String(dest.CNPJ ?? dest.CPF) : null,
     destinatarioNome: dest.xNome ? String(dest.xNome) : null,
     valorTotal: total.vNF ? Number(total.vNF) : null,
@@ -505,6 +507,18 @@ export function resumoDoProcNFe(xml: string) {
     vDesc: Number(total.vDesc ?? 0),
     vOutro: Number(total.vOutro ?? 0),
     quantidadeItens: itens.length,
+    numeroFatura: infNFe.cobr?.fat?.nFat ? String(infNFe.cobr.fat.nFat) : null,
+    // O vencimento de cada parcela — nem toda nota tem `cobr` (a prazo sem
+    // boleto formal, ou à vista, não gera duplicata nenhuma).
+    duplicatas: (() => {
+      const dup = infNFe.cobr?.dup
+      const lista = Array.isArray(dup) ? dup : dup ? [dup] : []
+      return lista.map((d: any) => ({
+        numero: d.nDup ? String(d.nDup) : null,
+        vencimento: d.dVenc ? String(d.dVenc) : null,
+        valor: d.vDup ? Number(d.vDup) : 0,
+      }))
+    })(),
     itens: itens.map((item: any) => {
       // O sub-objeto do ICMS muda de nome com o CST/CSOSN (ICMS00, ICMS60,
       // ICMSSN101...) — o valor que importa está sempre um nível abaixo, e

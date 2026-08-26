@@ -20,14 +20,17 @@ export async function cnpjsComNotaCompleta(): Promise<Set<string>> {
 
 /**
  * Quais destes pedidos já têm nota completa do próprio fornecedor disponível
- * para conciliar — é o que decide se o "Receber" simples (quantidade
- * esperada) deve ficar desabilitado a favor da conciliação (quantidade e
+ * para dar entrada — é o que decide se o "Receber" simples (quantidade
+ * esperada) deve ficar desabilitado a favor da entrada pela nota (quantidade e
  * custo reais). Duas entradas para o mesmo pedido duplicariam o estoque.
+ *
+ * Devolve o CNPJ junto, e não só o id: é com ele que a tela monta o link para
+ * a nota do fornecedor, já filtrada.
  */
 export async function pedidosComNotaDisponivel(
   pedidos: { id: string; fornecedorId: string }[]
-): Promise<Set<string>> {
-  if (pedidos.length === 0) return new Set()
+): Promise<Map<string, string>> {
+  if (pedidos.length === 0) return new Map()
 
   const [cnpjs, fornecedores] = await Promise.all([
     cnpjsComNotaCompleta(),
@@ -38,12 +41,42 @@ export async function pedidosComNotaDisponivel(
   ])
   const documentoPorFornecedor = new Map(fornecedores.map((f) => [f.id, f.documento]))
 
-  const resultado = new Set<string>()
+  const resultado = new Map<string, string>()
   for (const pedido of pedidos) {
     const documento = documentoPorFornecedor.get(pedido.fornecedorId)
-    if (documento && cnpjs.has(documento)) resultado.add(pedido.id)
+    if (documento && cnpjs.has(documento)) resultado.set(pedido.id, documento)
   }
   return resultado
+}
+
+/**
+ * Os pedidos em aberto do fornecedor que emitiu esta nota — o caminho inverso
+ * de `notasCandidatasDoPedido`, e o que a tela da nota usa para responder
+ * "esta nota é de qual pedido?".
+ *
+ * Só "enviado" e "parcial": rascunho ainda não foi pedido a ninguém, e
+ * recebido já fechou.
+ *
+ * Olha TODOS os cadastros com aquele CNPJ, e não o primeiro: o documento não
+ * tem índice único, e já houve caso de duas empresas diferentes cadastradas
+ * com o mesmo (erro de digitação). Pegar um só faria o pedido sumir da tela
+ * conforme qual dos dois o banco devolvesse primeiro — falha silenciosa e
+ * intermitente, a pior de diagnosticar.
+ */
+export async function pedidosAbertosDoFornecedor(emitenteCnpj: string) {
+  const fornecedores = await db.fornecedor.findMany({
+    where: { documento: emitenteCnpj },
+    select: { id: true },
+  })
+  if (fornecedores.length === 0) return []
+
+  return db.pedidoDeCompra.findMany({
+    where: {
+      fornecedorId: { in: fornecedores.map((f) => f.id) },
+      situacao: { in: ["enviado", "parcial"] },
+    },
+    orderBy: { numero: "desc" },
+  })
 }
 
 /** As notas completas (com itens) do mesmo fornecedor do pedido — candidatas a serem a nota dele. */
@@ -82,33 +115,40 @@ export function itensComCustoDaNota(xml: string): ItemDaNotaParaConciliar[] {
 export type ItemReconciliado = { produtoId: string; quantidade: number; custoUnitario: number }
 
 export type ResultadoReceberComNota =
-  | { ok: true; situacao: "recebido" | "parcial" }
+  | { ok: true; situacao: "recebido" | "parcial" | "sem-pedido" }
   | { ok: false; erro: string }
 
 /**
- * Recebe o pedido usando a quantidade e o custo REAIS da nota conciliada, em
- * vez do esperado — a versão de `marcarRecebido` (`pedidos-compra.server.ts`)
- * para quando existe a NF-e de verdade para comparar.
+ * Dá entrada no estoque com a quantidade e o custo REAIS da nota, em vez do
+ * esperado — a versão de `marcarRecebido` (`pedidos-compra.server.ts`) para
+ * quando existe a NF-e de verdade para comparar.
  *
- * Aceita entrega parcial de propósito: o fornecedor manda o que tem pronto,
- * não o pedido inteiro de uma vez. O que falta continua "parcial", esperando
- * a próxima nota — o quanto já chegou é sempre derivado do `MovimentoEstoque`
- * deste pedido, nunca um contador à parte que pudesse ficar defasado.
+ * Quase toda nota nasce de um pedido de compra, e é esse o caminho normal: com
+ * pedido dá para comparar o que veio com o que foi combinado. Mas nem toda —
+ * de vez em quando chega mercadoria sem pedido formal, e recusar a entrada por
+ * isso obrigaria a lançar por fora, sem o custo real da nota. Por isso o pedido
+ * é opcional aqui: o que se perde sem ele é só a comparação.
  *
- * Recusa lançar de novo os produtos que ESTA MESMA nota já lançou para este
- * pedido — protege contra reprocessar a nota por engano, sem impedir que uma
- * segunda nota complete o que falta.
+ * Com pedido, aceita entrega parcial de propósito: o fornecedor manda o que tem
+ * pronto, não o pedido inteiro de uma vez. O que falta continua "parcial",
+ * esperando a próxima nota — o quanto já chegou é sempre derivado do
+ * `MovimentoEstoque` deste pedido, nunca um contador à parte que pudesse ficar
+ * defasado.
+ *
+ * Recusa lançar de novo os produtos que ESTA MESMA nota já lançou — protege
+ * contra reprocessar a nota por engano, sem impedir que uma segunda nota
+ * complete o que falta.
  */
 export async function receberComNota(
-  pedidoId: string,
+  pedidoId: string | null,
   notaId: string,
   loja: string,
   operador: string,
   itens: ItemReconciliado[]
 ): Promise<ResultadoReceberComNota> {
-  const pedido = await db.pedidoDeCompra.findUnique({ where: { id: pedidoId } })
-  if (!pedido) return { ok: false, erro: "Pedido não encontrado" }
-  if (pedido.situacao !== "enviado" && pedido.situacao !== "parcial") {
+  const pedido = pedidoId ? await db.pedidoDeCompra.findUnique({ where: { id: pedidoId } }) : null
+  if (pedidoId && !pedido) return { ok: false, erro: "Pedido não encontrado" }
+  if (pedido && pedido.situacao !== "enviado" && pedido.situacao !== "parcial") {
     return { ok: false, erro: "Só um pedido enviado ou parcial pode receber mercadoria" }
   }
   if (!loja) return { ok: false, erro: "Escolha a loja que recebeu a mercadoria" }
@@ -129,7 +169,7 @@ export async function receberComNota(
   if (invalido) return { ok: false, erro: "Produto não encontrado no catálogo" }
 
   const lancadosPorEstaNota = await db.movimentoEstoque.findMany({
-    where: { pedidoDeCompraId: pedidoId, notaFiscalRecebidaId: notaId },
+    where: { notaFiscalRecebidaId: notaId, ...(pedidoId ? { pedidoDeCompraId: pedidoId } : {}) },
     select: { produtoId: true },
   })
   const jaLancadosPorEstaNota = new Set(lancadosPorEstaNota.map((m) => m.produtoId))
@@ -144,21 +184,24 @@ export async function receberComNota(
     }
   }
 
-  const recebidoAntes = await db.movimentoEstoque.findMany({
-    where: { pedidoDeCompraId: pedidoId, tipo: "entrada" },
-    select: { produtoId: true, quantidade: true },
-  })
-  const totalAntesPorProduto = new Map<string, number>()
-  for (const m of recebidoAntes) {
-    totalAntesPorProduto.set(m.produtoId, (totalAntesPorProduto.get(m.produtoId) ?? 0) + m.quantidade)
-  }
+  // Sem pedido não existe "esperado" contra o que fechar — a nota entra e pronto.
+  let completo = false
+  if (pedido) {
+    const recebidoAntes = await db.movimentoEstoque.findMany({
+      where: { pedidoDeCompraId: pedido.id, tipo: "entrada" },
+      select: { produtoId: true, quantidade: true },
+    })
+    const totalAntesPorProduto = new Map<string, number>()
+    for (const m of recebidoAntes) {
+      totalAntesPorProduto.set(m.produtoId, (totalAntesPorProduto.get(m.produtoId) ?? 0) + m.quantidade)
+    }
 
-  const completo = pedido.itens.every((item) => {
-    const desteEnvio = itensParaGravar.find((i) => i.produtoId === item.produtoId)?.quantidade ?? 0
-    const total = (totalAntesPorProduto.get(item.produtoId) ?? 0) + desteEnvio
-    return total >= item.quantidade - 0.001
-  })
-  const situacaoFinal = completo ? "recebido" : "parcial"
+    completo = pedido.itens.every((item) => {
+      const desteEnvio = itensParaGravar.find((i) => i.produtoId === item.produtoId)?.quantidade ?? 0
+      const total = (totalAntesPorProduto.get(item.produtoId) ?? 0) + desteEnvio
+      return total >= item.quantidade - 0.001
+    })
+  }
 
   await db.$transaction(async (tx) => {
     await tx.movimentoEstoque.createMany({
@@ -169,21 +212,24 @@ export async function receberComNota(
         quantidade: item.quantidade,
         custoUnitario: item.custoUnitario,
         operador,
-        pedidoDeCompraId: pedido.id,
-        pedidoDeCompraNumero: pedido.numero,
+        pedidoDeCompraId: pedido?.id ?? null,
+        pedidoDeCompraNumero: pedido?.numero ?? null,
         notaFiscalRecebidaId: nota.id,
         notaFiscalNumero: nota.numero,
-        observacao:
-          `Pedido de compra #${pedido.numero} — NF nº ${nota.numero ?? "?"} — ${pedido.fornecedorNome}`,
+        observacao: pedido
+          ? `Pedido de compra #${pedido.numero} — NF nº ${nota.numero ?? "?"} — ${pedido.fornecedorNome}`
+          : `NF nº ${nota.numero ?? "?"} — ${nota.emitenteNome}`,
       })),
     })
 
-    await tx.pedidoDeCompra.update({
-      where: { id: pedidoId },
-      data: completo
-        ? { situacao: "recebido", recebidoEm: new Date(), recebidoPor: operador }
-        : { situacao: "parcial" },
-    })
+    if (pedido) {
+      await tx.pedidoDeCompra.update({
+        where: { id: pedido.id },
+        data: completo
+          ? { situacao: "recebido", recebidoEm: new Date(), recebidoPor: operador }
+          : { situacao: "parcial" },
+      })
+    }
 
     await tx.notaFiscalRecebida.update({
       where: { id: notaId },
@@ -191,5 +237,5 @@ export async function receberComNota(
     })
   })
 
-  return { ok: true, situacao: situacaoFinal }
+  return { ok: true, situacao: pedido ? (completo ? "recebido" : "parcial") : "sem-pedido" }
 }

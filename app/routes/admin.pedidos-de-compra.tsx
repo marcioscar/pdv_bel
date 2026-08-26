@@ -48,7 +48,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   return {
     filtro,
     lojas: lojas.map((l) => l.codigo),
-    pedidosComNota: [...comNota],
+    pedidosComNota: Object.fromEntries(comNota),
     ...consulta,
   }
 }
@@ -280,7 +280,7 @@ export default function AdminPedidosDeCompra({ loaderData }: Route.ComponentProp
                 pedido={p}
                 lojas={lojas}
                 gravando={gravando}
-                temNota={pedidosComNota.includes(p.id)}
+                cnpjDaNota={pedidosComNota[p.id] ?? null}
                 onMudarSituacao={mudarSituacao}
                 onReceber={receberPedido}
                 onEntrega={anotarEntrega}
@@ -315,7 +315,7 @@ function LinhaPedido({
   pedido: p,
   lojas,
   gravando,
-  temNota,
+  cnpjDaNota,
   onMudarSituacao,
   onReceber,
   onEntrega,
@@ -323,7 +323,7 @@ function LinhaPedido({
   pedido: PedidoDaConsulta
   lojas: string[]
   gravando: boolean
-  temNota: boolean
+  cnpjDaNota: string | null
   onMudarSituacao: (id: string, passo: "enviar" | "cancelar") => void
   onReceber: (id: string, loja: string) => void
   onEntrega: (id: string, dia: string) => void
@@ -363,13 +363,15 @@ function LinhaPedido({
           <Printer className="size-3.5" aria-hidden />
           Imprimir
         </a>
-        {p.situacao === "enviado" || p.situacao === "parcial" || p.situacao === "recebido" ? (
+        {/* A entrada acontece na nota, não aqui: é ela que chega com a
+            mercadoria. Daqui só se aponta para as notas deste fornecedor. */}
+        {cnpjDaNota ? (
           <Link
-            to={`/admin/pedidos-de-compra/${p.id}/conciliacao`}
+            to={`/admin/notas-de-entrada?fornecedor=${cnpjDaNota}`}
             className="inline-flex h-8 items-center gap-1 rounded-lg px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
           >
             <GitCompare className="size-3.5" aria-hidden />
-            Conciliar NF
+            Ver NF
           </Link>
         ) : null}
         {p.situacao === "rascunho" ? (
@@ -396,12 +398,12 @@ function LinhaPedido({
           </>
         ) : null}
         {p.situacao === "enviado" ? (
-          temNota ? (
+          cnpjDaNota ? (
             <span
               className="text-xs text-muted-foreground"
-              title="Já tem nota do fornecedor sincronizada — receba pela conciliação, com quantidade e custo reais"
+              title="Já tem nota do fornecedor sincronizada — dê entrada pela nota, com quantidade e custo reais"
             >
-              receber pela conciliação →
+              dar entrada pela NF →
             </span>
           ) : (
             <ReceberPedido lojas={lojas} gravando={gravando} onReceber={(loja) => onReceber(p.id, loja)} />

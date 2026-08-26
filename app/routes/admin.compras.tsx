@@ -56,7 +56,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     origem,
     lojas: lojas.map((l) => l.codigo),
     pedidos,
-    pedidosComNota: [...comNota],
+    pedidosComNota: Object.fromEntries(comNota),
     fornecedores: fornecedores.map((f) => ({ id: f.id, nome: f.nomeFantasia || f.razaoSocial })),
   }
 }
@@ -700,7 +700,7 @@ function PedidosRecentes({
 }: {
   pedidos: Awaited<ReturnType<typeof listarPedidos>>
   lojas: string[]
-  pedidosComNota: string[]
+  pedidosComNota: Record<string, string>
   onMudarSituacao: (id: string, passo: "enviar" | "cancelar") => void
   onReceber: (id: string, loja: string) => void
   gravando: boolean
@@ -773,22 +773,24 @@ function PedidosRecentes({
                   </Button>
                 </>
               ) : null}
-              {p.situacao === "enviado" || p.situacao === "parcial" || p.situacao === "recebido" ? (
+              {/* A entrada acontece na nota, não aqui: é ela que chega com a
+                  mercadoria. Daqui só se aponta para as notas deste fornecedor. */}
+              {p.id in pedidosComNota ? (
                 <Link
-                  to={`/admin/pedidos-de-compra/${p.id}/conciliacao`}
+                  to={`/admin/notas-de-entrada?fornecedor=${pedidosComNota[p.id]}`}
                   className="inline-flex h-8 items-center gap-1 rounded-lg px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
                 >
                   <GitCompare className="size-3.5" aria-hidden />
-                  Conciliar NF
+                  Ver NF
                 </Link>
               ) : null}
               {p.situacao === "enviado" ? (
-                pedidosComNota.includes(p.id) ? (
+                p.id in pedidosComNota ? (
                   <span
                     className="text-xs text-muted-foreground"
-                    title="Já tem nota do fornecedor sincronizada — receba pela conciliação, com quantidade e custo reais"
+                    title="Já tem nota do fornecedor sincronizada — dê entrada pela nota, com quantidade e custo reais"
                   >
-                    receber pela conciliação →
+                    dar entrada pela NF →
                   </span>
                 ) : (
                   <ReceberPedido

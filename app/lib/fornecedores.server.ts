@@ -66,6 +66,26 @@ function documentoDe(bruto?: string) {
   return { documento: limpo, tipoPessoa: tipoPessoaDe(limpo) }
 }
 
+/**
+ * O próximo código livre: o maior que existe, mais um.
+ *
+ * Os 128 cadastros vieram do sistema antigo com código de seis dígitos e zero
+ * à esquerda ("000002", "037692"), numerados com buracos enormes — não é uma
+ * sequência que dê para reconstruir, só para continuar de onde parou. Como a
+ * largura é fixa, o maior por ordem alfabética é o maior de verdade.
+ *
+ * Continua sendo sugestão, não imposição: o campo segue editável, porque quem
+ * cadastra às vezes quer casar com um código que o fornecedor já usa.
+ */
+export async function proximoCodigoDeFornecedor() {
+  const ultimo = await db.fornecedor.findFirst({
+    orderBy: { codigo: "desc" },
+    select: { codigo: true },
+  })
+  const proximo = (Number(ultimo?.codigo ?? 0) || 0) + 1
+  return String(proximo).padStart(6, "0")
+}
+
 export async function criarFornecedor(
   entrada: FornecedorEntrada
 ): Promise<ResultadoFornecedor> {

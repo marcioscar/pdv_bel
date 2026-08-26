@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react"
-import { useFetcher, useNavigation, useSearchParams } from "react-router"
+import { Link, useFetcher, useNavigate, useNavigation, useSearchParams } from "react-router"
 import { FileSearch, Loader2, RefreshCw, Search } from "lucide-react"
 
 import type { Route } from "./+types/admin.notas-de-entrada"
@@ -10,7 +10,7 @@ import { Atalho, Campo, ESTILO_CAMPO, Pagina } from "~/components/pdv/filtros"
 import { diaAtras, diaDeHoje } from "~/lib/dia"
 import { formatarCpfCnpj } from "~/lib/documento"
 import { listarLojas } from "~/lib/lojas.server"
-import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
+import { moeda } from "~/lib/moeda"
 import {
   PERIODO_TODO,
   SITUACOES_NOTA,
@@ -22,12 +22,11 @@ import {
   consultarNotas,
   fornecedoresComNota,
   lerFiltroNotas,
-  notaPorId,
   sincronizarNotasDaLoja,
   situacaoSincronizacao,
   type ResultadoSincronizacao,
 } from "~/lib/notas-fiscais.server"
-import { resumoDoProcNFe, sefazConfigurado, type ResultadoConsultaChave } from "~/lib/sefaz.server"
+import { sefazConfigurado, type ResultadoConsultaChave } from "~/lib/sefaz.server"
 import { exigirGerente } from "~/lib/sessao.server"
 import { cn } from "~/lib/utils"
 
@@ -48,28 +47,24 @@ export async function loader({ request }: Route.LoaderArgs) {
   await exigirGerente(request, "buscarNotaFiscal")
 
   const url = new URL(request.url)
-  const filtro = lerFiltroNotas(url)
-  const loja = filtro.loja
-  const notaId = url.searchParams.get("nota") ?? ""
+  const filtroDaUrl = lerFiltroNotas(url)
 
   const lojas = await listarLojas()
   const configuradas: Record<string, boolean> = {}
   for (const l of lojas) configuradas[l.codigo] = await sefazConfigurado(l.codigo)
+
+  // Sem loja na URL, abre na primeira que tem certificado em vez de numa tela
+  // vazia — quem chega por um link de fornecedor (vindo do pedido de compra)
+  // não tem como saber qual empresa escolher, e "Escolher…" viraria beco sem
+  // saída. O seletor continua ali para trocar.
+  const loja = filtroDaUrl.loja || (lojas.find((l) => configuradas[l.codigo])?.codigo ?? "")
+  const filtro = { ...filtroDaUrl, loja }
 
   const consulta = loja
     ? await consultarNotas(filtro)
     : { notas: [], total: 0, foraDoPeriodo: 0, paginas: 1, resumo: null }
   const sincronizacao = loja ? await situacaoSincronizacao(loja) : null
   const fornecedores = loja ? await fornecedoresComNota(loja) : []
-
-  // Buscado à parte, e não achado na página: a nota escolhida pode estar fora
-  // do filtro atual (o gerente estreitou a busca depois de abrir uma), e
-  // fazê-la sumir do painel por isso seria perder o que ele estava lendo.
-  const notaSelecionada = notaId ? await notaPorId(notaId) : null
-  const itensDaNota =
-    notaSelecionada?.xml && notaSelecionada.situacaoXml === "completa"
-      ? (resumoDoProcNFe(notaSelecionada.xml)?.itens ?? [])
-      : null
 
   return {
     lojas,
@@ -78,8 +73,6 @@ export async function loader({ request }: Route.LoaderArgs) {
     loja,
     fornecedores,
     sincronizacao,
-    notaSelecionada,
-    itensDaNota,
     ...consulta,
   }
 }
@@ -92,9 +85,9 @@ export async function action({ request }: Route.ActionArgs): Promise<RespostaAct
   await exigirGerente(request, "buscarNotaFiscal")
 
   const form = await request.formData()
-  const loja = String(form.get("loja") ?? "")
   const intencao = String(form.get("intencao") ?? "")
 
+  const loja = String(form.get("loja") ?? "")
   if (!loja) return { intencao: "sincronizar", ok: false, erro: "Escolha a loja/empresa", novas: 0 }
 
   if (intencao === "buscarChave") {
@@ -120,11 +113,10 @@ export default function AdminNotasDeEntrada({ loaderData }: Route.ComponentProps
     paginas,
     resumo,
     sincronizacao,
-    notaSelecionada,
-    itensDaNota,
   } = loaderData
 
   const [params, setParams] = useSearchParams()
+  const navegar = useNavigate()
   const navegacao = useNavigation()
   const consultando = navegacao.state === "loading"
   const sincFetcher = useFetcher<RespostaAction>()
@@ -148,19 +140,11 @@ export default function AdminNotasDeEntrada({ loaderData }: Route.ComponentProps
       else proximos.delete(chave)
     }
     proximos.delete("pagina")
-    // Trocar o filtro fecha a nota aberta: ela pode não estar mais na lista.
-    proximos.delete("nota")
     setParams(proximos)
   }
 
   function escolherLoja(novaLoja: string) {
     setParams(novaLoja ? { loja: novaLoja } : {})
-  }
-
-  function escolherNota(id: string) {
-    const proximos = new URLSearchParams(params)
-    proximos.set("nota", id)
-    setParams(proximos)
   }
 
   const faltam = sincronizacao
@@ -377,7 +361,7 @@ export default function AdminNotasDeEntrada({ loaderData }: Route.ComponentProps
       ) : null}
 
       {loja ? (
-        <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_1.2fr]">
+        <div className="mt-4">
           <div className="overflow-x-auto rounded-lg border">
             <table className="w-full text-xs">
               <thead>
@@ -402,13 +386,16 @@ export default function AdminNotasDeEntrada({ loaderData }: Route.ComponentProps
                   notas.map((n) => (
                     <tr
                       key={n.id}
-                      onClick={() => escolherNota(n.id)}
-                      className={cn(
-                        "cursor-pointer border-b last:border-0 hover:bg-muted/40",
-                        notaSelecionada?.id === n.id && "bg-muted/60"
-                      )}
+                      onClick={() => navegar(`/admin/notas-de-entrada/${n.id}`)}
+                      className="cursor-pointer border-b last:border-0 hover:bg-muted/40"
                     >
-                      <td className="px-2 py-1.5">{n.emitenteNome}</td>
+                      <td className="px-2 py-1.5">
+                        {/* Âncora de verdade dentro da linha clicável: quem quiser
+                            abrir em outra aba ou navegar pelo teclado consegue. */}
+                        <Link to={`/admin/notas-de-entrada/${n.id}`} className="hover:underline">
+                          {n.emitenteNome}
+                        </Link>
+                      </td>
                       <td className="px-2 py-1.5">
                         {n.numero ?? "—"}
                         {n.serie ? `/${n.serie}` : ""}
@@ -448,71 +435,6 @@ export default function AdminNotasDeEntrada({ loaderData }: Route.ComponentProps
                 </Pagina>
               </div>
             ) : null}
-          </div>
-
-          <div className="rounded-lg border p-4">
-            {!notaSelecionada ? (
-              <p className="text-sm text-muted-foreground">Escolha uma nota na lista para ver os detalhes.</p>
-            ) : (
-              <div className="space-y-3 text-sm">
-                <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-                  <dt className="text-muted-foreground">Emitente</dt>
-                  <dd>
-                    {notaSelecionada.emitenteNome} ({notaSelecionada.emitenteCnpj})
-                  </dd>
-                  <dt className="text-muted-foreground">Nº / série</dt>
-                  <dd>
-                    {notaSelecionada.numero ?? "—"} / {notaSelecionada.serie ?? "—"}
-                  </dd>
-                  <dt className="text-muted-foreground">Emissão</dt>
-                  <dd>
-                    {notaSelecionada.dataEmissao
-                      ? new Date(notaSelecionada.dataEmissao).toLocaleString("pt-BR")
-                      : "—"}
-                  </dd>
-                  <dt className="text-muted-foreground">Valor total</dt>
-                  <dd>{notaSelecionada.valorTotal != null ? moeda(notaSelecionada.valorTotal) : "—"}</dd>
-                </dl>
-
-                {notaSelecionada.situacaoXml !== "completa" ? (
-                  <p className="text-amber-600 dark:text-amber-500">
-                    Só o resumo está disponível — a SEFAZ já não distribui o XML completo
-                    com os itens para esta nota (mais antiga).
-                  </p>
-                ) : itensDaNota && itensDaNota.length > 0 ? (
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="border-b text-left text-muted-foreground">
-                        <th className="py-1 pr-2">Código</th>
-                        <th className="py-1 pr-2">Descrição</th>
-                        <th className="py-1 pr-2 text-right">Qtd</th>
-                        <th className="py-1 pr-2 text-right">Unit.</th>
-                        <th className="py-1 text-right">Total</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {itensDaNota.map((item, i) => (
-                        <tr key={i} className="border-b last:border-0">
-                          <td className="py-1 pr-2">{item.codigo}</td>
-                          <td className="py-1 pr-2">{item.descricao}</td>
-                          <td className="py-1 pr-2 text-right">
-                            {item.quantidade != null
-                              ? `${formatarQuantidade(item.quantidade)} ${item.unidade ?? ""}`
-                              : "—"}
-                          </td>
-                          <td className="py-1 pr-2 text-right">
-                            {item.valorUnitario != null ? moeda(item.valorUnitario) : "—"}
-                          </td>
-                          <td className="py-1 text-right">
-                            {item.valorTotal != null ? moeda(item.valorTotal) : "—"}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                ) : null}
-              </div>
-            )}
           </div>
         </div>
       ) : null}
