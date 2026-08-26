@@ -72,7 +72,12 @@ export async function action({ request }: Route.ActionArgs) {
     itens = []
   }
 
-  const resultado = await criarPedido({ fornecedorId, itens, operador: eu.nome })
+  const resultado = await criarPedido({
+    fornecedorId,
+    itens,
+    operador: eu.nome,
+    entregaPrometida: String(form.get("entregaPrometida") ?? ""),
+  })
   if (!resultado.ok) {
     return data({ ok: false as const, erro: resultado.erro }, { status: 400 })
   }
@@ -215,6 +220,7 @@ function MontarPedido({
     }
     return inicial
   })
+  const [entregaPrometida, setEntregaPrometida] = useState("")
 
   const fetcher = useFetcher<typeof action>()
   const gerando = fetcher.state !== "idle"
@@ -253,6 +259,7 @@ function MontarPedido({
       {
         fornecedorId: fornecedor.id,
         itens: JSON.stringify(payload),
+        entregaPrometida,
       },
       { method: "post" }
     )
@@ -328,12 +335,25 @@ function MontarPedido({
                 Há item selecionado sem quantidade
               </span>
             ) : null}
+
+            {/* Opcional: muitas vezes a promessa só vem na ligação em que se
+                manda o pedido, e a consulta deixa anotar depois. */}
+            <label className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
+              Entrega prometida
+              <input
+                type="date"
+                value={entregaPrometida}
+                onChange={(e) => setEntregaPrometida(e.target.value)}
+                className="h-8 rounded-lg border border-border bg-background px-2 text-sm"
+              />
+            </label>
+
             <Button
               type="button"
               size="sm"
               disabled={gerando || comQuantidadeInvalida}
               onClick={gerar}
-              className="ml-auto rounded-lg"
+              className="rounded-lg"
             >
               <Send className="size-4" />
               {gerando ? "Gerando…" : "Gerar pedido"}
@@ -384,6 +404,11 @@ function Tabela({
               <th className="w-8 py-2 pr-2" />
               <th className="py-2 pr-3 font-semibold">Produto</th>
               <th className="py-2 pr-3 text-right font-semibold">Estoque</th>
+              {lojas.map((loja) => (
+                <th key={loja} className="py-2 pr-3 text-right font-normal text-muted-foreground/70">
+                  {loja}
+                </th>
+              ))}
               <th className="py-2 pr-3 text-right font-semibold">Dura</th>
               <th className="py-2 pr-3 text-right font-semibold">Último pedido</th>
               <th className="py-2 pr-3 text-right font-semibold">Sugestão</th>
@@ -435,6 +460,20 @@ function Tabela({
                   >
                     {formatarQuantidade(item.estoque)}
                   </td>
+                  {lojas.map((loja) => {
+                    const saldo = item.porLoja[loja] ?? 0
+                    return (
+                      <td
+                        key={loja}
+                        className={cn(
+                          "py-2 pr-3 text-right text-muted-foreground",
+                          saldo <= 0 && "text-destructive/70"
+                        )}
+                      >
+                        {formatarQuantidade(saldo)}
+                      </td>
+                    )
+                  })}
                   <td className="py-2 pr-3 text-right">
                     <Duracao dias={item.diasRestantes} />
                   </td>

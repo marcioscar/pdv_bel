@@ -713,6 +713,19 @@ model PedidoDeCompra {
   criadoPor  String
   observacao String?
 
+  /// Quando o fornecedor prometeu entregar.
+  ///
+  /// É promessa, não previsão do sistema: `DIAS_DE_ENTREGA` serve para
+  /// calcular ponto de pedido no geral, mas o que se cobra ao telefone é a
+  /// data que o vendedor deu para ESTE pedido. Opcional porque muitas vezes a
+  /// promessa só vem depois, quando o pedido é enviado — e travar a criação
+  /// por causa dela atrasaria o pedido em vez do contrário.
+  ///
+  /// Guardada como data pura (meio-dia local), e não como instante: ninguém
+  /// promete entregar às 14h37, e gravar o horário faria "hoje" virar "ontem"
+  /// na virada do fuso.
+  entregaPrometida DateTime?
+
   enviadoEm  DateTime?
   enviadoPor String?
 

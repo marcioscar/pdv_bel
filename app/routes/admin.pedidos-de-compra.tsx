@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { data, Link, useFetcher, useNavigation, useSearchParams } from "react-router"
-import { ClipboardList, GitCompare, Printer, Search, ShoppingBag } from "lucide-react"
+import { ClipboardList, GitCompare, Printer, Search, ShoppingBag, Truck } from "lucide-react"
 
 import type { Route } from "./+types/admin.pedidos-de-compra"
 import { Atalho, Campo, ESTILO_CAMPO, Pagina } from "~/components/pdv/filtros"
@@ -102,6 +102,9 @@ export default function AdminPedidosDeCompra({ loaderData }: Route.ComponentProp
   }
   function receberPedido(id: string, loja: string) {
     fetcher.submit({ intencao: "situacao", id, passo: "receber", loja }, { method: "post" })
+  }
+  function anotarEntrega(id: string, entrega: string) {
+    fetcher.submit({ intencao: "situacao", id, passo: "entrega", entrega }, { method: "post" })
   }
 
   const periodo =
@@ -280,6 +283,7 @@ export default function AdminPedidosDeCompra({ loaderData }: Route.ComponentProp
                 temNota={pedidosComNota.includes(p.id)}
                 onMudarSituacao={mudarSituacao}
                 onReceber={receberPedido}
+                onEntrega={anotarEntrega}
               />
             ))}
           </ul>
@@ -314,6 +318,7 @@ function LinhaPedido({
   temNota,
   onMudarSituacao,
   onReceber,
+  onEntrega,
 }: {
   pedido: PedidoDaConsulta
   lojas: string[]
@@ -321,6 +326,7 @@ function LinhaPedido({
   temNota: boolean
   onMudarSituacao: (id: string, passo: "enviar" | "cancelar") => void
   onReceber: (id: string, loja: string) => void
+  onEntrega: (id: string, dia: string) => void
 }) {
   return (
     <li className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5">
@@ -340,6 +346,12 @@ function LinhaPedido({
           {p.recebidoPor ? ` por ${p.recebidoPor}` : ""}
         </span>
       ) : null}
+
+      <EntregaPrometida
+        pedido={p}
+        gravando={gravando}
+        onAnotar={(dia) => onEntrega(p.id, dia)}
+      />
 
       <div className="ml-auto flex items-center gap-1">
         <a
@@ -397,5 +409,57 @@ function LinhaPedido({
         ) : null}
       </div>
     </li>
+  )
+}
+
+/**
+ * A data que o fornecedor prometeu — editável na própria lista.
+ *
+ * Editável aqui, e não só na criação, porque a promessa costuma vir na
+ * ligação em que se manda o pedido, e muda quando o fornecedor avisa que vai
+ * atrasar — que é justamente quando esta informação mais serve.
+ *
+ * Atraso só conta enquanto a mercadoria não chegou: um pedido já recebido
+ * mostra a data em cinza, mesmo que tenha vencido antes de chegar. O que
+ * interessa em vermelho é o que ainda se pode cobrar.
+ */
+function EntregaPrometida({
+  pedido: p,
+  gravando,
+  onAnotar,
+}: {
+  pedido: PedidoDaConsulta
+  gravando: boolean
+  onAnotar: (dia: string) => void
+}) {
+  // "aaaa-mm-dd" na hora local: `toISOString` daria UTC e mostraria o dia
+  // anterior no fuso de Brasília.
+  const comoDia = (data: Date) =>
+    `${data.getFullYear()}-${String(data.getMonth() + 1).padStart(2, "0")}-${String(data.getDate()).padStart(2, "0")}`
+
+  const valor = p.entregaPrometida ? comoDia(new Date(p.entregaPrometida)) : ""
+  const pendente = p.situacao === "enviado" || p.situacao === "parcial"
+  const atrasado = pendente && valor !== "" && valor < comoDia(new Date())
+
+  return (
+    <label
+      className={cn(
+        "flex items-center gap-1 text-[11px]",
+        atrasado ? "font-semibold text-destructive" : "text-muted-foreground"
+      )}
+      title={atrasado ? "Entrega prometida já venceu e o pedido não chegou" : "Entrega prometida pelo fornecedor"}
+    >
+      <Truck className="size-3.5" aria-hidden />
+      <input
+        type="date"
+        value={valor}
+        disabled={gravando}
+        onChange={(e) => onAnotar(e.target.value)}
+        className={cn(
+          "h-7 rounded border border-border bg-background px-1 text-[11px]",
+          atrasado && "border-destructive/50 text-destructive"
+        )}
+      />
+    </label>
   )
 }

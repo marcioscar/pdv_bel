@@ -33,6 +33,8 @@ export async function criarPedido(entrada: {
   itens: ItemParaPedir[]
   operador: string
   observacao?: string | null
+  /** "aaaa-mm-dd" como vem do `<input type="date">`, ou vazio. */
+  entregaPrometida?: string | null
 }): Promise<ResultadoPedido> {
   if (entrada.itens.length === 0) {
     return { ok: false, erro: "Pedido sem itens" }
@@ -101,10 +103,49 @@ export async function criarPedido(entrada: {
       total,
       criadoPor: entrada.operador,
       observacao: entrada.observacao?.trim() || null,
+      entregaPrometida: dataDoDia(entrada.entregaPrometida),
     },
   })
 
   return { ok: true, numero: pedidoDeCompra.numero, id: pedidoDeCompra.id }
+}
+
+/**
+ * "aaaa-mm-dd" vira o meio-dia local daquele dia.
+ *
+ * Meio-dia, e não meia-noite: `new Date("2026-08-26")` é interpretado como
+ * UTC, e no fuso de Brasília isso volta como dia 25 às 21h — a data prometida
+ * apareceria um dia antes na tela.
+ */
+function dataDoDia(dia: string | null | undefined): Date | null {
+  if (!dia || !/^\d{4}-\d{2}-\d{2}$/.test(dia)) return null
+  const [ano, mes, diaDoMes] = dia.split("-").map(Number)
+  return new Date(ano, mes - 1, diaDoMes, 12, 0, 0, 0)
+}
+
+export type ResultadoEntrega = { ok: true } | { ok: false; erro: string }
+
+/**
+ * Anota (ou apaga) a data que o fornecedor prometeu.
+ *
+ * Editável depois da criação de propósito: a promessa costuma vir na ligação
+ * em que se manda o pedido, e muda quando o fornecedor avisa que vai atrasar
+ * — que é justamente quando este campo mais serve.
+ */
+export async function anotarEntregaPrometida(
+  id: string,
+  dia: string,
+  _operador: string
+): Promise<ResultadoEntrega> {
+  const pedido = await pedidoPorId(id)
+  if (!pedido) return { ok: false, erro: "Pedido não encontrado" }
+  if (dia && !/^\d{4}-\d{2}-\d{2}$/.test(dia)) return { ok: false, erro: "Data inválida" }
+
+  await db.pedidoDeCompra.update({
+    where: { id },
+    data: { entregaPrometida: dataDoDia(dia) },
+  })
+  return { ok: true }
 }
 
 export type ItemDoFornecedor = {
@@ -546,6 +587,8 @@ export async function aplicarSituacao(
       return marcarRecebido(id, String(form.get("loja") ?? ""), operador)
     case "cancelar":
       return cancelarPedido(id, operador)
+    case "entrega":
+      return anotarEntregaPrometida(id, String(form.get("entrega") ?? ""), operador)
     default:
       return { ok: false, erro: "Ação inválida" }
   }
