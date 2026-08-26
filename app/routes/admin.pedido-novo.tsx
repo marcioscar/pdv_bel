@@ -385,6 +385,7 @@ function Tabela({
               <th className="py-2 pr-3 font-semibold">Produto</th>
               <th className="py-2 pr-3 text-right font-semibold">Estoque</th>
               <th className="py-2 pr-3 text-right font-semibold">Dura</th>
+              <th className="py-2 pr-3 text-right font-semibold">Último pedido</th>
               <th className="py-2 pr-3 text-right font-semibold">Sugestão</th>
               <th className="py-2 pr-3 text-right font-semibold">Quantidade</th>
               <th className="py-2 pr-3 text-right font-semibold">Custo</th>
@@ -436,6 +437,9 @@ function Tabela({
                   </td>
                   <td className="py-2 pr-3 text-right">
                     <Duracao dias={item.diasRestantes} />
+                  </td>
+                  <td className="py-2 pr-3 text-right">
+                    <UltimoPedido item={item} />
                   </td>
                   <td className="py-2 pr-3 text-right text-muted-foreground">
                     {item.sugestao > 0 ? formatarQuantidade(item.sugestao) : "—"}
@@ -540,6 +544,58 @@ function ItemCartao({
         </div>
       </div>
     </li>
+  )
+}
+
+/**
+ * O que se pediu da última vez — a informação que se leva para a ligação com
+ * o vendedor: quanto, por quanto e quando.
+ *
+ * A variação do custo vem junto porque é o argumento da negociação: "subiu
+ * 12% desde o último pedido" é uma frase que se usa ao telefone; dois números
+ * soltos em colunas distantes, não.
+ */
+function UltimoPedido({ item }: { item: ItemDoFornecedor }) {
+  const ultimo = item.ultimoPedido
+  if (!ultimo) return <span className="text-muted-foreground">—</span>
+
+  const dias = Math.floor((Date.now() - new Date(ultimo.em).getTime()) / 86_400_000)
+  const variacao =
+    ultimo.custoUnitario > 0
+      ? ((item.custoUnitario - ultimo.custoUnitario) / ultimo.custoUnitario) * 100
+      : 0
+
+  return (
+    // Aba nova, e não navegação: o pedido em montagem está só na memória desta
+    // tela — sair dele para conferir o anterior perderia tudo que já foi
+    // marcado. É a mesma razão de os outros links de papel abrirem à parte.
+    <a
+      href={`/pedidos-de-compra/${ultimo.id}/impressao`}
+      target="_blank"
+      rel="noreferrer"
+      className="tabular-nums underline decoration-dotted underline-offset-2 hover:decoration-solid"
+      title={
+        `Abrir o pedido #${ultimo.numero} (${ultimo.situacao}) de ` +
+        `${new Date(ultimo.em).toLocaleDateString("pt-BR")} — ` +
+        `${formatarQuantidade(ultimo.quantidade)} ${item.unidade} a ${moeda(ultimo.custoUnitario)}`
+      }
+    >
+      {formatarQuantidade(ultimo.quantidade)}{" "}
+      <span className="text-muted-foreground">
+        · {dias === 0 ? "hoje" : dias > 365 ? "+1 ano" : `${dias} d`}
+      </span>
+      {Math.abs(variacao) >= 1 ? (
+        <span
+          className={cn(
+            "ml-1 text-[10px]",
+            variacao > 0 ? "text-destructive" : "text-emerald-700 dark:text-emerald-400"
+          )}
+        >
+          {variacao > 0 ? "+" : ""}
+          {variacao.toFixed(0)}%
+        </span>
+      ) : null}
+    </a>
   )
 }
 

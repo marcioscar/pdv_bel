@@ -127,6 +127,56 @@ export type ItemDoFornecedor = {
   diasRestantes: number | null
   /** Sugestão de quanto pedir. 0 quando não há política: nada para sugerir. */
   sugestao: number
+  /**
+   * O último pedido DESTE sistema para este produto e este fornecedor — o que
+   * se leva para a conversa com o vendedor: "da última vez pedi 100 a R$20".
+   *
+   * Diferente de `ultimaCompra`/`custoUnitario`, que vêm do histórico
+   * importado do sistema antigo: aquilo é o que se pagou, isto é o que se
+   * pediu, com data e número para achar o papel.
+   */
+  ultimoPedido: {
+    /** Para abrir o papel do pedido e conferir o resto dele. */
+    id: string
+    numero: number
+    em: Date
+    quantidade: number
+    custoUnitario: number
+    situacao: string
+  } | null
+}
+
+/**
+ * O pedido mais recente de cada produto deste fornecedor.
+ *
+ * Cancelado fica de fora: um pedido que não virou compra não é referência de
+ * negociação nenhuma. Uma consulta só para todos os produtos, e não uma por
+ * item, porque o catálogo de um fornecedor grande passa de cem linhas.
+ */
+async function ultimoPedidoPorProduto(fornecedorId: string) {
+  const pedidos = await db.pedidoDeCompra.findMany({
+    where: { fornecedorId, situacao: { not: "cancelado" } },
+    orderBy: { criadoEm: "desc" },
+    select: { id: true, numero: true, criadoEm: true, situacao: true, itens: true },
+  })
+
+  const mapa = new Map<string, ItemDoFornecedor["ultimoPedido"]>()
+  // Da mais recente para a mais antiga: o primeiro que aparecer é o último
+  // pedido daquele produto, e os seguintes são história velha.
+  for (const pedido of pedidos) {
+    for (const item of pedido.itens) {
+      if (mapa.has(item.produtoId)) continue
+      mapa.set(item.produtoId, {
+        id: pedido.id,
+        numero: pedido.numero,
+        em: pedido.criadoEm,
+        quantidade: item.quantidade,
+        custoUnitario: item.custoUnitario,
+        situacao: pedido.situacao,
+      })
+    }
+  }
+  return mapa
 }
 
 /**
@@ -145,12 +195,13 @@ export async function catalogoDoFornecedor(fornecedorId: string): Promise<ItemDo
 
   const produtoIds = fornecimentos.map((f) => f.produtoId)
 
-  const [produtos, politicas, saldos, transito, pedidos] = await Promise.all([
+  const [produtos, politicas, saldos, transito, pedidos, ultimosPedidos] = await Promise.all([
     db.produto.findMany({ where: { id: { in: produtoIds }, ativo: true } }),
     db.politicaDeCompra.findMany({ where: { produtoId: { in: produtoIds } } }),
     saldosPorProdutoELoja(),
     saldosEmTransito(),
     saldosPedidos(),
+    ultimoPedidoPorProduto(fornecedorId),
   ])
   const porId = new Map(produtos.map((p) => [p.id, p]))
   const politicaPorProduto = new Map(politicas.map((p) => [p.produtoId, p]))
@@ -190,6 +241,7 @@ export async function catalogoDoFornecedor(fornecedorId: string): Promise<ItemDo
       urgencia: situacao,
       diasRestantes,
       sugestao,
+      ultimoPedido: ultimosPedidos.get(f.produtoId) ?? null,
     })
   }
 
