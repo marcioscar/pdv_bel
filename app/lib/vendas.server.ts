@@ -9,7 +9,7 @@ import { caixaAberto } from "~/lib/caixa.server"
 import { db } from "~/lib/db.server"
 import { depoisDoDia, diaAtras, diaDeHoje, inicioDoDia } from "~/lib/dia"
 import { movimentosDeVenda } from "~/lib/estoque.server"
-import { arredondar, moeda } from "~/lib/moeda"
+import { arredondar, interpretarValor, moeda } from "~/lib/moeda"
 import { vendedorPorCodigo, type VendedorDoBalcao } from "~/lib/vendedores.server"
 import {
   condicaoCabeNoTotal,
@@ -510,6 +510,14 @@ export type FiltroVendas = {
   numero: string
   cliente: string
   forma: string
+  /** Id do vendedor; vazio é "todos". */
+  vendedor: string
+  /**
+   * Total exato da venda, como se digita ("127,50"). Serve para ACHAR uma venda
+   * de que só se lembra o valor — por isso é igualdade ao centavo, e não faixa:
+   * uma faixa devolveria dezenas de vendas parecidas e não responderia nada.
+   */
+  valor: string
   situacao: SituacaoFiltrada
   pagina: number
 }
@@ -550,10 +558,43 @@ export function lerFiltroVendas(url: URL, lojasPermitidas: string[]): FiltroVend
     numero: texto("numero").replace(/\D/g, "").slice(0, 9),
     cliente: texto("cliente").slice(0, 60),
     forma: FORMAS_PAGAMENTO.some((f) => f.id === texto("forma")) ? texto("forma") : "",
+    // ObjectId malformado faria o Prisma lançar; aqui vira "todos".
+    vendedor: OBJECT_ID.test(texto("vendedor")) ? texto("vendedor") : "",
+    valor: texto("valor").slice(0, 15),
     situacao:
       situacao === "validas" || situacao === "canceladas" ? situacao : "todas",
     pagina: Math.max(1, Math.trunc(Number(params.get("pagina"))) || 1),
   }
+}
+
+/**
+ * O faturamento de cada vendedor no conjunto já filtrado.
+ *
+ * Do maior para o menor: a pergunta é "quem vendeu quanto", e ela se responde
+ * de cima para baixo. As vendas anteriores ao campo caem num "sem vendedor"
+ * explícito — escondê-las faria a soma das linhas não bater com o total.
+ */
+function agruparPorVendedor(
+  vendas: { vendedorId: string | null; vendedorNome: string | null; total: number }[]
+) {
+  const mapa = new Map<string, { vendedorId: string | null; nome: string; vendas: number; faturamento: number }>()
+
+  for (const venda of vendas) {
+    const chave = venda.vendedorId ?? ""
+    const atual = mapa.get(chave) ?? {
+      vendedorId: venda.vendedorId,
+      nome: venda.vendedorNome ?? "sem vendedor",
+      vendas: 0,
+      faturamento: 0,
+    }
+    atual.vendas += 1
+    atual.faturamento += venda.total
+    mapa.set(chave, atual)
+  }
+
+  return [...mapa.values()]
+    .map((linha) => ({ ...linha, faturamento: arredondar(linha.faturamento) }))
+    .sort((a, b) => b.faturamento - a.faturamento)
 }
 
 export type VendaConsultada = Awaited<
@@ -573,6 +614,16 @@ export async function consultarVendas(filtro: FiltroVendas) {
 
   if (filtro.numero) conteudo.push({ numero: Number(filtro.numero) })
   if (filtro.forma) conteudo.push({ forma: filtro.forma })
+  if (filtro.vendedor) conteudo.push({ vendedorId: filtro.vendedor })
+
+  if (filtro.valor) {
+    // Comparar float com igualdade erraria por arredondamento; a janela de meio
+    // centavo pega o valor gravado sem alargar a busca para vendas vizinhas.
+    const alvo = interpretarValor(filtro.valor)
+    if (alvo !== null) {
+      conteudo.push({ total: { gte: alvo - 0.005, lte: alvo + 0.005 } })
+    }
+  }
 
   if (filtro.cliente) {
     // Nome ou documento, no mesmo campo: quem procura "Maria" e quem procura
@@ -595,7 +646,7 @@ export async function consultarVendas(filtro: FiltroVendas) {
   ]
   const where: Prisma.VendaWhereInput = { AND: condicoes }
 
-  const [pagina, total, validas, canceladas] = await Promise.all([
+  const [pagina, total, validas, canceladas, porVendedor] = await Promise.all([
     db.venda.findMany({
       where,
       // Por data, e não por número: a numeração é POR LOJA, então ordenar por
@@ -611,6 +662,19 @@ export async function consultarVendas(filtro: FiltroVendas) {
       _count: { _all: true },
     }),
     db.venda.count({ where: { AND: [...condicoes, { NOT: NAO_CANCELADA }] } }),
+    /**
+     * Quanto cada um vendeu no período — é o que torna a comissão conferível
+     * sem exportar nada. Só as válidas: venda cancelada não gera comissão.
+     *
+     * Somado em JS, e não com `groupBy`: o conector do Mongo derruba o query
+     * engine (panic de Rust, não exceção) quando um campo do `by` é nulo, e
+     * `vendedorId` é nulo em toda venda anterior a este campo. São três campos
+     * por venda de uma loja num período — cabe na memória com folga.
+     */
+    db.venda.findMany({
+      where: { AND: [...condicoes, NAO_CANCELADA] },
+      select: { vendedorId: true, vendedorNome: true, total: true },
+    }),
   ])
 
   /**
@@ -622,7 +686,7 @@ export async function consultarVendas(filtro: FiltroVendas) {
    * quando a busca já voltou vazia.
    */
   const foraDoPeriodo =
-    total === 0 && (filtro.numero || filtro.cliente || filtro.forma)
+    total === 0 && (filtro.numero || filtro.cliente || filtro.forma || filtro.valor || filtro.vendedor)
       ? await db.venda.count({ where: { AND: conteudo } })
       : 0
 
@@ -658,6 +722,7 @@ export async function consultarVendas(filtro: FiltroVendas) {
       vendas: validas._count._all,
       faturamento: validas._sum.total ?? 0,
       canceladas,
+      porVendedor: agruparPorVendedor(porVendedor),
     },
   }
 }

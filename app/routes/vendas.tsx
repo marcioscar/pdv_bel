@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { data, useFetcher, useRevalidator } from "react-router"
+import { data, useFetcher, useRevalidator, useSearchParams } from "react-router"
 import { Loader2, Printer, Receipt } from "lucide-react"
 
 import type { Route } from "./+types/vendas"
@@ -19,6 +19,11 @@ import {
 } from "~/lib/cobranca.server"
 import { cancelarVenda } from "~/lib/estoque.server"
 import { exigirGerente, exigirUsuario } from "~/lib/sessao.server"
+import { consultarVendas, lerFiltroVendas, type FiltroVendas } from "~/lib/vendas.server"
+import { vendedoresDaLoja } from "~/lib/vendedores.server"
+import { Atalho, Campo, ESTILO_CAMPO, Pagina } from "~/components/pdv/filtros"
+import { diaAtras, diaDeHoje, PRIMEIRO_DIA } from "~/lib/dia"
+import { Input } from "~/components/ui/input"
 import { moeda } from "~/lib/moeda"
 import { ACOES_DE_GERENTE, ehGerente } from "~/lib/permissoes"
 import { FORMAS_PAGAMENTO } from "~/lib/pdv"
@@ -35,42 +40,18 @@ export function meta(_: Route.MetaArgs) {
 export async function loader({ request }: Route.LoaderArgs) {
   const eu = await exigirUsuario(request)
 
-  // Só as vendas DESTA loja. O TypeScript não cobra filtro em consulta direta,
-  // então este é um dos poucos lugares que dependem de leitura atenta — e é por
-  // isso que quase todo acesso passa por app/lib/*.server.ts.
-  const vendas = await db.venda.findMany({
-    where: { loja: eu.loja },
-    orderBy: { numero: "desc" },
-    take: 100,
-  })
+  /**
+   * Só as vendas DESTA loja, e a trava é passar a loja da sessão como a única
+   * permitida: daí `?loja=` na barra de endereço não tem o que escolher, em vez
+   * de depender de alguém lembrar de filtrar na consulta.
+   */
+  const filtro = lerFiltroVendas(new URL(request.url), [eu.loja])
+  const [consulta, vendedores] = await Promise.all([
+    consultarVendas(filtro),
+    vendedoresDaLoja(eu.loja),
+  ])
 
-  // Uma venda parcelada tem uma cobrança por parcela, então é lista, não par.
-  const cobrancas = await db.cobranca.findMany({
-    where: { vendaId: { in: vendas.map((v) => v.id) } },
-    orderBy: { parcela: "asc" },
-    select: { vendaId: true, parcela: true, parcelas: true, situacao: true },
-  })
-  const porVenda = new Map<string, typeof cobrancas>()
-  for (const cobranca of cobrancas) {
-    const lista = porVenda.get(cobranca.vendaId) ?? []
-    lista.push(cobranca)
-    porVenda.set(cobranca.vendaId, lista)
-  }
-
-  const validas = vendas.filter((venda) => !venda.canceladaEm)
-
-  return {
-    eu,
-    vendas: vendas.map((venda) => ({
-      ...venda,
-      cobrancas: porVenda.get(venda.id) ?? [],
-    })),
-    resumo: {
-      quantidade: validas.length,
-      faturamento: validas.reduce((acc, venda) => acc + venda.total, 0),
-      canceladas: vendas.length - validas.length,
-    },
-  }
+  return { eu, filtro, vendedores, ...consulta }
 }
 
 export async function action({ request }: Route.ActionArgs) {
@@ -168,8 +149,32 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Vendas({ loaderData }: Route.ComponentProps) {
-  const { eu, vendas, resumo } = loaderData
+  const { eu, filtro, vendedores, vendas, total, foraDoPeriodo, paginas, resumo } = loaderData
   const podeCancelar = ehGerente(eu.papel)
+
+  const [params, setParams] = useSearchParams()
+
+  // Os campos digitados vivem em estado porque os atalhos de período os alteram;
+  // o efeito os traz de volta ao que a URL diz depois de cada navegação,
+  // inclusive a do botão "voltar" do navegador.
+  const [campos, setCampos] = useState(filtro)
+  useEffect(() => setCampos(filtro), [filtro])
+
+  /** Muda um pedaço do filtro e volta para a primeira página. */
+  function aplicar(mudanca: Partial<FiltroVendas>) {
+    const proximo = { ...campos, ...mudanca }
+    setCampos(proximo)
+
+    const novos = new URLSearchParams()
+    novos.set("de", proximo.de)
+    novos.set("ate", proximo.ate)
+    if (proximo.vendedor) novos.set("vendedor", proximo.vendedor)
+    if (proximo.cliente) novos.set("cliente", proximo.cliente)
+    if (proximo.numero) novos.set("numero", proximo.numero)
+    if (proximo.valor) novos.set("valor", proximo.valor)
+    if (proximo.forma) novos.set("forma", proximo.forma)
+    setParams(novos, { preventScrollReset: true })
+  }
 
   const [indiceAtivo, setIndiceAtivo] = useState(0)
   const [confirmando, setConfirmando] = useState<string | null>(null)
@@ -331,6 +336,22 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
         return
       }
 
+      /**
+       * Com um campo de filtro em foco, o teclado é dele.
+       *
+       * Sem isto a seta moveria a linha selecionada em vez do cursor, e —
+       * pior — Delete tentaria CANCELAR a venda selecionada enquanto se apaga
+       * um dígito do valor procurado.
+       */
+      const alvo = evento.target
+      if (
+        alvo instanceof HTMLInputElement ||
+        alvo instanceof HTMLSelectElement ||
+        alvo instanceof HTMLTextAreaElement
+      ) {
+        return
+      }
+
       if (key === "ArrowDown" || key === "ArrowUp") {
         evento.preventDefault()
         const delta = key === "ArrowDown" ? 1 : -1
@@ -378,14 +399,152 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
         onAlternarTema={alternar}
       >
         <span>
-          <b className="font-semibold text-foreground">{resumo.quantidade}</b>{" "}
-          {resumo.quantidade === 1 ? "venda" : "vendas"} ·{" "}
+          <b className="font-semibold text-foreground">{resumo.vendas}</b>{" "}
+          {resumo.vendas === 1 ? "venda" : "vendas"} ·{" "}
           <b className="font-semibold text-foreground">{moeda(resumo.faturamento)}</b>
           {resumo.canceladas > 0
             ? ` · ${resumo.canceladas} ${resumo.canceladas === 1 ? "cancelada" : "canceladas"}`
             : ""}
         </span>
       </Topo>
+
+      <div className="flex flex-wrap items-end gap-2 border-b border-border px-5 py-2.5">
+        <Campo rotulo="De">
+          <input
+            type="date"
+            value={campos.de}
+            onChange={(e) => aplicar({ de: e.target.value })}
+            className={ESTILO_CAMPO}
+          />
+        </Campo>
+        <Campo rotulo="Até">
+          <input
+            type="date"
+            value={campos.ate}
+            onChange={(e) => aplicar({ ate: e.target.value })}
+            className={ESTILO_CAMPO}
+          />
+        </Campo>
+
+        <Campo rotulo="Vendedor">
+          <select
+            value={campos.vendedor}
+            onChange={(e) => aplicar({ vendedor: e.target.value })}
+            className={cn(ESTILO_CAMPO, "w-36")}
+          >
+            <option value="">Todos</option>
+            {vendedores.map((v) => (
+              <option key={v.id} value={v.id}>
+                {v.nome}
+              </option>
+            ))}
+          </select>
+        </Campo>
+
+        <Campo rotulo="Cliente">
+          <Input
+            value={campos.cliente}
+            onChange={(e) => setCampos({ ...campos, cliente: e.target.value })}
+            onBlur={(e) => aplicar({ cliente: e.target.value })}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") aplicar({ cliente: e.currentTarget.value })
+            }}
+            placeholder="nome ou CPF/CNPJ"
+            className="h-8 w-44 text-xs"
+          />
+        </Campo>
+
+        <Campo rotulo="Nº">
+          <Input
+            value={campos.numero}
+            onChange={(e) => setCampos({ ...campos, numero: e.target.value })}
+            onBlur={(e) => aplicar({ numero: e.target.value })}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") aplicar({ numero: e.currentTarget.value })
+            }}
+            className="h-8 w-20 font-mono text-xs"
+          />
+        </Campo>
+
+        <Campo rotulo="Valor">
+          <Input
+            value={campos.valor}
+            onChange={(e) => setCampos({ ...campos, valor: e.target.value })}
+            onBlur={(e) => aplicar({ valor: e.target.value })}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") aplicar({ valor: e.currentTarget.value })
+            }}
+            placeholder="127,50"
+            className="h-8 w-24 text-right font-mono text-xs"
+          />
+        </Campo>
+
+        <Campo rotulo="Forma">
+          <select
+            value={campos.forma}
+            onChange={(e) => aplicar({ forma: e.target.value })}
+            className={cn(ESTILO_CAMPO, "w-28")}
+          >
+            <option value="">Todas</option>
+            {FORMAS_PAGAMENTO.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.rotulo}
+              </option>
+            ))}
+          </select>
+        </Campo>
+
+        <div className="flex gap-1.5">
+          <Atalho rotulo="Hoje" onClick={() => aplicar({ de: diaDeHoje(), ate: diaDeHoje() })} />
+          <Atalho rotulo="7 dias" onClick={() => aplicar({ de: diaAtras(6), ate: diaDeHoje() })} />
+          <Atalho rotulo="30 dias" onClick={() => aplicar({ de: diaAtras(29), ate: diaDeHoje() })} />
+          <Atalho
+            rotulo="Limpar"
+            onClick={() =>
+              aplicar({
+                de: diaAtras(6),
+                ate: diaDeHoje(),
+                vendedor: "",
+                cliente: "",
+                numero: "",
+                valor: "",
+                forma: "",
+              })
+            }
+          />
+        </div>
+      </div>
+
+      {/* Quanto cada um vendeu no que está filtrado — é o que responde "quanto
+          o Marcelo vendeu essa semana" sem sair da tela do turno. */}
+      {resumo.porVendedor.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-border bg-muted/30 px-5 py-2 text-xs">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Por vendedor
+          </span>
+          {resumo.porVendedor.map((linha) => (
+            <button
+              key={linha.vendedorId ?? "sem"}
+              type="button"
+              // Clicar filtra por ele: a pergunta seguinte a "quanto vendeu" é
+              // quase sempre "quais foram".
+              onClick={() => aplicar({ vendedor: linha.vendedorId ?? "" })}
+              disabled={!linha.vendedorId}
+              className={cn(
+                "rounded px-1.5 py-0.5",
+                linha.vendedorId && "hover:bg-accent",
+                campos.vendedor === linha.vendedorId && "bg-accent"
+              )}
+            >
+              <span className="font-medium">{linha.nome}</span>{" "}
+              <span className="font-mono tabular-nums">{moeda(linha.faturamento)}</span>{" "}
+              <span className="text-muted-foreground">
+                ({linha.vendas} {linha.vendas === 1 ? "venda" : "vendas"})
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       <div className="flex min-h-0 flex-1">
         <section className="flex min-w-0 flex-1 flex-col">
@@ -401,6 +560,9 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                   </th>
                   <th scope="col" className="px-2 py-2.5 text-left font-semibold">
                     Itens
+                  </th>
+                  <th scope="col" className="w-28 px-2 py-2.5 text-left font-semibold">
+                    Vendedor
                   </th>
                   <th scope="col" className="w-24 px-2 py-2.5 text-left font-semibold">
                     Forma
@@ -419,14 +581,26 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
               <tbody>
                 {vendas.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-5 py-16 text-center">
+                    <td colSpan={8} className="px-5 py-16 text-center">
                       <Receipt
                         className="mx-auto size-10 text-muted-foreground/40"
                         aria-hidden
                       />
                       <p className="mt-3 text-sm text-muted-foreground">
-                        Nenhuma venda registrada ainda.
+                        Nenhuma venda no filtro.
                       </p>
+                      {/* Achar nada por causa da data é a frustração clássica de
+                          tela com filtro: quem procura por valor ou cliente não
+                          sabe de que dia a venda é. */}
+                      {foraDoPeriodo > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => aplicar({ de: PRIMEIRO_DIA, ate: diaDeHoje() })}
+                          className="mt-1 text-xs text-amber-600 underline underline-offset-2 dark:text-amber-500"
+                        >
+                          {foraDoPeriodo} fora do período — procurar em tudo
+                        </button>
+                      ) : null}
                     </td>
                   </tr>
                 ) : (
@@ -458,6 +632,11 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                         </td>
                         <td className="px-2 py-2">
                           <ItensDaVenda itens={venda.itens} />
+                        </td>
+                        <td className="px-2 py-2.5 text-xs">
+                          {venda.vendedorNome ?? (
+                            <span className="text-muted-foreground">—</span>
+                          )}
                         </td>
                         <td className="px-2 py-2.5 text-xs">
                           {FORMAS_PAGAMENTO.find((f) => f.id === venda.forma)?.rotulo ??
@@ -518,6 +697,20 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                 )}
               </tbody>
             </table>
+
+            {paginas > 1 ? (
+              <div className="flex items-center gap-3 border-t border-border px-5 py-2 text-xs text-muted-foreground">
+                <Pagina params={params} para={filtro.pagina - 1} ativa={filtro.pagina > 1}>
+                  ‹ Anteriores
+                </Pagina>
+                <span className="font-mono tabular-nums">
+                  página {filtro.pagina} de {paginas} · {total} no filtro
+                </span>
+                <Pagina params={params} para={filtro.pagina + 1} ativa={filtro.pagina < paginas}>
+                  Próximas ›
+                </Pagina>
+              </div>
+            ) : null}
           </div>
 
           <div className="flex items-center justify-between border-t border-border px-5 py-3">
