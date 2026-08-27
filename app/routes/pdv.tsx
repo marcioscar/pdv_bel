@@ -1389,6 +1389,28 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     setEntrada("")
   }, [avisar, venda.itens.length])
 
+  /**
+   * O orçamento sai do carrinho como ele está, sem gravar nada.
+   *
+   * Só os ids e as quantidades vão na URL — quem precifica é o servidor, com o
+   * mesmo `precificar` do fechamento. Mandar o preço da tela imprimiria para o
+   * cliente um valor que o caixa não vai cobrar.
+   */
+  const imprimirOrcamento = useCallback(() => {
+    if (venda.itens.length === 0) {
+      avisar("Nenhum item para orçar", "erro")
+      return
+    }
+
+    const params = new URLSearchParams()
+    for (const item of venda.itens) params.append("i", `${item.produtoId}:${item.quantidade}`)
+    if (totais.desconto > 0) params.set("desconto", String(totais.desconto))
+
+    imprimirDocumento(`/orcamento/impressao?${params}`).then((erro) => {
+      avisar(erro ?? "Orçamento enviado para a impressora", erro ? "erro" : "sucesso")
+    })
+  }, [avisar, totais.desconto, venda.itens])
+
   const cancelarVenda = useCallback(() => {
     if (venda.itens.length === 0) return
     // A liberação morre com a venda que ela liberava.
@@ -1483,6 +1505,10 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           evento.preventDefault()
           pedirQuantidade()
           return
+        case "F7":
+          evento.preventDefault()
+          imprimirOrcamento()
+          return
         case "F9":
           evento.preventDefault()
           cancelarVenda()
@@ -1551,6 +1577,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     cancelarVenda,
     confirmar,
     entrada,
+    imprimirOrcamento,
     modo,
     pedirDesconto,
     pedirQuantidade,
@@ -1577,6 +1604,12 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       rotulo: "Alterar qtd",
       acao: pedirQuantidade,
       desabilitado: venda.indiceAtivo < 0,
+    },
+    {
+      tecla: "F7",
+      rotulo: "Orçamento",
+      acao: imprimirOrcamento,
+      desabilitado: venda.itens.length === 0,
     },
     {
       tecla: "F9",

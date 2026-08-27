@@ -21,6 +21,9 @@ export default [
   route("vendas/:vendaId/boleto.pdf", "routes/boleto.tsx"),
   route("pedidos-de-compra/:pedidoId/impressao", "routes/pedido-compra.impressao.tsx"),
   route("vendas/:vendaId/cupom", "routes/cupom.tsx"),
+  // O papel que o cliente leva para decidir. Sai do carrinho da tela, antes de
+  // existir venda — por isso não tem :id, os itens vêm na própria URL.
+  route("orcamento/impressao", "routes/orcamento.impressao.tsx"),
   // O cupom diz o que o cliente levou; este diz que o dinheiro entrou.
   route("vendas/:vendaId/comprovante-pix", "routes/comprovante.pix.tsx"),
 
