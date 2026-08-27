@@ -9,6 +9,7 @@ import { Input } from "~/components/ui/input"
 import { Kbd } from "~/components/ui/kbd"
 import { db } from "~/lib/db.server"
 import { saldosPorProduto } from "~/lib/estoque.server"
+import { BuscaNcm } from "~/components/pdv/busca-ncm"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { buscarProdutos, criarIndice } from "~/lib/pdv"
 import {
@@ -238,7 +239,7 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
             rotulo="Descrição"
             valor={edicao.descricao}
             onChange={(v) => setEdicao({ ...edicao, descricao: v })}
-            className="col-span-3"
+            className="col-span-2"
           />
           <CampoEdicao
             rotulo="Unidade"
@@ -246,11 +247,10 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
             onChange={(v) => setEdicao({ ...edicao, unidade: v })}
             className="col-span-1"
           />
-          <CampoEdicao
-            rotulo="NCM"
+          <BuscaNcm
             valor={edicao.ncm}
-            onChange={(v) => setEdicao({ ...edicao, ncm: v.replace(/\D/g, "").slice(0, 8) })}
-            className="col-span-1"
+            onEscolher={(ncm) => setEdicao({ ...edicao, ncm })}
+            className="col-span-2"
           />
           <CampoEdicao
             rotulo="Preço"

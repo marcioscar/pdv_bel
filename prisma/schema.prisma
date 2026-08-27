@@ -83,6 +83,49 @@ model Produto {
   @@map("produtos")
 }
 
+/// A tabela NCM oficial, copiada para cá.
+///
+/// A fonte é federal (Portal Único Siscomex), não da SEFAZ: a SEFAZ recebe o
+/// NCM na NF-e, quem publica a nomenclatura é a Receita/Camex. São ~10,5 mil
+/// códigos que mudam poucas vezes por ano, por resolução.
+///
+/// Copiada, e não consultada ao vivo, por dois motivos: cadastrar produto não
+/// pode depender de um site do governo estar de pé, e a busca precisa responder
+/// enquanto se digita.
+model Ncm {
+  id     String @id @default(auto()) @map("_id") @db.ObjectId
+  /// Oito dígitos, sem pontos — o mesmo formato de `Produto.ncm`, para casarem
+  /// sem normalizar na consulta.
+  codigo String @unique
+  /// "3923.21.90", só para mostrar.
+  formatado String
+  /// A descrição da folha. Sozinha costuma ser inútil ("Outros"): é a hierarquia
+  /// que diz o que ela é.
+  descricao String
+  /// Capítulo → posição → … → folha, já sem a marcação HTML da fonte. É o que
+  /// se MOSTRA, porque "saco de polietileno" só aparece nos ancestrais.
+  caminho String
+  /// O mesmo caminho em minúsculas e sem acento. É por aqui que se BUSCA:
+  /// a nomenclatura escreve "plástico", e ninguém digita acento no balcão.
+  busca   String
+
+  @@map("ncms")
+}
+
+/// Quando a tabela NCM foi trazida da fonte, e o ato que estava vigente.
+/// Uma linha só; existe para a tela poder dizer de quando é o que está ali.
+model ImportacaoNcm {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  importadoEm DateTime @default(now())
+  importadoPor String
+  /// "Resolução Gecex nº 926/2026", como a fonte declara.
+  ato        String
+  vigencia   String
+  quantidade Int
+
+  @@map("importacoes_ncm")
+}
+
 /// Operador do caixa. A senha nunca é guardada: só o hash scrypt com sal.
 model Usuario {
   id            String    @id @default(auto()) @map("_id") @db.ObjectId
