@@ -1,5 +1,5 @@
 import type { Route } from "./+types/fechamento.papel"
-import { diferencaRelevante, rotuloDoMovimento } from "~/lib/caixa"
+import { diferencaRelevante, retiradaDaGaveta, rotuloDoMovimento } from "~/lib/caixa"
 import { db } from "~/lib/db.server"
 import { diaEmTexto } from "~/lib/dia"
 import { escapar } from "~/lib/html"
@@ -93,6 +93,20 @@ export async function loader({ params, request }: Route.LoaderArgs) {
             <td>${sobra ? "SOBRA" : fechamento.diferenca < 0 ? "FALTA" : "Diferença"}</td>
             <td class="valor">${moeda(Math.abs(fechamento.diferenca))}</td>
           </tr>
+          ${
+            /*
+             * Depois da diferença, e separado dela: a conferência termina ali.
+             * Isto é a instrução do que fazer com o dinheiro que está na mão —
+             * o fundo fica para abrir amanhã, o resto vai para o cofre.
+             */
+            fechamento.abertura > 0
+              ? `${linha("Fundo que fica na gaveta", fechamento.abertura, { negativo: true })}
+          <tr class="soma retirada">
+            <td>A retirar</td>
+            <td class="valor">${moeda(retiradaDaGaveta(fechamento.contado, fechamento.abertura))}</td>
+          </tr>`
+              : ""
+          }
         </table>
         ${fechamento.observacao ? `<p class="obs">${escapar(fechamento.observacao)}</p>` : ""}
       </div>
@@ -186,6 +200,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
    * quando passa de um real, ganha moldura — para quem folheia um maço de
    * fechamentos achar os dias problemáticos sem ler nenhum deles.
    */
+  /* O que sai da gaveta fecha a coluna, com traço em cima para não se
+     confundir com a diferença logo acima. */
+  .conta .retirada td { border-top: 1.5px solid #111; padding-top: 3px; font-weight: 700; }
   .conta .diferenca td {
     border-top: 2px solid #000; padding-top: 4px;
     font-size: 13px; font-weight: 700;

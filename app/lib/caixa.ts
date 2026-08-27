@@ -36,6 +36,23 @@ export function tipoDeCaixaValido(valor: unknown): valor is TipoMovimentoDeCaixa
 }
 
 /**
+ * O que sai da gaveta no fim do dia: tudo menos o fundo que fica para amanhã.
+ *
+ * A conferência continua sendo contra a gaveta INTEIRA — quem conta conta tudo,
+ * e a diferença é medida contra o esperado completo. Este número é outro
+ * assunto: depois de bater, quanto se leva para o cofre e quanto se deixa para
+ * abrir amanhã. Misturar os dois faria a falta de R$ 5 sumir dentro de um
+ * "líquido" que ninguém confere.
+ *
+ * Fica aqui, e não na tela, porque o papel do fechamento mostra o mesmo número —
+ * e duas subtrações escritas à mão em lugares diferentes divergem na primeira
+ * vez que alguém mudar o critério.
+ */
+export function retiradaDaGaveta(dinheiroNaGaveta: number, fundo: number) {
+  return Math.round((dinheiroNaGaveta - fundo) * 100) / 100
+}
+
+/**
  * Sangria acima disto exige a senha de um gerente na hora.
  *
  * Sem um teto, qualquer operador registrava a saída de qualquer quantia — e o

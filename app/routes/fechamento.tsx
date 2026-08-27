@@ -9,6 +9,7 @@ import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import {
   diferencaRelevante,
+  retiradaDaGaveta,
   rotuloDoMovimento,
   SANGRIA_SEM_AUTORIZACAO,
   tipoDeCaixaValido,
@@ -331,6 +332,41 @@ export default function Fechamento({ loaderData, actionData }: Route.ComponentPr
                   {moeda(fechado ? fechado.esperado : resumo.esperado)}
                 </dd>
               </div>
+
+              {/*
+                * Quanto sai e quanto fica.
+                *
+                * Antes de fechar a conta é sobre o ESPERADO, que é uma
+                * previsão; depois, sobre o CONTADO, que é o dinheiro que
+                * existe de verdade. Prometer sobre o esperado e entregar
+                * sobre o contado seria mandar alguém ao cofre com um valor
+                * que a gaveta não tem.
+                */}
+              {(fechado ? fechado.abertura : resumo.abertura) > 0 ? (
+                <>
+                  <div className="mt-2 flex items-baseline justify-between text-sm">
+                    <dt className="text-muted-foreground">
+                      Fundo de caixa, fica na gaveta
+                    </dt>
+                    <dd className="font-mono tabular-nums text-muted-foreground">
+                      − {moeda(fechado ? fechado.abertura : resumo.abertura)}
+                    </dd>
+                  </div>
+                  <div className="mt-1 flex items-baseline justify-between border-t border-border pt-2">
+                    <dt className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      {fechado ? "A retirar" : "A retirar, se bater"}
+                    </dt>
+                    <dd className="font-mono text-xl font-bold tabular-nums">
+                      {moeda(
+                        retiradaDaGaveta(
+                          fechado ? fechado.contado : resumo.esperado,
+                          fechado ? fechado.abertura : resumo.abertura
+                        )
+                      )}
+                    </dd>
+                  </div>
+                </>
+              ) : null}
 
               {/* O dia foi reaberto: quem chega aqui precisa saber que está refazendo
             uma contagem, e qual foi a anterior. */}
