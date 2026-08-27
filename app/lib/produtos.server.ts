@@ -6,6 +6,9 @@ export type ProdutoEntrada = {
   descricao: string
   unidade: string
   preco: number
+  /** Preço unitário a partir de `quantidadeCombo`. Nulo quando não há combo. */
+  precoCombo: number | null
+  quantidadeCombo: number | null
   ncm: string | null
 }
 
@@ -44,6 +47,11 @@ export function lerProduto(form: FormData): ProdutoEntrada | { erro: string } {
   const preco = interpretarValor(texto(form.get("preco")))
   const ncm = texto(form.get("ncm")).replace(/\D/g, "")
 
+  const precoComboBruto = texto(form.get("precoCombo"))
+  const quantidadeComboBruta = texto(form.get("quantidadeCombo"))
+  const precoCombo = precoComboBruto ? interpretarValor(precoComboBruto) : null
+  const quantidadeCombo = quantidadeComboBruta ? interpretarValor(quantidadeComboBruta) : null
+
   if (!codigo) return { erro: "Informe o código" }
   if (codigo.length > 20) return { erro: "Código longo demais" }
   if (descricao.length < 3) return { erro: "Descrição precisa de pelo menos 3 letras" }
@@ -55,7 +63,38 @@ export function lerProduto(form: FormData): ProdutoEntrada | { erro: string } {
   // emissão — longe daqui, com o cliente esperando.
   if (ncm && ncm.length !== 8) return { erro: "NCM precisa ter 8 dígitos" }
 
-  return { codigo, descricao, unidade, preco, ncm: ncm || null }
+  /*
+   * Os dois campos do combo andam juntos. Preenchido pela metade seria uma
+   * faixa que não descreve nada — e, pior, silenciosa: o caixa continuaria
+   * cobrando o preço avulso sem ninguém entender por quê.
+   */
+  if (precoComboBruto && !quantidadeComboBruta) {
+    return { erro: "Informe a partir de quantas unidades vale o preço de combo" }
+  }
+  if (quantidadeComboBruta && !precoComboBruto) {
+    return { erro: "Informe o preço de combo" }
+  }
+  if (precoComboBruto && (precoCombo === null || precoCombo < 0)) {
+    return { erro: "Preço de combo inválido" }
+  }
+  if (quantidadeComboBruta && (quantidadeCombo === null || quantidadeCombo <= 0)) {
+    return { erro: "Quantidade do combo inválida" }
+  }
+  // Combo mais caro que o avulso é quase certamente dígito trocado, e o
+  // prejuízo só apareceria no fechamento do mês.
+  if (precoCombo !== null && precoCombo > preco) {
+    return { erro: "O preço de combo está acima do preço avulso" }
+  }
+
+  return {
+    codigo,
+    descricao,
+    unidade,
+    preco,
+    precoCombo,
+    quantidadeCombo,
+    ncm: ncm || null,
+  }
 }
 
 export async function criarProduto(entrada: ProdutoEntrada): Promise<ResultadoProduto> {

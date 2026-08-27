@@ -90,10 +90,15 @@ type EmEdicao = {
   descricao: string
   unidade: string
   preco: string
+  precoCombo: string
+  quantidadeCombo: string
   ncm: string
 }
 
-const NOVO: EmEdicao = { id: null, codigo: "", descricao: "", unidade: "", preco: "", ncm: "" }
+const NOVO: EmEdicao = {
+  id: null, codigo: "", descricao: "", unidade: "", preco: "",
+  precoCombo: "", quantidadeCombo: "", ncm: "",
+}
 
 export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
   const { produtos } = loaderData
@@ -170,6 +175,8 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
         descricao: edicao.descricao,
         unidade: edicao.unidade,
         preco: edicao.preco,
+        precoCombo: edicao.precoCombo,
+        quantidadeCombo: edicao.quantidadeCombo,
         ncm: edicao.ncm,
       },
       { method: "post" }
@@ -231,7 +238,7 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
             rotulo="Descrição"
             valor={edicao.descricao}
             onChange={(v) => setEdicao({ ...edicao, descricao: v })}
-            className="col-span-5"
+            className="col-span-3"
           />
           <CampoEdicao
             rotulo="Unidade"
@@ -249,8 +256,22 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
             rotulo="Preço"
             valor={edicao.preco}
             onChange={(v) => setEdicao({ ...edicao, preco: v })}
-            onEnter={salvar}
             className="col-span-1"
+          />
+          {/* Os dois do combo lado a lado: separados, ninguém liga um ao outro,
+              e preencher só um é o erro que o cadastro recusa. */}
+          <CampoEdicao
+            rotulo="Combo a partir de"
+            valor={edicao.quantidadeCombo}
+            onChange={(v) => setEdicao({ ...edicao, quantidadeCombo: v })}
+            className="col-span-1"
+          />
+          <CampoEdicao
+            rotulo="Preço combo"
+            valor={edicao.precoCombo}
+            onChange={(v) => setEdicao({ ...edicao, precoCombo: v })}
+            onEnter={salvar}
+            className="col-span-2"
           />
           <div className="col-span-2 flex gap-2">
             <Button
@@ -346,6 +367,14 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
                   </td>
                   <td className="px-2 py-2 text-right font-mono font-medium tabular-nums">
                     {moeda(produto.preco)}
+                    {/* Junto do preço, e não em coluna própria: é uma exceção
+                        do preço, e quem confere quer os dois no mesmo olhar. */}
+                    {produto.precoCombo != null && produto.quantidadeCombo != null ? (
+                      <div className="text-[10px] font-normal text-emerald-600 dark:text-emerald-500">
+                        {moeda(produto.precoCombo)} a partir de{" "}
+                        {formatarQuantidade(produto.quantidadeCombo)}
+                      </div>
+                    ) : null}
                   </td>
                   <td
                     className={cn(
@@ -368,6 +397,14 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
                           unidade: produto.unidade,
                           // Vírgula, como se digita — interpretarValor aceita as duas.
                           preco: produto.preco.toFixed(2).replace(".", ","),
+                          precoCombo:
+                            produto.precoCombo != null
+                              ? produto.precoCombo.toFixed(2).replace(".", ",")
+                              : "",
+                          quantidadeCombo:
+                            produto.quantidadeCombo != null
+                              ? formatarQuantidade(produto.quantidadeCombo)
+                              : "",
                           ncm: produto.ncm ?? "",
                         })
                       }

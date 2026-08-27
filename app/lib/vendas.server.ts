@@ -17,6 +17,7 @@ import {
   dividirParcelas,
   FORMAS_PAGAMENTO,
   parcelasDaCondicao,
+  precoAplicado,
   VALOR_MINIMO_BOLETO,
 } from "~/lib/pdv"
 
@@ -180,14 +181,19 @@ export async function precificar(
     const produto = porId.get(recebido.produtoId)
     if (!produto) return { ok: false, erro: "Produto não encontrado no catálogo" }
 
+    // Mesma função do carrinho: a tela mostra o preço de combo quando a
+    // quantidade alcança o degrau, e aqui ele é reaplicado sobre o preço do
+    // banco. Recalcular com outra regra cobraria diferente do que foi mostrado.
+    const { preco } = precoAplicado(produto, recebido.quantidade)
+
     itens.push({
       produtoId: produto.id,
       codigo: produto.codigo,
       descricao: produto.descricao,
       unidade: produto.unidade,
-      preco: produto.preco,
+      preco,
       quantidade: recebido.quantidade,
-      subtotal: arredondar(produto.preco * recebido.quantidade),
+      subtotal: arredondar(preco * recebido.quantidade),
     })
   }
 

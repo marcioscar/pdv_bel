@@ -6,6 +6,8 @@ export type ProdutoCatalogo = {
   descricao: string
   unidade: string
   preco: number
+  precoCombo: number | null
+  quantidadeCombo: number | null
   estoque: number
 }
 
@@ -14,10 +16,47 @@ export type ItemVenda = {
   codigo: string
   descricao: string
   unidade: string
-  precoUnitario: number
+  /** Preço avulso do catálogo. O que se cobra sai de `precoAplicado`. */
+  preco: number
+  precoCombo: number | null
+  quantidadeCombo: number | null
   quantidade: number
   /** Estoque no momento em que o item entrou, só para sinalizar falta na tela. */
   estoque: number
+}
+
+/** O que basta para saber quanto custa: o produto e quantas se leva. */
+export type PrecoDoProduto = {
+  preco: number
+  precoCombo: number | null
+  quantidadeCombo: number | null
+}
+
+/**
+ * O preço unitário que vale para ESTA quantidade, e se ele veio do combo.
+ *
+ * Mora aqui, e não no carrinho nem no servidor, porque os DOIS precisam da
+ * mesma resposta: a tela mostra o que o caixa vai cobrar, e `precificar`
+ * recalcula do banco na hora de gravar. Duas implementações da mesma regra é
+ * como se mostra um total ao cliente e se cobra outro.
+ *
+ * O preço não é guardado no item do carrinho de propósito — ele muda quando a
+ * quantidade muda, e um valor copiado ficaria defasado no `+`/`−`.
+ *
+ * A partir do degrau, TODAS as unidades saem no preço de combo. Cobrar as
+ * excedentes ao preço avulso faria levar 11 custar mais que levar 10.
+ */
+export function precoAplicado(
+  produto: PrecoDoProduto,
+  quantidade: number
+): { preco: number; combo: boolean } {
+  const { precoCombo, quantidadeCombo } = produto
+  // Faixa incompleta não é faixa: sem os dois valores não há o que aplicar.
+  if (precoCombo == null || quantidadeCombo == null || quantidadeCombo <= 0) {
+    return { preco: produto.preco, combo: false }
+  }
+  if (quantidade < quantidadeCombo) return { preco: produto.preco, combo: false }
+  return { preco: precoCombo, combo: true }
 }
 
 export type EstadoVenda = {
@@ -66,7 +105,9 @@ export function reduzirVenda(estado: EstadoVenda, acao: AcaoVenda): EstadoVenda 
           codigo: produto.codigo,
           descricao: produto.descricao,
           unidade: produto.unidade,
-          precoUnitario: produto.preco,
+          preco: produto.preco,
+          precoCombo: produto.precoCombo,
+          quantidadeCombo: produto.quantidadeCombo,
           quantidade,
           estoque: produto.estoque,
         },
@@ -125,7 +166,10 @@ export function reduzirVenda(estado: EstadoVenda, acao: AcaoVenda): EstadoVenda 
 
 export function totaisDaVenda(estado: EstadoVenda) {
   const subtotal = arredondar(
-    estado.itens.reduce((acc, item) => acc + item.precoUnitario * item.quantidade, 0)
+    estado.itens.reduce(
+      (acc, item) => acc + precoAplicado(item, item.quantidade).preco * item.quantidade,
+      0
+    )
   )
   // Um desconto maior que o subtotal nunca vira total negativo.
   const desconto = Math.min(estado.desconto, subtotal)
@@ -174,7 +218,15 @@ export function interpretarComando(entrada: string): Comando {
 // Busca no catálogo
 // ---------------------------------------------------------------------------
 
-export type EntradaIndice = { produto: ProdutoCatalogo; chave: string }
+/**
+ * Genérico no produto de propósito: o índice só precisa de código, descrição e
+ * unidade para buscar. As telas de ficha e de estoque carregam produtos com
+ * outras colunas e sem as de preço — obrigá-las a trazer o catálogo inteiro só
+ * para caber num tipo seria carregar dado que aquelas telas não usam.
+ */
+export type EntradaIndice<T = ProdutoCatalogo> = { produto: T; chave: string }
+
+type Buscavel = { codigo: string; descricao: string; unidade: string }
 
 function normalizar(texto: string) {
   return texto
@@ -187,22 +239,22 @@ function normalizar(texto: string) {
  * O catálogo inteiro vem no loader, então a busca roda no cliente e responde
  * sem latência a cada tecla. Normalizar uma vez evita refazer isso por keystroke.
  */
-export function criarIndice(catalogo: ProdutoCatalogo[]): EntradaIndice[] {
+export function criarIndice<T extends Buscavel>(catalogo: T[]): EntradaIndice<T>[] {
   return catalogo.map((produto) => ({
     produto,
     chave: normalizar(`${produto.codigo} ${produto.descricao} ${produto.unidade}`),
   }))
 }
 
-export function buscarProdutos(
-  indice: EntradaIndice[],
+export function buscarProdutos<T extends Buscavel>(
+  indice: EntradaIndice<T>[],
   termo: string,
   limite = 7
-): ProdutoCatalogo[] {
+): T[] {
   const termos = normalizar(termo).split(/\s+/).filter(Boolean)
   if (termos.length === 0) return []
 
-  const encontrados: { produto: ProdutoCatalogo; peso: number }[] = []
+  const encontrados: { produto: T; peso: number }[] = []
 
   for (const entrada of indice) {
     if (!termos.every((t) => entrada.chave.includes(t))) continue

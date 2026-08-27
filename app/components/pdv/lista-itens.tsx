@@ -5,7 +5,7 @@ import { Badge } from "~/components/ui/badge";
 import { Kbd } from "~/components/ui/kbd";
 import { cn } from "~/lib/utils";
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda";
-import type { ItemVenda } from "~/lib/pdv";
+import { precoAplicado, type ItemVenda } from "~/lib/pdv";
 
 type Props = {
 	itens: ItemVenda[];
@@ -75,6 +75,7 @@ export function ListaItens({ itens, indiceAtivo, onSelecionar }: Props) {
 					{itens.map((item, indice) => {
 						const ativo = indice === indiceAtivo;
 						const semEstoque = item.quantidade > item.estoque;
+						const { preco, combo } = precoAplicado(item, item.quantidade);
 						return (
 							<tr
 								key={item.produtoId}
@@ -117,11 +118,20 @@ export function ListaItens({ itens, indiceAtivo, onSelecionar }: Props) {
 									}>
 									{formatarQuantidade(item.quantidade)}
 								</td>
-								<td className='px-2 py-3 text-right font-mono text-muted-foreground tabular-nums'>
-									{moeda(item.precoUnitario)}
+								{/* O preço muda sozinho quando a quantidade cruza o degrau;
+								    sem dizer por quê, o operador vê o valor mudar e desconfia. */}
+								<td className='px-2 py-3 text-right font-mono tabular-nums'>
+									<div className={cn(combo ? "font-semibold text-emerald-600 dark:text-emerald-500" : "text-muted-foreground")}>
+										{moeda(preco)}
+									</div>
+									{combo ? (
+										<div className='text-[10px] font-sans text-emerald-600 dark:text-emerald-500'>
+											combo · {formatarQuantidade(item.quantidadeCombo ?? 0)}+
+										</div>
+									) : null}
 								</td>
 								<td className='px-5 py-3 text-right font-mono font-medium tabular-nums'>
-									{moeda(item.precoUnitario * item.quantidade)}
+									{moeda(preco * item.quantidade)}
 								</td>
 							</tr>
 						);

@@ -62,6 +62,15 @@ model Produto {
   descricao String
   unidade   String
   preco     Float
+  /// Preço "de combo": o unitário que passa a valer quando o cliente leva
+  /// `quantidadeCombo` ou mais. A partir do degrau TODAS as unidades saem por
+  /// ele — levar 12 de um combo de 10 são 12 no preço de combo, não 10 mais 2
+  /// avulsas. Assim comprar mais nunca custa mais.
+  ///
+  /// Os dois andam juntos: um sem o outro não descreve faixa nenhuma, e o
+  /// cadastro recusa preencher só um.
+  precoCombo      Float?
+  quantidadeCombo Float?
   /// Classificação fiscal (8 dígitos), obrigatória em cada item da NF-e que a
   /// rede emitir. Veio do sistema antigo; opcional porque produto cadastrado
   /// aqui pelo balcão pode nascer sem ela, e travar o cadastro por causa de um
