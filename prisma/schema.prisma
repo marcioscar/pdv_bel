@@ -88,6 +88,15 @@ model Usuario {
   /// que o dono entra em qualquer loja sem ser cadastrado quatro vezes.
   /// Quem tem mais de uma escolhe a loja ao entrar.
   lojas         String[]
+  /// Código curto que o caixa digita para creditar a comissão da venda a esta
+  /// pessoa. Quem não vende (só administra) fica sem, e aí não pode ser
+  /// escolhido como vendedor.
+  ///
+  /// NÃO usar @unique: o índice único do Mongo não é esparso, campo ausente
+  /// conta como null, e só um documento poderia ficar sem código — o que
+  /// barraria o segundo usuário que não vende. A unicidade é cobrada no
+  /// cadastro (ver `codigoVendedorEmUso`).
+  codigoVendedor String?
   ativo         Boolean   @default(true)
   criadoEm      DateTime  @default(now())
   ultimoAcessoEm DateTime?
@@ -218,7 +227,17 @@ model Venda {
   loja     String
   criadaEm DateTime   @default(now())
   caixa    String
+  /// Quem OPEROU o caixa (a sessão logada). Não é quem vendeu: no balcão um
+  /// caixa fixo fecha as vendas de todos os vendedores.
   operador String
+  /// Quem VENDEU, para a comissão. Separado do operador de propósito — juntar os
+  /// dois creditaria toda comissão a quem fica no caixa.
+  ///
+  /// O nome fica copiado, como no cliente: o histórico não pode mudar porque
+  /// alguém corrigiu um cadastro depois. Opcional porque as vendas anteriores a
+  /// este campo não têm vendedor, e reescrevê-las seria inventar comissão.
+  vendedorId   String? @db.ObjectId
+  vendedorNome String?
   itens    VendaItem[]
 
   /// Cliente é obrigatório na venda a prazo (o boleto precisa do pagador).

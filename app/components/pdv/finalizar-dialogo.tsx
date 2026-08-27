@@ -42,6 +42,11 @@ type Props = {
   onFormaChange: (forma: FormaPagamento) => void;
   recebido: string;
   onRecebidoChange: (valor: string) => void;
+  /** Código do vendedor digitado pelo caixa — é dele a comissão desta venda. */
+  vendedorCodigo: string;
+  onVendedorCodigoChange: (codigo: string) => void;
+  /** Todos os da loja, para o nome aparecer sem ida à rede a cada tecla. */
+  vendedores: { id: string; codigo: string; nome: string }[];
   cliente: ClienteResumo | null;
   /** Lista para escolher aqui dentro, sem abrir outro diálogo por cima. */
   clientes: ClienteResumo[];
@@ -77,6 +82,9 @@ export function FinalizarDialogo({
   onFormaChange,
   recebido,
   onRecebidoChange,
+  vendedorCodigo,
+  onVendedorCodigoChange,
+  vendedores,
   cliente,
   clientes,
   onClienteChange,
@@ -91,6 +99,7 @@ export function FinalizarDialogo({
 }: Props) {
   const campoRecebido = useRef<HTMLInputElement>(null);
   const campoCliente = useRef<HTMLInputElement>(null);
+  const campoVendedor = useRef<HTMLInputElement>(null);
 
   const emDinheiro = forma === "dinheiro";
   const aPrazo = forma === "prazo";
@@ -99,6 +108,18 @@ export function FinalizarDialogo({
   const faltaDinheiro =
     emDinheiro && (valorRecebido === null || troco === null || troco < 0);
   const faltaCliente = aPrazo && cliente === null;
+
+  /**
+   * O nome é resolvido aqui na tela, contra a lista que veio pronta, só para o
+   * caixa CONFERIR antes do Enter. Quem decide de quem é o código é o servidor,
+   * na gravação — aqui é conferência, não autoridade.
+   *
+   * Sem esse eco, um dedo errado creditaria a comissão a outra pessoa e ninguém
+   * descobriria até o fechamento do mês.
+   */
+  const vendedor =
+    vendedores.find((v) => v.codigo === vendedorCodigo.trim()) ?? null;
+  const faltaVendedor = vendedor === null;
 
   /**
    * A escolha do cliente acontece AQUI DENTRO, trocando esta seção por uma busca.
@@ -221,7 +242,21 @@ export function FinalizarDialogo({
       }
       if (key === "Enter") {
         evento.preventDefault();
+        // Enter anda até o que falta antes de fechar: com o vendedor vazio ele
+        // leva o cursor para lá em vez de esbarrar num botão desabilitado, e a
+        // venda em dinheiro vira "valor, Enter, código, Enter".
+        if (faltaVendedor) {
+          campoVendedor.current?.focus();
+          campoVendedor.current?.select();
+          return;
+        }
         onConfirmar();
+        return;
+      }
+      if (key === "F8") {
+        evento.preventDefault();
+        campoVendedor.current?.focus();
+        campoVendedor.current?.select();
         return;
       }
       if (key === "F6") {
@@ -240,6 +275,7 @@ export function FinalizarDialogo({
     return () => window.removeEventListener("keydown", aoTeclar, true);
   }, [
     escolhendoCliente,
+    faltaVendedor,
     imprimir,
     indiceCliente,
     onCadastrarCliente,
@@ -348,6 +384,46 @@ export function FinalizarDialogo({
             </div>
           </div>
         ) : null}
+
+        {/* Obrigatório e sem padrão: quem fecha é um caixa fixo e quem vendeu
+            muda de cliente para cliente. Um valor "lembrado" da venda anterior
+            creditaria a comissão errada em silêncio. */}
+        <div
+          className={cn(
+            "mt-3 flex items-center gap-3 rounded-lg border p-3",
+            faltaVendedor ? "border-destructive/50 bg-destructive/5" : "border-border bg-muted/30",
+          )}
+        >
+          <label
+            htmlFor="vendedor"
+            className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
+          >
+            Vendedor
+          </label>
+          <Input
+            ref={campoVendedor}
+            id="vendedor"
+            type="search"
+            value={vendedorCodigo}
+            onChange={(e) => onVendedorCodigoChange(e.target.value)}
+            placeholder="código"
+            inputMode="numeric"
+            autoComplete="off"
+            data-1p-ignore=""
+            data-lpignore="true"
+            className="h-9 w-24 rounded-lg font-mono text-lg tabular-nums"
+          />
+          <div className="min-w-0 flex-1 text-right">
+            {vendedor ? (
+              <div className="truncate text-sm font-medium">{vendedor.nome}</div>
+            ) : (
+              <div className="text-sm font-medium text-destructive">
+                {vendedorCodigo.trim() ? "Código não encontrado" : "Quem vendeu?"}
+              </div>
+            )}
+          </div>
+          <Kbd className="shrink-0">F8</Kbd>
+        </div>
 
         <Separator className="my-4" />
 
@@ -554,7 +630,7 @@ export function FinalizarDialogo({
           type="button"
           tabIndex={-1}
           size="lg"
-          disabled={gravando || faltaDinheiro || faltaCliente}
+          disabled={gravando || faltaDinheiro || faltaCliente || faltaVendedor}
           onClick={onConfirmar}
           className="h-14 w-full rounded-xl text-base font-semibold"
         >

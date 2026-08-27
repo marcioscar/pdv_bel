@@ -10,6 +10,7 @@ import { db } from "~/lib/db.server"
 import { depoisDoDia, diaAtras, diaDeHoje, inicioDoDia } from "~/lib/dia"
 import { movimentosDeVenda } from "~/lib/estoque.server"
 import { arredondar, moeda } from "~/lib/moeda"
+import { vendedorPorCodigo, type VendedorDoBalcao } from "~/lib/vendedores.server"
 import {
   condicaoCabeNoTotal,
   condicaoPorId,
@@ -40,6 +41,12 @@ export type PedidoRecebido = {
    * cliente fora da política da empresa sem deixar rastro.
    */
   condicao: string | null
+  /**
+   * Código do vendedor que atendeu, para a comissão. Vai o CÓDIGO, e não o id
+   * com o nome: quem diz a quem ele pertence é o banco, na gravação. Aceitar
+   * id e nome do navegador deixaria creditar comissão a qualquer um.
+   */
+  vendedorCodigo: string
   /** Pix imediato: comprovante do pagamento já confirmado. */
   pixTxid?: string | null
   pixPagoEm?: Date | null
@@ -137,6 +144,10 @@ export function lerPedido(bruto: unknown): PedidoRecebido | null {
     recebido,
     clienteId,
     condicao: typeof corpo.condicao === "string" ? corpo.condicao : null,
+    // Aceito como texto e conferido contra o banco na gravação: aqui só se
+    // garante o formato, não de quem é o código.
+    vendedorCodigo:
+      typeof corpo.vendedorCodigo === "string" ? corpo.vendedorCodigo.trim().slice(0, 10) : "",
     autorizacaoId,
   }
 }
@@ -203,6 +214,21 @@ export async function registrarVenda(pedido: PedidoVenda): Promise<ResultadoVend
   if (pedido.forma === "dinheiro") {
     if (pedido.recebido === null) return { ok: false, erro: "Informe o valor recebido" }
     if (pedido.recebido < total) return { ok: false, erro: "Valor recebido menor que o total" }
+  }
+
+  /**
+   * O vendedor é resolvido AQUI, pelo código, como toda regra deste arquivo:
+   * a tela é do outro lado da rede. Sem isto, comissão seria um campo de texto
+   * que o navegador escolhe.
+   */
+  const vendedor = await vendedorPorCodigo(pedido.vendedorCodigo ?? "", pedido.loja)
+  if (!vendedor) {
+    return {
+      ok: false,
+      erro: pedido.vendedorCodigo
+        ? `Nenhum vendedor com o código ${pedido.vendedorCodigo} nesta loja`
+        : "Informe o código do vendedor",
+    }
   }
 
   /**
@@ -312,7 +338,8 @@ export async function registrarVenda(pedido: PedidoVenda): Promise<ResultadoVend
     return {
       ok: true,
       ...(await gravar(
-        pedido, itens, subtotal, total, troco, cliente, vencimento, condicaoId, autorizacaoAUsar
+        pedido, itens, subtotal, total, troco, cliente, vencimento, condicaoId, autorizacaoAUsar,
+        vendedor
       )),
       total,
       troco,
@@ -357,7 +384,8 @@ async function gravar(
   cliente: { id: string; nome: string; cpfCnpj: string } | null,
   vencimento: Date | null,
   condicao: string | null,
-  autorizacaoId: string | null
+  autorizacaoId: string | null,
+  vendedor: VendedorDoBalcao
 ): Promise<{ numero: number; vendaId: string }> {
   for (let tentativa = 0; tentativa < 25; tentativa++) {
     // O $inc fica FORA da transação de propósito: dentro dela, o rollback de uma
@@ -375,7 +403,7 @@ async function gravar(
     try {
       return await gravarUmaVez(
         contador.valor, pedido, itens, subtotal, total, troco, cliente, vencimento, condicao,
-        autorizacaoId
+        autorizacaoId, vendedor
       )
     } catch (erro) {
       if (!ehColisaoDeNumero(erro)) throw erro
@@ -394,7 +422,8 @@ async function gravarUmaVez(
   cliente: { id: string; nome: string; cpfCnpj: string } | null,
   vencimento: Date | null,
   condicao: string | null,
-  autorizacaoId: string | null
+  autorizacaoId: string | null,
+  vendedor: VendedorDoBalcao
 ): Promise<{ numero: number; vendaId: string }> {
   // A venda e as baixas de estoque caem juntas ou não caem: uma venda gravada
   // sem seus movimentos deixaria o saldo derivado errado para sempre.
@@ -405,6 +434,8 @@ async function gravarUmaVez(
         loja: pedido.loja,
         caixa: pedido.caixa,
         operador: pedido.operador,
+        vendedorId: vendedor.id,
+        vendedorNome: vendedor.nome,
         itens,
         subtotal,
         desconto: pedido.desconto,

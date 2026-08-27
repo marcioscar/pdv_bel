@@ -34,6 +34,7 @@ import { contaDaLoja } from "~/lib/lojas.server"
 import { SOMENTE_ATIVOS } from "~/lib/produtos.server"
 import { autenticar, exigirUsuario } from "~/lib/sessao.server"
 import { lerPedido, precificar, registrarVenda } from "~/lib/vendas.server"
+import { vendedoresDaLoja } from "~/lib/vendedores.server"
 import {
   confirmarPagamento,
   consultarPixImediato,
@@ -130,10 +131,13 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   // O catálogo inteiro vai para o cliente para a busca responder sem latência
   // por tecla. Acima de ~5 mil produtos, trocar por busca no servidor.
-  const [cadastro, saldos, clientes] = await Promise.all([
+  const [cadastro, saldos, clientes, vendedores] = await Promise.all([
     db.produto.findMany({ where: SOMENTE_ATIVOS, orderBy: { descricao: "asc" } }),
     saldosPorProduto(eu.loja),
     listarClientes(),
+    // Poucos nomes, e vão inteiros para a tela pelo mesmo motivo do catálogo: o
+    // caixa não pode esperar a rede para ver de quem é a comissão que digitou.
+    vendedoresDaLoja(eu.loja),
   ])
 
   // O estoque não é um campo do produto: é a soma dos movimentos.
@@ -161,6 +165,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   return {
     eu,
     produtos,
+    vendedores,
     clientes: clientes.map((c) => ({
       id: c.id,
       nome: c.nome,
@@ -597,7 +602,7 @@ export function shouldRevalidate() {
 type Aviso = { texto: string; tipo: "erro" | "sucesso" } | null
 
 export default function Pdv({ loaderData }: Route.ComponentProps) {
-  const { eu, produtos, clientes, retomada } = loaderData
+  const { eu, produtos, clientes, retomada, vendedores } = loaderData
 
   const [venda, despachar] = useReducer(reduzirVenda, vendaVazia)
   const [entrada, setEntrada] = useState("")
@@ -615,6 +620,8 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   // comando — assim a barra volta a ser só busca de produto.
   const [finalizando, setFinalizando] = useState(false)
   const [recebidoTexto, setRecebidoTexto] = useState("")
+  // Nasce vazio a cada venda, de propósito: ver `faltaVendedor` no diálogo.
+  const [vendedorCodigo, setVendedorCodigo] = useState("")
   const [imprimirCupom, setImprimirCupom] = useState(true)
   const [erroFinalizacao, setErroFinalizacao] = useState<string | null>(null)
   const [ajudaAberta, setAjudaAberta] = useState(false)
@@ -801,12 +808,16 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           // Vai o id da condição, não as datas: os vencimentos são calculados no
           // servidor, para o prazo gravado ser sempre um dos que a empresa pratica.
           condicao: condicaoEscolhida?.id ?? null,
+          vendedorCodigo,
           autorizacaoId,
         },
         { method: "post", encType: "application/json" }
       )
     },
-    [autorizacaoId, cliente, fetcher, forma, gravando, totais.desconto, venda.itens]
+    [
+      autorizacaoId, cliente, fetcher, forma, gravando, totais.desconto, venda.itens,
+      vendedorCodigo,
+    ]
   )
 
   /**
@@ -1118,15 +1129,21 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
    * depois da primeira consulta — foi o que aconteceu, e a venda paga nunca era
    * registrada. O intervalo dispara independente de re-render.
    */
-  const dadosDaConsulta = useRef({ fetcher: fetcherPix, itens: venda.itens, desconto: 0 })
+  const dadosDaConsulta = useRef({
+    fetcher: fetcherPix,
+    itens: venda.itens,
+    desconto: 0,
+    vendedorCodigo: "",
+  })
   dadosDaConsulta.current = {
     fetcher: fetcherPix,
     itens: venda.itens,
     desconto: totais.desconto,
+    vendedorCodigo,
   }
 
   const conferirPix = useCallback((txid: string) => {
-    const { fetcher: f, itens, desconto } = dadosDaConsulta.current
+    const { fetcher: f, itens, desconto, vendedorCodigo } = dadosDaConsulta.current
     if (f.state !== "idle") return
 
     f.submit(
@@ -1137,6 +1154,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
         desconto,
         forma: "pix",
         recebido: null,
+        vendedorCodigo,
       },
       { method: "post", encType: "application/json" }
     )
@@ -1221,6 +1239,10 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     }
     setErroFinalizacao(null)
     setRecebidoTexto("")
+    // Sempre em branco: é aqui que se garante que a comissão nunca herda o
+    // vendedor da venda anterior. Quem fecha é um caixa fixo, e quem vendeu
+    // muda de cliente para cliente.
+    setVendedorCodigo("")
     setImprimirCupom(cupomPadrao(forma))
     setFinalizando(true)
   }, [avisar, forma, venda.itens.length])
@@ -1680,6 +1702,12 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
             setRecebidoTexto(v)
             setErroFinalizacao(null)
           }}
+          vendedorCodigo={vendedorCodigo}
+          onVendedorCodigoChange={(codigo) => {
+            setVendedorCodigo(codigo)
+            setErroFinalizacao(null)
+          }}
+          vendedores={vendedores}
           cliente={cliente}
           clientes={todosClientes}
           onClienteChange={(escolhido) => {

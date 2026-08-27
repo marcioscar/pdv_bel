@@ -14,6 +14,7 @@ import {
 } from "~/lib/senha.server"
 import { listarLojas } from "~/lib/lojas.server"
 import { contarGerentesAtivos, exigirGerente } from "~/lib/sessao.server"
+import { codigoVendedorEmUso } from "~/lib/vendedores.server"
 import {
   ehGerente,
   PAPEIS,
@@ -42,6 +43,7 @@ export async function loader({ request }: Route.LoaderArgs) {
         email: true,
         papel: true,
         lojas: true,
+        codigoVendedor: true,
         ativo: true,
         criadoEm: true,
         ultimoAcessoEm: true,
@@ -88,6 +90,34 @@ export async function action({ request }: Route.ActionArgs) {
     })
     const quantas = escolhidas.length === codigos.length ? "todas as lojas" : escolhidas.join(", ") || "nenhuma loja"
     return { mensagem: `${alvo.nome}: ${quantas}` }
+  }
+
+  if (acao === "codigoVendedor") {
+    const id = String(form.get("id") ?? "")
+    if (!OBJECT_ID.test(id)) return data({ erro: "Usuário inválido" }, { status: 400 })
+
+    const codigo = String(form.get("codigoVendedor") ?? "").trim().slice(0, 10)
+    if (codigo && !/^\d+$/.test(codigo)) {
+      return data({ erro: "O código do vendedor é só números" }, { status: 400 })
+    }
+
+    // Cobrado aqui porque o campo não pode ter índice único no Mongo (ver o
+    // comentário em `Usuario.codigoVendedor`). Dois com o mesmo código fariam
+    // a comissão cair para quem o banco devolvesse primeiro.
+    if (codigo) {
+      const dono = await codigoVendedorEmUso(codigo, id)
+      if (dono) return data({ erro: `O código ${codigo} já é de ${dono}` }, { status: 400 })
+    }
+
+    const alvo = await db.usuario.update({
+      where: { id },
+      data: { codigoVendedor: codigo || null },
+    })
+    return {
+      mensagem: codigo
+        ? `${alvo.nome} vende com o código ${codigo}`
+        : `${alvo.nome} não recebe mais comissão de venda`,
+    }
   }
 
   if (acao === "alternar" || acao === "papel") {
@@ -237,6 +267,7 @@ export default function Usuarios({ loaderData, actionData }: Route.ComponentProp
                 <th scope="col" className="py-2.5 text-left font-semibold">E-mail</th>
                 <th scope="col" className="py-2.5 text-left font-semibold">Papel</th>
                 <th scope="col" className="py-2.5 text-left font-semibold">Lojas</th>
+                <th scope="col" className="py-2.5 text-left font-semibold" title="Código que o caixa digita para creditar a comissão">Cód. vend.</th>
                 <th scope="col" className="py-2.5 text-left font-semibold">Último acesso</th>
                 <th scope="col" className="py-2.5 text-left font-semibold">Situação</th>
                 <th scope="col" className="py-2.5 text-right font-semibold" />
@@ -300,6 +331,32 @@ export default function Usuarios({ loaderData, actionData }: Route.ComponentProp
                       {usuario.lojas.length === 0 ? (
                         <span className="text-[10px] text-muted-foreground">rede</span>
                       ) : null}
+                    </Form>
+                  </td>
+                  {/* Quem não vende fica sem código, e aí não aparece como
+                      opção no fechamento da venda. */}
+                  <td className="py-2.5">
+                    <Form method="post" className="flex items-center gap-1">
+                      <input type="hidden" name="acao" value="codigoVendedor" />
+                      <input type="hidden" name="id" value={usuario.id} />
+                      <Input
+                        name="codigoVendedor"
+                        // `key` no valor: sem ela o campo continua montado com o
+                        // defaultValue antigo depois que o loader revalida, e o
+                        // Base UI reclama de default trocado em campo não
+                        // controlado. Remontar é mais simples que controlá-lo.
+                        key={usuario.codigoVendedor ?? ""}
+                        defaultValue={usuario.codigoVendedor ?? ""}
+                        onBlur={(e) => {
+                          if (e.currentTarget.value !== (usuario.codigoVendedor ?? "")) {
+                            e.currentTarget.form?.requestSubmit()
+                          }
+                        }}
+                        inputMode="numeric"
+                        placeholder="—"
+                        aria-label={`Código de vendedor de ${usuario.nome}`}
+                        className="h-7 w-16 font-mono text-xs tabular-nums"
+                      />
                     </Form>
                   </td>
                   <td className="py-2.5 font-mono text-xs text-muted-foreground tabular-nums">
