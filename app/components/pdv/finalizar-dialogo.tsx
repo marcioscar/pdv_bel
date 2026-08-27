@@ -4,6 +4,7 @@ import {
   CalendarClock,
   CreditCard,
   FileText,
+  Link2,
   Printer,
   QrCode,
   Search,
@@ -32,6 +33,7 @@ const ICONES: Record<
   debito: Wallet,
   pix: QrCode,
   prazo: CalendarClock,
+  link: Link2,
 };
 
 type Props = {

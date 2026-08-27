@@ -5,6 +5,7 @@ import {
   descontoExigeAutorizacao,
   DIAS_DE_CARENCIA,
   formaEstendeCredito,
+  formaExigeLink,
   HORAS_DE_VALIDADE,
   percentualDoDesconto,
   type MotivoDeAutorizacao,
@@ -105,6 +106,9 @@ export async function avaliarVenda(entrada: {
     motivos.push("inadimplencia")
   }
   if (descontoExigeAutorizacao(entrada.subtotal, entrada.desconto)) motivos.push("desconto")
+  // Não é risco, é o próprio jeito de pagar: a venda por link só fecha depois
+  // que o gerente gera, manda e confirma que caiu.
+  if (formaExigeLink(entrada.forma)) motivos.push("link")
 
   return {
     motivos,
@@ -288,7 +292,23 @@ export async function decidirAutorizacao(entrada: {
   quem: { id: string; nome: string }
   onde: "app" | "caixa"
   observacao?: string | null
+  /** O link gerado, quando o pedido é de pagamento por link. */
+  linkPagamento?: string | null
 }) {
+  const link = entrada.linkPagamento?.trim() || null
+
+  /*
+   * Aprovar um pedido de link SEM o link é aprovar o nada: o vendedor voltaria
+   * ao caixa para fechar uma venda cujo cliente não recebeu como pagar. Cobrado
+   * aqui, e não só na tela, porque é aqui que a decisão vira fato.
+   */
+  if (entrada.decisao === "aprovada") {
+    const pedido = await db.autorizacao.findUnique({ where: { id: entrada.id } })
+    if (pedido?.motivos.includes("link") && !link) {
+      return { ok: false as const, erro: "Cole o link de pagamento antes de liberar" }
+    }
+  }
+
   const { count } = await db.autorizacao.updateMany({
     where: { id: entrada.id, situacao: "pendente" },
     data: {
@@ -298,6 +318,7 @@ export async function decidirAutorizacao(entrada: {
       decididaPorId: entrada.quem.id,
       decididaOnde: entrada.onde,
       observacao: entrada.observacao?.trim() || null,
+      linkPagamento: link,
     },
   })
 

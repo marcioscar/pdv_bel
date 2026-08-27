@@ -162,6 +162,23 @@ export default function Autorizacoes({ loaderData, actionData }: Route.Component
                     </p>
                   ) : null}
 
+                  {/* O link que o cliente recebeu. O vendedor não precisa dele
+                      para fechar — o gerente já confirmou o pagamento —, mas
+                      precisa quando o cliente chega dizendo que não recebeu. */}
+                  {pedido.linkPagamento ? (
+                    <p className="mt-2 rounded-lg bg-muted/50 px-3 py-2 text-xs break-all">
+                      <strong>Link enviado:</strong>{" "}
+                      <a
+                        href={pedido.linkPagamento}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline underline-offset-2"
+                      >
+                        {pedido.linkPagamento}
+                      </a>
+                    </p>
+                  ) : null}
+
                   <div className="mt-3 flex items-center gap-2 border-t border-border pt-3">
                     {liberada ? (
                       <Button

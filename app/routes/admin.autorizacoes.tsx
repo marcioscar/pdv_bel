@@ -63,6 +63,7 @@ export async function action({ request }: Route.ActionArgs) {
     quem: { id: eu.id, nome: eu.nome },
     onde: "app",
     observacao: String(formulario.get("observacao") ?? ""),
+    linkPagamento: String(formulario.get("linkPagamento") ?? ""),
   })
 
   if (!resultado.ok) return data({ ok: false as const, erro: resultado.erro }, { status: 409 })
@@ -223,6 +224,11 @@ function Pedido({ pedido }: { pedido: AutorizacaoListada }) {
     navegacao.state !== "idle" && navegacao.formData?.get("id") === pedido.id
 
   const [observacao, setObservacao] = useState("")
+  const [link, setLink] = useState("")
+
+  // Pedido de link não é liberação de risco: o gerente gera o link por fora,
+  // manda ao cliente e só libera quando o pagamento cai.
+  const porLink = pedido.motivos.includes("link")
 
   // Meia hora esperando é uma venda que provavelmente já foi embora.
   const minutos = Math.floor((Date.now() - new Date(pedido.criadaEm).getTime()) / 60_000)
@@ -315,6 +321,16 @@ function Pedido({ pedido }: { pedido: AutorizacaoListada }) {
 
       <Form method="post" className="mt-3 flex flex-wrap items-center gap-2">
         <input type="hidden" name="id" value={pedido.id} />
+        {porLink ? (
+          <Input
+            name="linkPagamento"
+            value={link}
+            onChange={(e) => setLink(e.target.value)}
+            placeholder="Cole aqui o link que você gerou e mandou ao cliente"
+            autoComplete="off"
+            className="h-10 w-full min-w-0 rounded-lg border-border bg-background text-sm sm:h-9"
+          />
+        ) : null}
         <Input
           name="observacao"
           value={observacao}
@@ -342,7 +358,10 @@ function Pedido({ pedido }: { pedido: AutorizacaoListada }) {
           disabled={enviando}
           className="h-11 flex-1 rounded-lg sm:h-9 sm:flex-none"
         >
-          <Check className="size-4" aria-hidden /> Aprovar
+          <Check className="size-4" aria-hidden />
+          {/* "Aprovar" descreveria mal o que ele está fazendo: aqui ele afirma
+              que o dinheiro caiu, e é isso que solta a mercadoria. */}
+          {porLink ? "Pago, liberar" : "Aprovar"}
         </Button>
       </Form>
     </article>

@@ -64,7 +64,25 @@ export const MOTIVOS_DE_AUTORIZACAO = [
     rotulo: `Desconto acima de ${DESCONTO_MAXIMO_PERCENTUAL}%`,
     aviso: `Desconto acima de ${DESCONTO_MAXIMO_PERCENTUAL}% — a venda precisa da liberação do gerente.`,
   },
+  {
+    id: "link",
+    rotulo: "Pagamento por link",
+    aviso:
+      "O gerente vai gerar o link e mandar ao cliente. A venda fica guardada e você fecha quando ele confirmar que o pagamento caiu.",
+  },
 ] as const
+
+/**
+ * A forma que não se fecha no balcão.
+ *
+ * As outras liberações nascem de RISCO detectado (cliente devendo, desconto
+ * alto); esta nasce de uma escolha do vendedor. Mesmo assim passa pelo mesmo
+ * caminho: o carrinho fica parado esperando o gerente, e é a máquina que já
+ * existe para isso.
+ */
+export function formaExigeLink(forma: string) {
+  return forma === "link"
+}
 
 export type MotivoDeAutorizacao = (typeof MOTIVOS_DE_AUTORIZACAO)[number]["id"]
 

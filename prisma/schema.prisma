@@ -407,6 +407,11 @@ model Autorizacao {
   /// Justificativa da negativa, ou a condição que o gerente combinou ao aprovar.
   observacao    String?
 
+  /// O link que o gerente gerou e mandou ao cliente, quando a venda é paga por
+  /// link. Fica guardado para a venda poder ser reconciliada depois com o
+  /// extrato: sem ele, "pago por link" é uma afirmação sem rastro.
+  linkPagamento String?
+
   /// A venda que nasceu daqui, quando a autorização foi usada.
   vendaId     String? @db.ObjectId
   vendaNumero Int?
@@ -588,6 +593,10 @@ model FechamentoCaixa {
   vendasDebito  Float @default(0)
   vendasCredito Float @default(0)
   vendasPrazo   Float @default(0)
+  /// Vendas pagas por link. Como Pix e cartão, não passa pela gaveta — mas
+  /// entra no papel, senão as parcelas não somam o total vendido e quem
+  /// confere fica procurando a diferença.
+  vendasLink    Float @default(0)
   totalVendido  Float @default(0)
   quantidadeVendas Int @default(0)
   canceladas       Int @default(0)

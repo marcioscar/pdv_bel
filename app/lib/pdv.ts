@@ -285,6 +285,12 @@ export const FORMAS_PAGAMENTO = [
   { id: "debito", rotulo: "Débito" },
   { id: "pix", rotulo: "Pix" },
   { id: "prazo", rotulo: "A prazo" },
+  /*
+   * O cliente pede um link para pagar; o gerente gera por fora, manda, e libera
+   * a venda quando o dinheiro cai. Até lá o carrinho fica parado — a venda só
+   * nasce paga, e por isso nada sai do estoque antes.
+   */
+  { id: "link", rotulo: "Link" },
 ] as const
 
 export type FormaPagamento = (typeof FORMAS_PAGAMENTO)[number]["id"]
