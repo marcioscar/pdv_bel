@@ -1,4 +1,9 @@
 import { chamarInter } from "~/lib/inter.server"
+import {
+  DIAS_ATE_CANCELAR_BOLETO,
+  MORA_MENSAL_PERCENTUAL_BOLETO,
+  MULTA_PERCENTUAL_BOLETO,
+} from "~/lib/pdv"
 
 /** Campos do `pagador` como a API de Cobrança espera. */
 export type PagadorInter = {
@@ -56,7 +61,8 @@ export function emitirCobranca(entrada: {
    * "Beneficiário Final" do boleto, que existe para exatamente este caso.
    */
   beneficiarioFinal?: PagadorInter
-  /** Dias corridos após o vencimento até o cancelamento automático (0–60). */
+  /** Dias corridos após o vencimento até o cancelamento automático (0–60).
+   *  Sem isto vale `DIAS_ATE_CANCELAR_BOLETO`. */
   diasAgenda?: number
   mensagem?: string
 }) {
@@ -71,7 +77,7 @@ export function emitirCobranca(entrada: {
       seuNumero: seuNumero.slice(0, 15),
       valorNominal: Number(valor.toFixed(2)),
       dataVencimento: vencimento.toISOString().slice(0, 10),
-      numDiasAgenda: entrada.diasAgenda ?? 30,
+      numDiasAgenda: entrada.diasAgenda ?? DIAS_ATE_CANCELAR_BOLETO,
       pagador: {
         nome: pagador.nome,
         cpfCnpj: pagador.cpfCnpj,
@@ -101,6 +107,20 @@ export function emitirCobranca(entrada: {
             },
           }
         : {}),
+      /*
+       * Encargos do atraso, gravados no título na emissão.
+       *
+       * Sem eles o boleto vence e fica parado, sem custo nenhum para quem não
+       * pagou — e o Inter não permite acrescentá-los depois: o que vale é o que
+       * foi emitido. A forma vem do próprio spec da API (`PERCENTUAL` uma vez,
+       * `TAXAMENSAL` correndo por dia).
+       *
+       * Protesto NÃO cabe aqui: a API não tem campo para pedi-lo. "PROTESTO"
+       * existe só como situação que o Inter devolve, e contratar o protesto é
+       * feito no convênio, fora do sistema.
+       */
+      multa: { codigo: "PERCENTUAL", taxa: MULTA_PERCENTUAL_BOLETO },
+      mora: { codigo: "TAXAMENSAL", taxa: MORA_MENSAL_PERCENTUAL_BOLETO },
       ...(entrada.mensagem ? { mensagem: { linha1: entrada.mensagem } } : {}),
       formasRecebimento: ["BOLETO", "PIX"],
     },

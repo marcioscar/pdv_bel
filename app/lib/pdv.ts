@@ -299,6 +299,31 @@ export type FormaPagamento = (typeof FORMAS_PAGAMENTO)[number]["id"]
 export const VALOR_MINIMO_BOLETO = 2.5
 
 /**
+ * O que o boleto cobra a mais quando vence sem ser pago.
+ *
+ * Multa é uma vez, no vencimento; mora corre por dia, expressa ao mês. Dois por
+ * cento é o teto do Código de Defesa do Consumidor, e um por cento ao mês é o
+ * usual — números escolhidos pela empresa, não pelo banco, e por isso vivem
+ * aqui e não escondidos na chamada do Inter.
+ *
+ * Valem só para boleto EMITIDO daqui para a frente: o Inter grava os encargos
+ * no título na emissão, e os que já existem seguem sem eles.
+ */
+export const MULTA_PERCENTUAL_BOLETO = 2
+export const MORA_MENSAL_PERCENTUAL_BOLETO = 1
+
+/**
+ * Dias após o vencimento até o Inter cancelar o título sozinho.
+ *
+ * O máximo que a API aceita. Enquanto o boleto vive, a mora corre e o cliente
+ * ainda consegue pagar; depois do cancelamento ele some, e cobrar exige emitir
+ * outro. Sessenta dias é o maior prazo possível para decidir o que fazer com
+ * quem não pagou — inclusive protestar, que é contratado no convênio do Inter e
+ * não pela API.
+ */
+export const DIAS_ATE_CANCELAR_BOLETO = 60
+
+/**
  * Condições de pagamento a prazo. Fixas de propósito: deixar o vendedor digitar
  * dias é fonte de erro e de combinação fora da política da empresa.
  *
