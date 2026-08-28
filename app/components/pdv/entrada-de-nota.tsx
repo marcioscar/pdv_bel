@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useFetcher } from "react-router"
-import { Plus } from "lucide-react"
+import { Plus, Search } from "lucide-react"
 
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
@@ -9,6 +9,7 @@ import { ESTILO_CAMPO } from "~/components/pdv/filtros"
 import { ReceberPedido } from "~/components/pdv/pedido-compra"
 import type { ItemDaNotaParaConciliar, ItemReconciliado } from "~/lib/conciliacao.server"
 import { interpretarValor, moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
+import { buscarProdutos, criarIndice, type EntradaIndice } from "~/lib/pdv"
 import { cn } from "~/lib/utils"
 
 /**
@@ -101,6 +102,12 @@ export function EntradaDeNota({
   )
 
   const catalogoPorId = useMemo(() => new Map(catalogo.map((p) => [p.id, p])), [catalogo])
+  /*
+   * Índice montado uma vez para a tabela toda, não por linha: são mais de mil
+   * produtos, e refazê-lo em cada uma das dezenas de linhas da nota seria mil
+   * normalizações vezes o número de itens a cada tecla digitada.
+   */
+  const indiceDoCatalogo = useMemo(() => criarIndice(catalogo), [catalogo])
   const porProdutoId = useMemo(
     () => new Map(itensDoPedido.map((item) => [item.produtoId, item])),
     [itensDoPedido]
@@ -288,7 +295,8 @@ export function EntradaDeNota({
                 key={i}
                 item={item}
                 itensDoPedido={itensDoPedido}
-                catalogo={catalogo}
+                indice={indiceDoCatalogo}
+                catalogoPorId={catalogoPorId}
                 produtoIdEscolhido={pareamento[i] ?? ""}
                 quantidadeTexto={quantidades[i] ?? ""}
                 custoUnitarioEfetivo={linhasEfetivas[i].custoUnitarioEfetivo}
@@ -398,7 +406,8 @@ export function EntradaDeNota({
 function LinhaItemDaNota({
   item,
   itensDoPedido,
-  catalogo,
+  indice,
+  catalogoPorId,
   produtoIdEscolhido,
   quantidadeTexto,
   custoUnitarioEfetivo,
@@ -411,7 +420,8 @@ function LinhaItemDaNota({
 }: {
   item: ItemDaNotaParaConciliar
   itensDoPedido: ItemDoPedido[]
-  catalogo: ProdutoDoCatalogo[]
+  indice: EntradaIndice<ProdutoDoCatalogo>[]
+  catalogoPorId: Map<string, ProdutoDoCatalogo>
   produtoIdEscolhido: string
   quantidadeTexto: string
   custoUnitarioEfetivo: number
@@ -428,9 +438,6 @@ function LinhaItemDaNota({
     ncm: string
   }) => void
 }) {
-  const idsDoPedido = new Set(itensDoPedido.map((p) => p.produtoId))
-  const foraDoPedido = catalogo.filter((p) => !idsDoPedido.has(p.id))
-
   return (
     <tr className="border-b last:border-0">
       <td className="px-2 py-1.5 align-top">
@@ -439,34 +446,12 @@ function LinhaItemDaNota({
       </td>
       <td className="px-2 py-1.5 align-top">
         <div className="flex items-center gap-1">
-          <select
-            value={produtoIdEscolhido}
-            onChange={(e) => onEscolherProduto(e.target.value)}
-            className={cn(
-              "h-7 max-w-56 rounded border bg-background px-1.5 text-xs",
-              produtoIdEscolhido ? "border-border" : "border-destructive/50 text-destructive"
-            )}
-          >
-            <option value="">Escolher…</option>
-            {/* Os do pedido primeiro: é o pareamento esperado na maioria das
-                linhas, e caçá-lo no meio do catálogo inteiro seria trabalho. */}
-            {itensDoPedido.length > 0 ? (
-              <optgroup label="Do pedido">
-                {itensDoPedido.map((p) => (
-                  <option key={p.produtoId} value={p.produtoId}>
-                    {p.codigo} — {p.descricao}
-                  </option>
-                ))}
-              </optgroup>
-            ) : null}
-            <optgroup label={itensDoPedido.length > 0 ? "Resto do catálogo" : "Catálogo"}>
-              {foraDoPedido.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.codigo} — {p.descricao}
-                </option>
-              ))}
-            </optgroup>
-          </select>
+          <EscolhaDeProduto
+            escolhido={catalogoPorId.get(produtoIdEscolhido) ?? null}
+            itensDoPedido={itensDoPedido}
+            indice={indice}
+            onEscolher={onEscolherProduto}
+          />
           <Button
             type="button"
             variant="ghost"
@@ -712,5 +697,144 @@ function LinhaResumoProduto({
         )}
       </td>
     </tr>
+  )
+}
+
+/**
+ * Escolhe o produto do catálogo digitando, em vez de rolar mil opções.
+ *
+ * Era um `<select>`: com mais de mil produtos de nomes quase iguais ("SACO PEBD
+ * SL ME 05x25x0.006"), achar o certo ali é garimpo — e a nota tem dezenas de
+ * linhas para parear.
+ *
+ * A busca roda no cliente, sobre o catálogo que o loader já mandou: o índice é o
+ * MESMO da barra de comando do caixa (`criarIndice`/`buscarProdutos`), então
+ * procurar aqui e procurar no PDV acham as mesmas coisas com as mesmas palavras.
+ */
+function EscolhaDeProduto({
+  escolhido,
+  itensDoPedido,
+  indice,
+  onEscolher,
+}: {
+  escolhido: ProdutoDoCatalogo | null
+  itensDoPedido: ItemDoPedido[]
+  indice: EntradaIndice<ProdutoDoCatalogo>[]
+  onEscolher: (produtoId: string) => void
+}) {
+  const [aberta, setAberta] = useState(false)
+  const [termo, setTermo] = useState("")
+  const caixa = useRef<HTMLDivElement>(null)
+
+  const idsDoPedido = useMemo(
+    () => new Set(itensDoPedido.map((i) => i.produtoId)),
+    [itensDoPedido]
+  )
+
+  /**
+   * Sem termo, só os itens do PEDIDO — é o pareamento esperado na maioria das
+   * linhas. Despejar o catálogo inteiro aqui devolveria ao problema do
+   * `<select>`: mil linhas para rolar antes de digitar qualquer coisa.
+   *
+   * Com termo, o catálogo todo, mas com os do pedido na frente: quando o nome
+   * casa nos dois, o que foi comprado é quase sempre o certo.
+   */
+  const achados = useMemo(() => {
+    if (!termo.trim()) {
+      return indice
+        .filter((e) => idsDoPedido.has(e.produto.id))
+        .map((e) => e.produto)
+        .slice(0, 12)
+    }
+    return buscarProdutos(indice, termo, 12).sort(
+      (a, b) => Number(idsDoPedido.has(b.id)) - Number(idsDoPedido.has(a.id))
+    )
+  }, [termo, indice, idsDoPedido])
+
+  // Clicar fora fecha; sem isso a lista fica sobre as linhas de baixo.
+  useEffect(() => {
+    if (!aberta) return
+    function aoClicar(evento: MouseEvent) {
+      if (!caixa.current?.contains(evento.target as Node)) setAberta(false)
+    }
+    document.addEventListener("mousedown", aoClicar)
+    return () => document.removeEventListener("mousedown", aoClicar)
+  }, [aberta])
+
+  return (
+    <div ref={caixa} className="relative">
+      <button
+        type="button"
+        onClick={() => {
+          setTermo("")
+          setAberta((v) => !v)
+        }}
+        className={cn(
+          "flex h-7 w-56 items-center gap-1 rounded border bg-background px-1.5 text-left text-xs",
+          escolhido ? "border-border" : "border-destructive/50 text-destructive"
+        )}
+      >
+        <span className="min-w-0 flex-1 truncate">
+          {escolhido ? `${escolhido.codigo} — ${escolhido.descricao}` : "Escolher…"}
+        </span>
+        <Search className="size-3 shrink-0 text-muted-foreground" aria-hidden />
+      </button>
+
+      {aberta ? (
+        <div className="absolute left-0 top-full z-30 mt-1 w-80 rounded-lg border border-border bg-popover shadow-lg">
+          <input
+            autoFocus
+            value={termo}
+            onChange={(e) => setTermo(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setAberta(false)
+              // Um resultado só e Enter escolhe: é o caso de quem digitou o
+              // código exato e não quer tirar a mão do teclado.
+              if (e.key === "Enter" && achados.length === 1) {
+                onEscolher(achados[0].id)
+                setAberta(false)
+              }
+            }}
+            placeholder="código ou descrição…"
+            className="h-8 w-full border-b border-border bg-transparent px-2.5 text-xs outline-none placeholder:text-muted-foreground"
+          />
+          <ul className="max-h-60 overflow-y-auto py-1">
+            {achados.length === 0 ? (
+              <li className="px-2.5 py-2 text-[11px] text-muted-foreground">
+                {termo.trim()
+                  ? "Nada com esse termo."
+                  : "Digite para procurar no catálogo."}
+              </li>
+            ) : (
+              achados.map((p) => (
+                <li key={p.id}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onEscolher(p.id)
+                      setAberta(false)
+                    }}
+                    className={cn(
+                      "flex w-full items-baseline gap-1.5 px-2.5 py-1 text-left text-xs hover:bg-accent",
+                      escolhido?.id === p.id && "bg-accent"
+                    )}
+                  >
+                    <span className="font-mono text-[11px] text-muted-foreground">
+                      {p.codigo}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">{p.descricao}</span>
+                    {idsDoPedido.has(p.id) ? (
+                      <span className="shrink-0 rounded bg-primary/10 px-1 text-[9px] text-primary">
+                        do pedido
+                      </span>
+                    ) : null}
+                  </button>
+                </li>
+              ))
+            )}
+          </ul>
+        </div>
+      ) : null}
+    </div>
   )
 }
