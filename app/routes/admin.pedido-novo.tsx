@@ -204,15 +204,9 @@ function MontarPedido({
   lojas: string[]
 }) {
   const [busca, setBusca] = useState("")
-  const [selecionados, setSelecionados] = useState<Record<string, boolean>>(() => {
-    // Já vem marcado o que precisa — quem pediu já sabe o que falta sem clicar
-    // item por item; o resto fica disponível, mas exige uma escolha.
-    const inicial: Record<string, boolean> = {}
-    for (const item of itens) {
-      if (item.urgencia && item.urgencia !== "ok") inicial[item.produtoId] = true
-    }
-    return inicial
-  })
+  // Nada vem marcado: a urgência aparece no selo de cada linha, mas o que entra
+  // no pedido é escolha de quem está comprando, item por item.
+  const [selecionados, setSelecionados] = useState<Record<string, boolean>>({})
   const [quantidades, setQuantidades] = useState<Record<string, number>>(() => {
     const inicial: Record<string, number> = {}
     for (const item of itens) {
