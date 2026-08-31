@@ -5,7 +5,7 @@ import { Input } from "~/components/ui/input";
 import { Kbd } from "~/components/ui/kbd";
 import { cn } from "~/lib/utils";
 import { moeda, quantidade } from "~/lib/moeda";
-import type { ProdutoCatalogo } from "~/lib/pdv";
+import { precoAplicado, type ProdutoCatalogo } from "~/lib/pdv";
 
 export type ModoComando = "busca" | "quantidade" | "desconto" | "recebido";
 
@@ -32,6 +32,15 @@ type Props = {
 	indiceResultado: number;
 	onEscolherResultado: (indice: number) => void;
 	multiplicador: number;
+	/**
+	 * O produto que o código digitado já identifica sozinho, mostrado à direita
+	 * da barra. `null` quando não há um só: código ambíguo abre a lista, e
+	 * descrição não tem prévia — a lista dela já mostra tudo isto por linha.
+	 *
+	 * Opcional porque a tela de entrada de mercadoria usa a mesma barra e já tem
+	 * a sua própria faixa com descrição e saldo do produto escolhido.
+	 */
+	previa?: ProdutoCatalogo | null;
 };
 
 export function BarraComando({
@@ -44,6 +53,7 @@ export function BarraComando({
 	indiceResultado,
 	onEscolherResultado,
 	multiplicador,
+	previa = null,
 }: Props) {
 	const prompt = PROMPTS[modo];
 	const numerico = modo !== "busca";
@@ -95,6 +105,8 @@ export function BarraComando({
 					data-form-type='other'
 					className='h-9 flex-1 rounded-none border-0 bg-transparent px-0 font-mono text-lg tracking-tight tabular-nums shadow-none placeholder:font-sans placeholder:text-sm placeholder:tracking-normal focus-visible:border-transparent focus-visible:ring-0 md:text-lg'
 				/>
+
+				{previa && modo === "busca" ? <Previa produto={previa} quantidade={multiplicador} /> : null}
 
 				{multiplicador > 1 && modo === "busca" ? (
 					<Badge variant='secondary' className='shrink-0 font-mono'>
@@ -156,5 +168,47 @@ export function BarraComando({
 				</ul>
 			) : null}
 		</div>
+	);
+}
+
+/**
+ * A linha do produto na própria barra: descrição, estoque e o preço que ESTA
+ * quantidade paga.
+ *
+ * O preço sai de `precoAplicado`, o mesmo do carrinho: digitar `12*141` num
+ * combo de 10 mostra aqui o preço de combo, que é o que vai ser cobrado. Um
+ * preço avulso na prévia e o de combo no cupom seria a tela mentindo por
+ * antecipação.
+ */
+function Previa({
+	produto,
+	quantidade: quantas,
+}: {
+	produto: ProdutoCatalogo;
+	quantidade: number;
+}) {
+	const { preco, combo } = precoAplicado(produto, quantas);
+
+	return (
+		<span className='hidden min-w-0 shrink items-center gap-3 text-xs sm:flex'>
+			<span className='max-w-[24ch] truncate text-muted-foreground'>
+				{produto.descricao}
+			</span>
+			<span
+				className={cn(
+					"shrink-0 font-mono tabular-nums",
+					produto.estoque <= 0 ? "font-semibold text-destructive" : "text-muted-foreground",
+				)}>
+				{produto.estoque <= 0
+					? "sem estoque"
+					: `${quantidade(produto.estoque)} em estoque`}
+			</span>
+			<span className='shrink-0 font-mono tabular-nums'>
+				{moeda(preco)}
+				{combo ? (
+					<span className='ml-1 text-[10px] uppercase text-primary'>combo</span>
+				) : null}
+			</span>
+		</span>
 	);
 }

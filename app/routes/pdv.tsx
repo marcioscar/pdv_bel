@@ -755,6 +755,24 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     return []
   }, [modo, comando, indice, produtos])
 
+  /**
+   * O produto que o código digitado já identifica sozinho.
+   *
+   * Vai para a barra enquanto se digita — sem lista, sem tecla a mais: o Enter
+   * continua adicionando direto. Quem sabe o código de cor nem olha; quem
+   * errou um dígito vê a descrição errada antes de o item entrar, e quem pediu
+   * o que acabou vê "sem estoque" com o cliente ainda escolhendo, em vez de
+   * levar a recusa depois do Enter.
+   *
+   * Só com UM achado: código ambíguo já abre a lista, e prévia junto seria
+   * dizer duas coisas ao mesmo tempo sobre o mesmo código.
+   */
+  const previa = useMemo(() => {
+    if (modo !== "busca" || comando.tipo !== "codigo") return null
+    const achados = produtosPorCodigo(produtos, comando.codigo)
+    return achados.length === 1 ? achados[0] : null
+  }, [modo, comando, produtos])
+
   const avisar = useCallback((texto: string, tipo: "erro" | "sucesso") => {
     setAviso({ texto, tipo })
   }, [])
@@ -1728,6 +1746,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
               confirmar()
             }}
             multiplicador={comando.tipo === "vazio" ? 1 : comando.quantidade}
+            previa={previa}
           />
           <ListaItens
             itens={venda.itens}
