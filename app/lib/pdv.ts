@@ -21,7 +21,10 @@ export type ItemVenda = {
   precoCombo: number | null
   quantidadeCombo: number | null
   quantidade: number
-  /** Estoque no momento em que o item entrou, só para sinalizar falta na tela. */
+  /**
+   * Estoque da loja no momento em que o item entrou. É o TETO da linha: o
+   * carrinho não deixa passar dele, nem digitando a quantidade nem no `+`.
+   */
   estoque: number
 }
 
@@ -78,6 +81,20 @@ export type AcaoVenda =
   | { tipo: "definirDesconto"; valor: number }
   | { tipo: "limpar" }
 
+/**
+ * Quanto deste produto ainda cabe na venda.
+ *
+ * Não se vende o que não existe: o saldo da loja é o teto, e o que já está no
+ * carrinho conta contra ele. Estoque zerado ou negativo não deixa entrar nada.
+ *
+ * A checagem de verdade é a do servidor, na gravação — esta existe para o
+ * vendedor descobrir a falta enquanto monta o carrinho, e não com o cliente
+ * esperando o cupom.
+ */
+export function quantidadeQueCabe(estoque: number, jaNoCarrinho: number) {
+  return arredondar(Math.max(0, estoque - jaNoCarrinho))
+}
+
 function limitar(indice: number, total: number) {
   if (total === 0) return -1
   return Math.min(Math.max(indice, 0), total - 1)
@@ -88,12 +105,16 @@ export function reduzirVenda(estado: EstadoVenda, acao: AcaoVenda): EstadoVenda 
     case "adicionar": {
       const { produto, quantidade } = acao
       const existente = estado.itens.findIndex((item) => item.produtoId === produto.id)
+      const jaNoCarrinho = existente >= 0 ? estado.itens[existente].quantidade : 0
+
+      // O que passar do estoque não entra. A tela avisa o que aconteceu; aqui
+      // só se garante que o carrinho nunca guarde mais do que a loja tem.
+      const entra = Math.min(quantidade, quantidadeQueCabe(produto.estoque, jaNoCarrinho))
+      if (entra <= 0) return estado
 
       if (existente >= 0) {
         const itens = estado.itens.map((item, i) =>
-          i === existente
-            ? { ...item, quantidade: arredondar(item.quantidade + quantidade) }
-            : item
+          i === existente ? { ...item, quantidade: arredondar(item.quantidade + entra) } : item
         )
         return { ...estado, itens, indiceAtivo: existente }
       }
@@ -108,7 +129,7 @@ export function reduzirVenda(estado: EstadoVenda, acao: AcaoVenda): EstadoVenda 
           preco: produto.preco,
           precoCombo: produto.precoCombo,
           quantidadeCombo: produto.quantidadeCombo,
-          quantidade,
+          quantidade: entra,
           estoque: produto.estoque,
         },
       ]
@@ -128,8 +149,15 @@ export function reduzirVenda(estado: EstadoVenda, acao: AcaoVenda): EstadoVenda 
       if (indice < 0 || indice >= estado.itens.length) return estado
       if (quantidade <= 0) return reduzirVenda(estado, { tipo: "remover", indice })
 
+      // Mesmo teto de "adicionar", agora para quem digitou a quantidade ou
+      // apertou `+`: a linha para no estoque da loja.
+      const alvo = estado.itens[indice]
+      const nova = Math.min(arredondar(quantidade), quantidadeQueCabe(alvo.estoque, 0))
+      if (nova <= 0) return reduzirVenda(estado, { tipo: "remover", indice })
+      if (nova === alvo.quantidade) return estado
+
       const itens = estado.itens.map((item, i) =>
-        i === indice ? { ...item, quantidade: arredondar(quantidade) } : item
+        i === indice ? { ...item, quantidade: nova } : item
       )
       return { ...estado, itens }
     }

@@ -8,8 +8,13 @@ import {
 import { caixaAberto } from "~/lib/caixa.server"
 import { db } from "~/lib/db.server"
 import { depoisDoDia, diaAtras, diaDeHoje, inicioDoDia } from "~/lib/dia"
-import { movimentosDeVenda } from "~/lib/estoque.server"
-import { arredondar, interpretarValor, moeda } from "~/lib/moeda"
+import { movimentosDeVenda, saldosDosProdutos } from "~/lib/estoque.server"
+import {
+  arredondar,
+  interpretarValor,
+  moeda,
+  quantidade as formatarQuantidade,
+} from "~/lib/moeda"
 import { vendedorPorCodigo, type VendedorDoBalcao } from "~/lib/vendedores.server"
 import {
   condicaoCabeNoTotal,
@@ -204,6 +209,44 @@ export async function precificar(
 }
 
 /**
+ * A recusa por estoque, ou `null` quando a loja cobre o carrinho inteiro.
+ *
+ * Não se vende o que não existe: o saldo da loja é o teto de cada item. A tela
+ * do caixa já impede de passar disso, mas o saldo pode ter mudado entre a
+ * montagem do carrinho e o fechamento — outro caixa vendendo a mesma última
+ * caixa, uma transferência despachada — e a tela é do outro lado da rede.
+ *
+ * Fica ANTES da liberação do gerente de propósito: falta de estoque não é coisa
+ * que se libere, então não faz sentido mandar o vendedor buscar o gerente para
+ * uma venda que não vai fechar de jeito nenhum.
+ *
+ * A janela entre esta consulta e a gravação é pequena mas existe. Fechá-la de
+ * vez pediria reservar o saldo dentro da transação; enquanto o balcão tiver dois
+ * caixas por loja, o custo disso não se paga.
+ */
+export async function recusaPorFaltaDeEstoque(
+  itens: { produtoId: string; descricao: string; unidade: string; quantidade: number }[],
+  loja: string
+): Promise<string | null> {
+  const saldos = await saldosDosProdutos(
+    itens.map((item) => item.produtoId),
+    loja
+  )
+
+  const faltando = itens.filter((item) => item.quantidade > (saldos.get(item.produtoId) ?? 0))
+  if (faltando.length === 0) return null
+
+  return faltando
+    .map((item) => {
+      const saldo = saldos.get(item.produtoId) ?? 0
+      return saldo <= 0
+        ? `${item.descricao} — sem estoque em ${loja}`
+        : `${item.descricao} — só há ${formatarQuantidade(saldo)} ${item.unidade} em ${loja}`
+    })
+    .join("; ")
+}
+
+/**
  * Os preços vêm do banco, nunca do cliente: o payload só diz *o que* e *quanto*.
  * Assim um total adulterado no navegador não chega a ser gravado.
  */
@@ -255,6 +298,9 @@ export async function registrarVenda(pedido: PedidoVenda): Promise<ResultadoVend
       erro: `O caixa de ${pedido.loja} não foi aberto hoje — lance o troco da gaveta antes de vender`,
     }
   }
+
+  const semEstoque = await recusaPorFaltaDeEstoque(itens, pedido.loja)
+  if (semEstoque) return { ok: false, erro: semEstoque }
 
   /**
    * A trava do gerente, cobrada AQUI.

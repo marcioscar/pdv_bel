@@ -33,7 +33,12 @@ import { saldosPorProduto } from "~/lib/estoque.server"
 import { contaDaLoja } from "~/lib/lojas.server"
 import { SOMENTE_ATIVOS } from "~/lib/produtos.server"
 import { autenticar, exigirUsuario } from "~/lib/sessao.server"
-import { lerPedido, precificar, registrarVenda } from "~/lib/vendas.server"
+import {
+  lerPedido,
+  precificar,
+  recusaPorFaltaDeEstoque,
+  registrarVenda,
+} from "~/lib/vendas.server"
 import { vendedoresDaLoja } from "~/lib/vendedores.server"
 import {
   confirmarPagamento,
@@ -66,10 +71,12 @@ import {
   interpretarComando,
   produtosPorCodigo,
   reduzirVenda,
+  quantidadeQueCabe,
   totaisDaVenda,
   vendaVazia,
   type CondicaoPagamento,
   type FormaPagamento,
+  type ItemVenda,
   type ProdutoCatalogo,
 } from "~/lib/pdv"
 
@@ -246,6 +253,17 @@ export async function action({ request }: Route.ActionArgs) {
     if (!preco.ok) {
       return data(
         { ok: false as const, tipo: "autorizacao" as const, erro: preco.erro },
+        { status: 400 }
+      )
+    }
+
+    // Estoque antes da fila do gerente: não se libera o que não existe, e o
+    // pagamento por link chega a ser mandado ao cliente por este caminho — um
+    // link pago de uma venda que não fecha é o pior desfecho do balcão.
+    const semEstoque = await recusaPorFaltaDeEstoque(preco.itens, eu.loja)
+    if (semEstoque) {
+      return data(
+        { ok: false as const, tipo: "autorizacao" as const, erro: semEstoque },
         { status: 400 }
       )
     }
@@ -464,6 +482,16 @@ export async function action({ request }: Route.ActionArgs) {
         },
         { status: 400 }
       )
+    }
+
+    /**
+     * Estoque também barra ANTES do QR, pelo mesmo motivo: a venda em Pix só é
+     * gravada depois de o banco confirmar, e recusar lá deixaria o cliente
+     * tendo pago por mercadoria que a loja não tem.
+     */
+    const semEstoque = await recusaPorFaltaDeEstoque(preco.itens, eu.loja)
+    if (semEstoque) {
+      return data({ ok: false as const, tipo: "pix" as const, erro: semEstoque }, { status: 400 })
     }
 
     const recusa = await recusaPorFaltaDeLiberacao({
@@ -767,26 +795,51 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     setEntrada("")
   }, [])
 
-  const adicionar = useCallback(
-    (produto: ProdutoCatalogo, quantidade: number) => {
-      despachar({ tipo: "adicionar", produto, quantidade })
-      setEntrada("")
-
-      // O item entra de qualquer jeito: com o catálogo todo em estoque 0, impedir
-      // a venda travaria o caixa. O aviso e a marca na linha sinalizam a falta.
-      const jaNoCarrinho =
-        venda.itens.find((item) => item.produtoId === produto.id)?.quantidade ?? 0
-      const resultante = jaNoCarrinho + quantidade
-      const excede = resultante > produto.estoque
-
+  /** O aviso de quem esbarrou no estoque, dito com o número que resta. */
+  const avisarSemEstoque = useCallback(
+    (item: { descricao: string; unidade: string; estoque: number }) => {
       avisar(
-        excede
-          ? `${produto.descricao} · ${formatarQuantidade(resultante)} ${produto.unidade} — acima do estoque (${formatarQuantidade(produto.estoque)})`
-          : `${produto.descricao} · ${formatarQuantidade(quantidade)} ${produto.unidade}`,
-        excede ? "erro" : "sucesso"
+        item.estoque <= 0
+          ? `${item.descricao} — sem estoque`
+          : `${item.descricao} — só há ${formatarQuantidade(item.estoque)} ${item.unidade} em estoque`,
+        "erro"
       )
     },
-    [avisar, venda.itens]
+    [avisar]
+  )
+
+  const adicionar = useCallback(
+    (produto: ProdutoCatalogo, quantidade: number) => {
+      // O estoque da loja é o teto: o que não tem não entra no carrinho, e o
+      // que tem em parte entra até onde dá. A recusa acontece aqui e de novo na
+      // gravação, que é onde ela vale.
+      const jaNoCarrinho =
+        venda.itens.find((item) => item.produtoId === produto.id)?.quantidade ?? 0
+      const cabe = quantidadeQueCabe(produto.estoque, jaNoCarrinho)
+
+      if (cabe <= 0) {
+        avisarSemEstoque(produto)
+        return
+      }
+
+      const entra = Math.min(quantidade, cabe)
+      despachar({ tipo: "adicionar", produto, quantidade: entra })
+      setEntrada("")
+
+      if (entra < quantidade) {
+        avisar(
+          `${produto.descricao} · entraram ${formatarQuantidade(entra)} ${produto.unidade} — o estoque de ${formatarQuantidade(produto.estoque)} não cobre ${formatarQuantidade(quantidade)}`,
+          "erro"
+        )
+        return
+      }
+
+      avisar(
+        `${produto.descricao} · ${formatarQuantidade(quantidade)} ${produto.unidade}`,
+        "sucesso"
+      )
+    },
+    [avisar, avisarSemEstoque, venda.itens]
   )
 
   const concluir = useCallback(
@@ -1103,11 +1156,19 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     if (!retomada || jaRetomou.current) return
     jaRetomou.current = true
 
+    // O que o estoque não cobre mais: entre o pedido e a liberação do gerente
+    // pode ter passado uma venda no outro caixa, e o carrinho volta pelo que a
+    // loja tem AGORA.
+    const faltaram: string[] = []
     for (const item of retomada.itens) {
       const produto = produtos.find((p) => p.id === item.produtoId)
       // Produto desativado desde o pedido simplesmente não volta: vendê-lo agora
       // seria ressuscitar do carrinho o que saiu do catálogo.
-      if (produto) despachar({ tipo: "adicionar", produto, quantidade: item.quantidade })
+      if (!produto) continue
+
+      const entra = Math.min(item.quantidade, quantidadeQueCabe(produto.estoque, 0))
+      if (entra < item.quantidade) faltaram.push(produto.descricao)
+      if (entra > 0) despachar({ tipo: "adicionar", produto, quantidade: entra })
     }
     if (retomada.desconto > 0) {
       despachar({ tipo: "definirDesconto", valor: retomada.desconto })
@@ -1117,7 +1178,12 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       if (escolhido) setCliente(escolhido)
     }
     setAutorizacaoId(retomada.id)
-    avisar("Venda liberada pelo gerente — carrinho retomado", "sucesso")
+    avisar(
+      faltaram.length > 0
+        ? `Venda liberada — mas o estoque caiu no meio: confira ${faltaram.join(", ")}`
+        : "Venda liberada pelo gerente — carrinho retomado",
+      faltaram.length > 0 ? "erro" : "sucesso"
+    )
   }, [avisar, clientes, produtos, retomada])
 
   /**
@@ -1345,6 +1411,11 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     const valor = valorTeste
 
     if (modo === "quantidade") {
+      const alvo: ItemVenda | undefined = venda.itens[venda.indiceAtivo]
+      if (alvo && valor > alvo.estoque) {
+        avisarSemEstoque(alvo)
+        return
+      }
       despachar({ tipo: "definirQuantidade", indice: venda.indiceAtivo, quantidade: valor })
       voltarParaBusca()
       return
@@ -1360,6 +1431,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   }, [
     adicionar,
     avisar,
+    avisarSemEstoque,
     comando,
     entrada,
     indiceResultado,
@@ -1368,6 +1440,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     resultados,
     totais.subtotal,
     venda.indiceAtivo,
+    venda.itens,
     voltarParaBusca,
   ])
 
@@ -1553,6 +1626,11 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
 
       if (key === "+" || key === "-") {
         evento.preventDefault()
+        const alvo: ItemVenda | undefined = venda.itens[venda.indiceAtivo]
+        if (key === "+" && alvo && alvo.quantidade >= alvo.estoque) {
+          avisarSemEstoque(alvo)
+          return
+        }
         despachar({ tipo: "ajustarQuantidade", delta: key === "+" ? 1 : -1 })
         return
       }
@@ -1574,6 +1652,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     pix,
     abrirFinalizacao,
     alternarTema,
+    avisarSemEstoque,
     cancelarVenda,
     confirmar,
     entrada,
@@ -1582,6 +1661,8 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     pedirDesconto,
     pedirQuantidade,
     resultados.length,
+    venda.indiceAtivo,
+    venda.itens,
     voltarParaBusca,
   ])
 

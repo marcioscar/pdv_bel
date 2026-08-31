@@ -59,6 +59,31 @@ export async function saldosPorProdutoELoja(): Promise<Map<string, Map<string, n
   return mapa
 }
 
+/**
+ * Saldo de alguns produtos numa loja — a consulta que a venda faz antes de
+ * gravar, para não vender o que não tem.
+ *
+ * É `saldosPorProduto` restrita aos ids do carrinho: a tela do caixa precisa do
+ * catálogo inteiro uma vez, a gravação precisa de meia dúzia de produtos a cada
+ * venda.
+ */
+export async function saldosDosProdutos(
+  produtoIds: string[],
+  loja: string
+): Promise<Map<string, number>> {
+  if (produtoIds.length === 0) return new Map()
+
+  const grupos = await db.movimentoEstoque.groupBy({
+    by: ["produtoId"],
+    where: { loja, produtoId: { in: produtoIds } },
+    _sum: { quantidade: true },
+  })
+
+  return new Map(
+    grupos.map((grupo) => [grupo.produtoId, arredondar(grupo._sum.quantidade ?? 0)])
+  )
+}
+
 export async function saldoDoProduto(produtoId: string, loja: string): Promise<number> {
   const soma = await db.movimentoEstoque.aggregate({
     where: { produtoId, loja },
