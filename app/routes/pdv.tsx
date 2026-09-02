@@ -31,6 +31,7 @@ import { criarCliente, lerCliente, listarClientes } from "~/lib/clientes.server"
 import { emitirParaVenda, type CobrancaDaVenda } from "~/lib/cobranca.server"
 import { saldosPorProduto } from "~/lib/estoque.server"
 import { contaDaLoja } from "~/lib/lojas.server"
+import { ambienteFocus } from "~/lib/focus.server"
 import { emitirDaVenda } from "~/lib/nota-fiscal.server"
 import { SOMENTE_ATIVOS } from "~/lib/produtos.server"
 import { autenticar, exigirUsuario } from "~/lib/sessao.server"
@@ -653,14 +654,28 @@ async function emitirNaVenda(vendaId: string, operador: string) {
       select: { status: true, caminhoDanfe: true, numero: true, modelo: true },
     })
 
+    const autorizada = nota?.status === "autorizado"
+
+    /*
+     * O DANFE só substitui o cupom em PRODUÇÃO.
+     *
+     * Em homologação a SEFAZ carimba "SEM VALOR FISCAL" e troca a descrição do
+     * primeiro item pela frase de teste: entregar isso ao cliente no lugar do
+     * cupom seria pior do que não emitir nada. O caminho continua sendo
+     * exercitado — a nota é emitida e fica registrada —, mas quem sai na bobina
+     * é o cupom, até o token de produção entrar.
+     */
+    const valeComoDocumento = autorizada && ambienteFocus() === "producao"
+
     return {
-      emitida: nota?.status === "autorizado",
+      emitida: autorizada,
       erro: null,
       // O endereço é o NOSSO: a impressão do caixa busca o documento pelo
       // navegador, e a Focus não responde a pedido de outro domínio.
-      danfe: nota?.status === "autorizado" ? `/notas/${resultado.notaId}/danfe` : null,
+      danfe: valeComoDocumento ? `/notas/${resultado.notaId}/danfe` : null,
       numero: nota?.numero ?? null,
       modelo: nota?.modelo ?? null,
+      teste: autorizada && !valeComoDocumento,
     }
   } catch (erro) {
     console.error("[pdv] falha ao emitir a nota da venda", vendaId, erro)
@@ -1144,7 +1159,12 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
 
     const partes = [`Venda #${numero} registrada`]
     if (troco > 0) partes.push(`troco ${moeda(troco)}`)
-    if (nota?.emitida) partes.push(`${nota.modelo === "nfe" ? "NF-e" : "NFC-e"} ${nota.numero ?? ""}`.trim())
+    if (nota?.emitida) {
+      const documento = `${nota.modelo === "nfe" ? "NF-e" : "NFC-e"} ${nota.numero ?? ""}`.trim()
+      // Dizer "de teste" é o que impede alguém de achar que o balcão já está
+      // emitindo nota de verdade enquanto o token é o de homologação.
+      partes.push(nota.teste ? `${documento} (teste)` : documento)
+    }
 
     // A falha da nota é dita, e não escondida: a venda valeu, mas alguém precisa
     // saber que o documento fiscal ficou para trás.
