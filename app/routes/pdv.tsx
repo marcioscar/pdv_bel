@@ -31,6 +31,7 @@ import { criarCliente, lerCliente, listarClientes } from "~/lib/clientes.server"
 import { emitirParaVenda, type CobrancaDaVenda } from "~/lib/cobranca.server"
 import { saldosPorProduto } from "~/lib/estoque.server"
 import { contaDaLoja } from "~/lib/lojas.server"
+import { emitirDaVenda } from "~/lib/nota-fiscal.server"
 import { SOMENTE_ATIVOS } from "~/lib/produtos.server"
 import { autenticar, exigirUsuario } from "~/lib/sessao.server"
 import {
@@ -599,7 +600,18 @@ export async function action({ request }: Route.ActionArgs) {
     operador: eu.nome,
   })
 
-  if (resultado.ok) return { ...resultado, tipo: "venda" as const }
+  if (resultado.ok) {
+    /*
+     * A nota sai aqui, com a venda recém-gravada — e o que ela devolve é o
+     * endereço do DANFE, que a tela manda para a mesma bobina do cupom.
+     *
+     * A emissão NÃO pode derrubar a venda: ela já aconteceu, o dinheiro entrou e
+     * o estoque saiu. Falha da SEFAZ, da Focus ou da internet vira nota pendente
+     * e cupom não fiscal impresso — nunca uma venda perdida no balcão.
+     */
+    const nota = await emitirNaVenda(resultado.vendaId, eu.nome)
+    return { ...resultado, tipo: "venda" as const, nota }
+  }
 
   // A recusa por falta de liberação tem tipo próprio: a tela abre o diálogo com
   // a dívida em vez de piscar uma mensagem de erro na barra de status.
@@ -621,6 +633,39 @@ export async function action({ request }: Route.ActionArgs) {
     { ok: false as const, tipo: "venda" as const, erro: resultado.erro },
     { status: 400 }
   )
+}
+
+/**
+ * Emite a nota da venda que acabou de fechar, sem nunca lançar.
+ *
+ * Aguardar a resposta é proposital: a NFC-e autorizada vira o documento que o
+ * cliente leva, e ele está de pé na frente do balcão. Quando não dá, a venda
+ * segue e o cupom não fiscal sai no lugar — a nota fica na fila e aparece na
+ * tela de Vendas para ser reenviada.
+ */
+async function emitirNaVenda(vendaId: string, operador: string) {
+  try {
+    const resultado = await emitirDaVenda(vendaId, { emitidaPor: operador })
+    if (!resultado.ok) return { emitida: false as const, erro: resultado.erro, danfe: null }
+
+    const nota = await db.notaFiscalEmitida.findUnique({
+      where: { id: resultado.notaId },
+      select: { status: true, caminhoDanfe: true, numero: true, modelo: true },
+    })
+
+    return {
+      emitida: nota?.status === "autorizado",
+      erro: null,
+      // O endereço é o NOSSO: a impressão do caixa busca o documento pelo
+      // navegador, e a Focus não responde a pedido de outro domínio.
+      danfe: nota?.status === "autorizado" ? `/notas/${resultado.notaId}/danfe` : null,
+      numero: nota?.numero ?? null,
+      modelo: nota?.modelo ?? null,
+    }
+  } catch (erro) {
+    console.error("[pdv] falha ao emitir a nota da venda", vendaId, erro)
+    return { emitida: false as const, erro: "Falha ao emitir a nota", danfe: null }
+  }
 }
 
 // O catálogo não muda durante o expediente; revalidar depois de cada venda
@@ -1081,20 +1126,33 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     setAutorizacaoId(null)
     setBloqueio(null)
 
-    // O cupom sai depois de a venda existir: imprimir antes de gravar entregaria
-    // ao cliente um documento de uma venda que pode ter falhado.
+    /*
+     * O papel sai depois de a venda existir — imprimir antes de gravar entregaria
+     * ao cliente o documento de uma venda que pode ter falhado.
+     *
+     * Com a nota autorizada, o que sai é o DANFE dela: é o documento fiscal, e
+     * imprimir os dois entregaria dois papéis dizendo a mesma coisa. Sem nota, o
+     * cupom não fiscal continua sendo o que o cliente leva.
+     */
+    const nota = resposta.nota
     if (imprimirCupom) {
-      imprimirDocumento(`/vendas/${resposta.vendaId}/cupom`).then((erro) => {
+      const documento = nota?.danfe ?? `/vendas/${resposta.vendaId}/cupom`
+      imprimirDocumento(documento).then((erro) => {
         if (erro) avisar(erro, "erro")
       })
     }
 
-    avisar(
-      troco > 0
-        ? `Venda #${numero} registrada · troco ${moeda(troco)}`
-        : `Venda #${numero} registrada`,
-      "sucesso"
-    )
+    const partes = [`Venda #${numero} registrada`]
+    if (troco > 0) partes.push(`troco ${moeda(troco)}`)
+    if (nota?.emitida) partes.push(`${nota.modelo === "nfe" ? "NF-e" : "NFC-e"} ${nota.numero ?? ""}`.trim())
+
+    // A falha da nota é dita, e não escondida: a venda valeu, mas alguém precisa
+    // saber que o documento fiscal ficou para trás.
+    if (nota && !nota.emitida && nota.erro) {
+      avisar(`${partes.join(" · ")} · nota pendente: ${nota.erro}`, "erro")
+    } else {
+      avisar(partes.join(" · "), "sucesso")
+    }
     // `autorizacaoId` entra nas dependências para a baixa usar o id do render
     // corrente; a guarda de `ultimaResposta` torna re-execuções inócuas.
   }, [fetcher.state, fetcher.data, avisar, fetcher, forma, autorizacaoId, darBaixaNaLiberacao])

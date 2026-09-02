@@ -172,6 +172,46 @@ export function consultarNota(modelo: ModeloNota, ref: string) {
 }
 
 /**
+ * Os gatilhos cadastrados nesta conta — um por evento e CNPJ.
+ *
+ * Vale conferir antes de criar: cadastrar duas vezes o mesmo evento faz a Focus
+ * avisar duas vezes, e o segundo aviso encontra a nota já atualizada.
+ */
+export async function listarGatilhos(): Promise<
+  Array<{ id?: number; url?: string; event?: string; cnpj?: string }>
+> {
+  const resposta = await chamar("GET", "/hooks")
+  return Array.isArray(resposta) ? resposta : []
+}
+
+/**
+ * Cadastra o gatilho que avisa esta instalação quando a SEFAZ responde.
+ *
+ * `authorization` vira um cabeçalho que a Focus manda de volta — é o segredo
+ * que a rota confere antes de fazer qualquer coisa. Sem ele, a URL pública
+ * aceitaria pedido de qualquer um.
+ */
+export function criarGatilho(entrada: {
+  evento: "nfe" | "nfce"
+  url: string
+  cnpj: string
+  segredo?: string
+}) {
+  return chamar("POST", "/hooks", {
+    event: entrada.evento,
+    url: entrada.url,
+    cnpj: entrada.cnpj,
+    ...(entrada.segredo
+      ? { authorization: entrada.segredo, authorization_header: "x-focus-segredo" }
+      : {}),
+  })
+}
+
+export function apagarGatilho(id: number) {
+  return chamar("DELETE", `/hooks/${id}`)
+}
+
+/**
  * Cancela a nota. A justificativa vai para a SEFAZ e é pública: entra no evento
  * de cancelamento, que fica no XML.
  */

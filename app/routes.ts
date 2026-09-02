@@ -21,6 +21,9 @@ export default [
   route("vendas/:vendaId/boleto.pdf", "routes/boleto.tsx"),
   route("pedidos-de-compra/:pedidoId/impressao", "routes/pedido-compra.impressao.tsx"),
   route("vendas/:vendaId/cupom", "routes/cupom.tsx"),
+  // O DANFE servido daqui: o caixa imprime buscando do próprio sistema, e o
+  // navegador não tem como buscar direto na Focus.
+  route("notas/:notaId/danfe", "routes/nota.danfe.tsx"),
   // O papel que o cliente leva para decidir. Sai do carrinho da tela, antes de
   // existir venda — por isso não tem :id, os itens vêm na própria URL.
   route("orcamento/impressao", "routes/orcamento.impressao.tsx"),
@@ -80,6 +83,9 @@ export default [
   route("cnpj/:cnpj", "routes/cnpj.tsx"),
   // Uma URL por conta do Inter (MATRIZ, NRT, SDS). A rota sem conta continua para
   // não quebrar o webhook já registrado.
+  // O aviso da Focus de que a SEFAZ respondeu. Uma URL só para NF-e e NFC-e: o
+  // que muda entre elas é o modelo, que já está guardado na nota.
+  route("webhooks/focus/nota", "routes/webhook.nota.tsx"),
   route("webhooks/inter/cobranca", "routes/webhook.cobranca.tsx", { id: "webhook-cobranca" }),
   route("webhooks/inter/cobranca/:conta", "routes/webhook.cobranca.tsx", {
     id: "webhook-cobranca-conta",

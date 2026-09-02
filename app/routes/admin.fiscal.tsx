@@ -7,6 +7,13 @@ import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { formatarCpfCnpj } from "~/lib/documento"
+import { enderecoDoApp } from "~/lib/env.server"
+import {
+  ambienteFocus,
+  criarGatilho,
+  focusConfigurada,
+  listarGatilhos,
+} from "~/lib/focus.server"
 import {
   CFOP_TRANSFERENCIA,
   CFOP_VENDA_INTERESTADUAL,
@@ -33,8 +40,38 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   const [lojas, excecoes] = await Promise.all([listarEmitentes(), contarExcecoesFiscais()])
 
+  /*
+   * Os gatilhos vêm da Focus, não do nosso banco: cadastrar é lá, e uma cópia
+   * daqui divergiria calada no dia em que alguém mexesse pelo painel.
+   */
+  const gatilhos = focusConfigurada() ? await listarGatilhos().catch(() => null) : null
+  const publico = enderecoDoApp(request)
+  const urlDoAviso = `${publico}/webhooks/focus/nota`
+
+  /*
+   * Cadastrar o aviso a partir do ambiente errado é o tipo de erro que só
+   * aparece semanas depois: o segredo enviado à Focus é o do .env de QUEM
+   * cadastra, e se quem cadastra é a máquina de desenvolvimento, o servidor de
+   * produção recusa todo aviso por segredo divergente — e ninguém liga uma coisa
+   * à outra. Só cadastra quem está atendendo no próprio endereço público.
+   */
+  const aqui = new URL(request.url)
+  const daquiMesmo =
+    publico === `${aqui.protocol.replace(":", "")}://${request.headers.get("x-forwarded-host") ?? aqui.host}`
+
   return {
     excecoes,
+    focus: {
+      configurada: focusConfigurada(),
+      ambiente: focusConfigurada() ? ambienteFocus() : null,
+      urlDoAviso,
+      // null = não deu para perguntar; lista vazia = perguntou e não há nenhum.
+      gatilhos:
+        gatilhos?.map((g) => ({ id: g.id ?? null, url: g.url ?? "", event: g.event ?? "" })) ??
+        null,
+      jaAvisa: Boolean(gatilhos?.some((g) => g.url === urlDoAviso)),
+      daquiMesmo,
+    },
     lojas: lojas.map((loja) => ({
       codigo: loja.codigo,
       nome: loja.nome,
@@ -62,6 +99,44 @@ export async function action({ request }: Route.ActionArgs) {
   const form = await request.formData()
   const codigo = String(form.get("codigo") ?? "")
 
+  if (String(form.get("acao")) === "avisos") {
+    const url = String(form.get("url") ?? "")
+    const cnpj = String(form.get("cnpj") ?? "")
+    const segredo = process.env.FOCUS_NFE_WEBHOOK_SEGREDO?.trim()
+
+    const aqui = new URL(request.url)
+    const publico = enderecoDoApp(request)
+    const daquiMesmo =
+      publico === `${aqui.protocol.replace(":", "")}://${request.headers.get("x-forwarded-host") ?? aqui.host}`
+
+    if (!daquiMesmo || url.includes("localhost")) {
+      return data(
+        {
+          ok: false as const,
+          erro:
+            "Cadastre a partir do sistema no ar: o segredo enviado à Focus é o deste servidor, e daqui ele não confere com o de produção",
+        },
+        { status: 400 }
+      )
+    }
+
+    try {
+      // Um gatilho por modelo: a Focus separa os eventos, e sem os dois só um
+      // dos documentos avisaria.
+      await criarGatilho({ evento: "nfe", url, cnpj, segredo })
+      await criarGatilho({ evento: "nfce", url, cnpj, segredo })
+      return { ok: true as const, mensagem: "A Focus passa a avisar quando a SEFAZ responder" }
+    } catch (erro) {
+      return data(
+        {
+          ok: false as const,
+          erro: erro instanceof Error ? erro.message : "Falha ao cadastrar o aviso na Focus",
+        },
+        { status: 400 }
+      )
+    }
+  }
+
   const resultado = await salvarEmitente(codigo, lerEmitente(form))
   return resultado.ok
     ? { ok: true as const, mensagem: resultado.mensagem }
@@ -71,7 +146,7 @@ export async function action({ request }: Route.ActionArgs) {
 type Loja = Awaited<ReturnType<typeof loader>>["lojas"][number]
 
 export default function AdminFiscal({ loaderData }: Route.ComponentProps) {
-  const { lojas, excecoes } = loaderData
+  const { lojas, excecoes, focus } = loaderData
 
   const [aviso, setAviso] = useState<{ texto: string; tipo: "erro" | "sucesso" } | null>(null)
 
@@ -98,6 +173,8 @@ export default function AdminFiscal({ loaderData }: Route.ComponentProps) {
             <Emitente key={loja.codigo} loja={loja} aoSalvar={setAviso} />
           ))}
         </div>
+
+        <Avisos focus={focus} cnpjPadrao={lojas.find((l) => l.emiteNotaFiscal)?.cnpj ?? lojas[0]?.cnpj ?? ""} aoSalvar={setAviso} />
 
         <div className="mt-6 rounded-lg border border-border bg-muted/30 px-4 py-3 text-xs text-muted-foreground">
           <p className="font-medium text-foreground">Como está o catálogo</p>
@@ -304,6 +381,125 @@ function Emitente({
             {gravando ? "Salvando…" : "Salvar"}
           </Button>
         </div>
+      </div>
+    </section>
+  )
+}
+
+/**
+ * O aviso da Focus quando a SEFAZ responde.
+ *
+ * Sem ele nada quebra: a tela de Vendas pergunta o desfecho das notas pendentes
+ * ao abrir. Com ele, a nota autorizada aparece autorizada sem ninguém abrir
+ * nada — e é a diferença entre o operador esperar olhando e o operador ser
+ * avisado.
+ *
+ * O cadastro exige endereço público: em desenvolvimento a Focus não tem como
+ * alcançar o localhost, e cadastrar a partir daqui gravaria lá um endereço que
+ * nunca responde.
+ */
+function Avisos({
+  focus,
+  cnpjPadrao,
+  aoSalvar,
+}: {
+  focus: {
+    configurada: boolean
+    ambiente: string | null
+    urlDoAviso: string
+    gatilhos: Array<{ id: number | null; url: string; event: string }> | null
+    jaAvisa: boolean
+    daquiMesmo: boolean
+  }
+  cnpjPadrao: string
+  aoSalvar: (aviso: { texto: string; tipo: "erro" | "sucesso" }) => void
+}) {
+  const fetcher = useFetcher<typeof action>()
+  const enviando = fetcher.state !== "idle"
+  const ultimaResposta = useRef<unknown>(null)
+
+  useEffect(() => {
+    if (fetcher.state !== "idle" || !fetcher.data) return
+    if (ultimaResposta.current === fetcher.data) return
+    ultimaResposta.current = fetcher.data
+
+    aoSalvar(
+      fetcher.data.ok
+        ? { texto: fetcher.data.mensagem, tipo: "sucesso" }
+        : { texto: fetcher.data.erro, tipo: "erro" }
+    )
+  }, [fetcher.state, fetcher.data, aoSalvar])
+
+  // Em desenvolvimento o APP_URL aponta para produção: a URL fica certa, mas
+  // quem cadastraria é esta máquina, com outro segredo.
+  const podeCadastrar = focus.daquiMesmo && !focus.urlDoAviso.includes("localhost")
+
+  return (
+    <section className="mt-4 rounded-xl border border-border bg-card">
+      <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3">
+        <h2 className="text-sm font-semibold">Focus NFe</h2>
+        {focus.configurada ? (
+          <Badge
+            variant={focus.ambiente === "producao" ? "default" : "outline"}
+            className="text-[10px] uppercase"
+          >
+            {focus.ambiente === "producao" ? "produção" : "homologação"}
+          </Badge>
+        ) : (
+          <Badge variant="destructive" className="text-[10px]">
+            sem token
+          </Badge>
+        )}
+        <span className="text-xs text-muted-foreground">
+          {focus.configurada
+            ? focus.ambiente === "producao"
+              ? "As notas emitidas daqui têm valor fiscal."
+              : "Ambiente de testes: as notas não têm valor fiscal."
+            : "Configure FOCUS_NFE_TOKEN_HOMOLOGACAO no .env."}
+        </span>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3 px-4 py-3">
+        <div className="min-w-0 flex-1">
+          <Rotulo>Aviso da SEFAZ chega em</Rotulo>
+          <p className="truncate font-mono text-xs text-muted-foreground">{focus.urlDoAviso}</p>
+          {focus.gatilhos === null ? (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Não deu para perguntar à Focus quais avisos estão cadastrados.
+            </p>
+          ) : focus.jaAvisa ? (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Cadastrado — a nota se atualiza sozinha quando a SEFAZ responde.
+            </p>
+          ) : (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Ainda não cadastrado. Sem ele, a nota só se atualiza quando alguém abre
+              a tela de Vendas.
+              {podeCadastrar ? "" : " Cadastre pelo sistema no ar, não daqui."}
+            </p>
+          )}
+        </div>
+
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={enviando || !podeCadastrar || !focus.configurada || focus.jaAvisa}
+          title={
+            podeCadastrar
+              ? "Cadastra o aviso para NF-e e NFC-e"
+              : "Cadastre a partir do sistema no ar: o segredo é o do servidor que cadastra"
+          }
+          onClick={() =>
+            fetcher.submit(
+              { acao: "avisos", url: focus.urlDoAviso, cnpj: cnpjPadrao },
+              { method: "post" }
+            )
+          }
+          className="rounded-lg"
+        >
+          {enviando ? "Cadastrando…" : focus.jaAvisa ? "Aviso cadastrado" : "Cadastrar aviso"}
+        </Button>
       </div>
     </section>
   )
