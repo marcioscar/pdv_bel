@@ -2,9 +2,11 @@ import { db } from "~/lib/db.server"
 import {
   limparCep,
   limparDocumento,
+  limparInscricaoEstadual,
   tipoPessoaDe,
   validarCep,
   validarCpfCnpj,
+  validarInscricaoEstadual,
   validarUf,
 } from "~/lib/documento"
 
@@ -21,6 +23,10 @@ export type ClienteEntrada = {
   email?: string
   ddd?: string
   telefone?: string
+  inscricaoEstadual?: string
+  contatoNome?: string
+  contatoTelefone?: string
+  contatoEmail?: string
 }
 
 export type ResultadoCliente =
@@ -45,6 +51,10 @@ export function lerCliente(form: FormData): ClienteEntrada {
     email: texto(form.get("email")) || undefined,
     ddd: texto(form.get("ddd")) || undefined,
     telefone: texto(form.get("telefone")) || undefined,
+    inscricaoEstadual: texto(form.get("inscricaoEstadual")) || undefined,
+    contatoNome: texto(form.get("contatoNome")) || undefined,
+    contatoTelefone: texto(form.get("contatoTelefone")) || undefined,
+    contatoEmail: texto(form.get("contatoEmail")) || undefined,
   }
 }
 
@@ -71,10 +81,26 @@ function validarEntrada(entrada: ClienteEntrada): { ok: false; erro: string; cam
   if (!validarCep(entrada.cep)) {
     return { ok: false, erro: "CEP deve ter 8 dígitos", campo: "cep" }
   }
+  // Vazia é o caso comum — só o que foi preenchido precisa fazer sentido.
+  if (entrada.inscricaoEstadual && !validarInscricaoEstadual(entrada.inscricaoEstadual)) {
+    return {
+      ok: false,
+      erro: "Inscrição estadual: 8 a 14 dígitos, ou ISENTO",
+      campo: "inscricaoEstadual",
+    }
+  }
   return null
 }
 
-export async function criarCliente(entrada: ClienteEntrada): Promise<ResultadoCliente> {
+/**
+ * A loja vem à parte da entrada de propósito: ela sai da sessão, não do
+ * formulário. Se viesse junto no `FormData`, um campo escondido bastaria para
+ * gravar um cadastro em nome de outra loja.
+ */
+export async function criarCliente(
+  entrada: ClienteEntrada,
+  { loja }: { loja: string }
+): Promise<ResultadoCliente> {
   const problema = validarEntrada(entrada)
   if (problema) return problema
 
@@ -102,6 +128,13 @@ export async function criarCliente(entrada: ClienteEntrada): Promise<ResultadoCl
       email: entrada.email,
       ddd: entrada.ddd,
       telefone: entrada.telefone,
+      inscricaoEstadual: entrada.inscricaoEstadual
+        ? limparInscricaoEstadual(entrada.inscricaoEstadual)
+        : undefined,
+      contatoNome: entrada.contatoNome,
+      contatoTelefone: entrada.contatoTelefone,
+      contatoEmail: entrada.contatoEmail,
+      lojaCadastro: loja,
     },
   })
 
@@ -185,6 +218,14 @@ export async function atualizarCliente(
       email: entrada.email ?? null,
       ddd: entrada.ddd ?? null,
       telefone: entrada.telefone ?? null,
+      inscricaoEstadual: entrada.inscricaoEstadual
+        ? limparInscricaoEstadual(entrada.inscricaoEstadual)
+        : null,
+      contatoNome: entrada.contatoNome ?? null,
+      contatoTelefone: entrada.contatoTelefone ?? null,
+      contatoEmail: entrada.contatoEmail ?? null,
+      // `lojaCadastro` fica de fora: é o registro de onde o cadastro nasceu, e
+      // editar em outra loja não muda esse fato.
     },
   })
 

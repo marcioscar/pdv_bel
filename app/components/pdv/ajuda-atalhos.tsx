@@ -20,6 +20,7 @@ const GRUPOS = [
       { tecla: "F5", texto: "digita a quantidade exata" },
       { tecla: "F4 / Del", texto: "remove o item ativo" },
       { tecla: "F3", texto: "desconto em reais sobre o subtotal" },
+      { tecla: "F6", texto: "cadastra um cliente novo, sem sair da venda" },
       { tecla: "F7", texto: "imprime um orçamento do carrinho, sem gravar venda" },
       { tecla: "F9", texto: "cancela a venda inteira" },
     ],

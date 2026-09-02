@@ -199,7 +199,9 @@ export async function action({ request }: Route.ActionArgs) {
 
   // Cadastro de cliente vem como formulário; a venda vem como JSON.
   if (request.headers.get("content-type")?.includes("form")) {
-    const resultado = await criarCliente(lerCliente(await request.formData()))
+    const resultado = await criarCliente(lerCliente(await request.formData()), {
+      loja: eu.loja,
+    })
     if (!resultado.ok) {
       return data({ ok: false as const, tipo: "cliente" as const, erro: resultado.erro }, { status: 400 })
     }
@@ -1487,6 +1489,20 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
    * mesmo `precificar` do fechamento. Mandar o preço da tela imprimiria para o
    * cliente um valor que o caixa não vai cobrar.
    */
+  /**
+   * Abre o cadastro de cliente sem sair da venda.
+   *
+   * Aqui não dá para mandar o vendedor até Cadastros › Clientes: o carrinho vive
+   * no estado desta tela, e trocar de tela no meio de uma venda perderia os
+   * itens já lançados. Por isso o cadastro vem até ele, em cima do balcão.
+   */
+  const cadastrarCliente = useCallback(() => {
+    setClienteErro(null)
+    // Direto no formulário: quem apertou "novo cliente" não quer a lista de busca.
+    setCadastroDireto(true)
+    setClienteAberto(true)
+  }, [])
+
   const imprimirOrcamento = useCallback(() => {
     if (venda.itens.length === 0) {
       avisar("Nenhum item para orçar", "erro")
@@ -1596,6 +1612,10 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           evento.preventDefault()
           pedirQuantidade()
           return
+        case "F6":
+          evento.preventDefault()
+          cadastrarCliente()
+          return
         case "F7":
           evento.preventDefault()
           imprimirOrcamento()
@@ -1671,6 +1691,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     abrirFinalizacao,
     alternarTema,
     avisarSemEstoque,
+    cadastrarCliente,
     cancelarVenda,
     confirmar,
     entrada,
@@ -1704,6 +1725,10 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       acao: pedirQuantidade,
       desabilitado: venda.indiceAtivo < 0,
     },
+    // Sempre habilitado, ao contrário dos vizinhos: cadastrar cliente não
+    // depende de haver venda na tela — muitas vezes é justamente o primeiro
+    // passo, com o cliente novo parado na frente do balcão.
+    { tecla: "F6", rotulo: "Novo cliente", acao: cadastrarCliente },
     {
       tecla: "F7",
       rotulo: "Orçamento",

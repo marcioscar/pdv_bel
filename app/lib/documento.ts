@@ -92,3 +92,59 @@ export function formatarCep(bruto: string) {
 export function validarUf(bruto: string) {
   return (UFS as readonly string[]).includes(bruto.toUpperCase())
 }
+
+/**
+ * Máscara de digitação: formata o que já foi digitado, sem exigir o documento
+ * completo. Até 11 caracteres é CPF; daí para cima, CNPJ — que desde 2026 pode
+ * trazer letras nas doze primeiras posições.
+ */
+export function mascararCpfCnpj(bruto: string) {
+  const doc = limparDocumento(bruto).slice(0, 14)
+
+  if (doc.length <= 11 && !/[A-Z]/.test(doc)) {
+    return doc
+      .replace(/^(\d{3})(\d)/, "$1.$2")
+      .replace(/^(\d{3})\.(\d{3})(\d)/, "$1.$2.$3")
+      .replace(/^(\d{3})\.(\d{3})\.(\d{3})(\d)/, "$1.$2.$3-$4")
+  }
+
+  return doc
+    .replace(/^([0-9A-Z]{2})([0-9A-Z])/, "$1.$2")
+    .replace(/^([0-9A-Z]{2})\.([0-9A-Z]{3})([0-9A-Z])/, "$1.$2.$3")
+    .replace(/^([0-9A-Z]{2})\.([0-9A-Z]{3})\.([0-9A-Z]{3})([0-9A-Z])/, "$1.$2.$3/$4")
+    .replace(
+      /^([0-9A-Z]{2})\.([0-9A-Z]{3})\.([0-9A-Z]{3})\/([0-9A-Z]{4})([0-9A-Z])/,
+      "$1.$2.$3/$4-$5"
+    )
+}
+
+/** Máscara de digitação do CEP: 99999-999. */
+export function mascararCep(bruto: string) {
+  const cep = limparCep(bruto).slice(0, 8)
+  return cep.length > 5 ? `${cep.slice(0, 5)}-${cep.slice(5)}` : cep
+}
+
+/** Máscara de digitação do telefone, sem DDD: 99999-9999 ou 9999-9999. */
+export function mascararTelefone(bruto: string) {
+  const numero = bruto.replace(/\D/g, "").slice(0, 9)
+  if (numero.length <= 4) return numero
+  const corte = numero.length > 8 ? 5 : 4
+  return `${numero.slice(0, corte)}-${numero.slice(corte)}`
+}
+
+/**
+ * Inscrição estadual: só dígitos, ou a palavra ISENTO. O formato varia por UF
+ * (de 8 a 14 dígitos, com regras de dígito verificador diferentes em cada uma),
+ * então aqui só se guarda o que foi digitado, sem máscara — validar as 27 regras
+ * seria prometer uma conferência que este cadastro não faz.
+ */
+export function limparInscricaoEstadual(bruto: string) {
+  const valor = bruto.trim().toUpperCase()
+  if (/^ISENT[AO]$/.test(valor)) return "ISENTO"
+  return valor.replace(/\D/g, "")
+}
+
+export function validarInscricaoEstadual(bruto: string) {
+  const ie = limparInscricaoEstadual(bruto)
+  return ie === "ISENTO" || /^\d{8,14}$/.test(ie)
+}

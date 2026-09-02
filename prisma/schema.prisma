@@ -262,6 +262,23 @@ model Cliente {
   email       String?
   ddd         String?
   telefone    String?
+  /// Só dígitos, ou a palavra "ISENTO". Opcional porque pessoa física não tem, e
+  /// boa parte das jurídicas que compram aqui também não é contribuinte de ICMS.
+  /// Nenhuma consulta pública devolve IE — este campo é sempre digitado à mão.
+  inscricaoEstadual String?
+
+  /// Quem se procura na empresa, quando o telefone da razão social é uma
+  /// recepção. Separado dos campos acima porque estes vão no boleto e a pessoa
+  /// de contato não vai — é para o vendedor ligar.
+  contatoNome     String?
+  contatoTelefone String?
+  contatoEmail    String?
+
+  /// Código da loja em que o cadastro nasceu. Opcional: os cadastros anteriores
+  /// a este campo não têm como sabê-lo, e inventar uma loja seria pior do que
+  /// admitir que não se sabe. Não é escopo de acesso — cliente cadastrado numa
+  /// loja compra em qualquer uma; serve para saber de onde veio.
+  lojaCadastro String?
   /// Mesma ideia do produto: sai das listas sem sumir do histórico. Uma venda
   /// guarda nome e documento copiados, então desativar não reescreve o passado.
   ativo       Boolean  @default(true)

@@ -76,6 +76,7 @@ export default [
   route("sair", "routes/sair.tsx"),
   route("saude", "routes/saude.tsx"),
   route("cep/:cep", "routes/cep.tsx"),
+  route("cnpj/:cnpj", "routes/cnpj.tsx"),
   // Uma URL por conta do Inter (MATRIZ, NRT, SDS). A rota sem conta continua para
   // não quebrar o webhook já registrado.
   route("webhooks/inter/cobranca", "routes/webhook.cobranca.tsx", { id: "webhook-cobranca" }),
