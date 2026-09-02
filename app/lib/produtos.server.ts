@@ -1,4 +1,5 @@
 import { db } from "~/lib/db.server"
+import { validarCest, validarCfop, validarCsosn, validarOrigem } from "~/lib/fiscal"
 import { interpretarValor } from "~/lib/moeda"
 
 export type ProdutoEntrada = {
@@ -10,6 +11,14 @@ export type ProdutoEntrada = {
   precoCombo: number | null
   quantidadeCombo: number | null
   ncm: string | null
+  /**
+   * Tributação própria, quando difere do padrão da loja. Vazios na esmagadora
+   * maioria: só substituição tributária e casos de isenção precisam disso.
+   */
+  origemFiscal: string | null
+  cfop: string | null
+  csosn: string | null
+  cest: string | null
 }
 
 /**
@@ -47,6 +56,11 @@ export function lerProduto(form: FormData): ProdutoEntrada | { erro: string } {
   const preco = interpretarValor(texto(form.get("preco")))
   const ncm = texto(form.get("ncm")).replace(/\D/g, "")
 
+  const origemFiscal = texto(form.get("origemFiscal")).replace(/\D/g, "")
+  const cfop = texto(form.get("cfop")).replace(/\D/g, "")
+  const csosn = texto(form.get("csosn")).replace(/\D/g, "")
+  const cest = texto(form.get("cest")).replace(/\D/g, "")
+
   const precoComboBruto = texto(form.get("precoCombo"))
   const quantidadeComboBruta = texto(form.get("quantidadeCombo"))
   const precoCombo = precoComboBruto ? interpretarValor(precoComboBruto) : null
@@ -62,6 +76,23 @@ export function lerProduto(form: FormData): ProdutoEntrada | { erro: string } {
   // de 6 dígitos rejeita a NF-e inteira na SEFAZ, e o erro só apareceria na
   // emissão — longe daqui, com o cliente esperando.
   if (ncm && ncm.length !== 8) return { erro: "NCM precisa ter 8 dígitos" }
+
+  /*
+   * Os fiscais seguem a mesma regra do NCM: vazio é aceito (quem manda é o
+   * padrão da loja), torto não. Um CFOP de 3 dígitos derruba a nota inteira na
+   * SEFAZ, e não só o item.
+   */
+  if (origemFiscal && !validarOrigem(origemFiscal)) {
+    return { erro: "Origem é um dígito de 0 a 8 (0 = nacional)" }
+  }
+  if (cfop && !validarCfop(cfop)) return { erro: "CFOP precisa ter 4 dígitos" }
+  if (csosn && !validarCsosn(csosn)) return { erro: "CSOSN precisa ter 3 dígitos" }
+  if (cest && !validarCest(cest)) return { erro: "CEST precisa ter 7 dígitos" }
+  // O CEST só existe para descrever mercadoria de substituição tributária: sem o
+  // CSOSN que a declara, ele iria para a nota descrevendo o que ela não é.
+  if (cest && !csosn) {
+    return { erro: "CEST sem CSOSN: informe também a tributação (500, para ST)" }
+  }
 
   /*
    * Os dois campos do combo andam juntos. Preenchido pela metade seria uma
@@ -94,6 +125,10 @@ export function lerProduto(form: FormData): ProdutoEntrada | { erro: string } {
     precoCombo,
     quantidadeCombo,
     ncm: ncm || null,
+    origemFiscal: origemFiscal || null,
+    cfop: cfop || null,
+    csosn: csosn || null,
+    cest: cest || null,
   }
 }
 

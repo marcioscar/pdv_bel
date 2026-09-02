@@ -35,6 +35,7 @@ export default [
       // Sem tela: só responde a busca na tabela NCM e a reimportação.
       route("ncm", "routes/admin.ncm.tsx"),
       route("clientes", "routes/admin.clientes.tsx"),
+      route("fiscal", "routes/admin.fiscal.tsx"),
       route("fornecedores", "routes/admin.fornecedores.tsx"),
       route("estoque", "routes/admin.estoque.tsx"),
       route("ficha", "routes/admin.ficha.tsx"),

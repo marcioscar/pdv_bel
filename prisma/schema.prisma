@@ -51,6 +51,34 @@ model Loja {
   cep      String?
   telefone String?
 
+  /// ===== Emitente fiscal (NFC-e modelo 65 e NF-e modelo 55) =====
+  ///
+  /// Mora na LOJA e não no ambiente porque cada CNPJ é um emitente para a
+  /// SEFAZ: QI e QNE são matriz e filial da mesma empresa, com inscrições
+  /// estaduais e numerações próprias. Uma configuração global emitiria nota
+  /// de uma loja com o cadastro da outra.
+  ///
+  /// Certificado A1, CSC e token ficam FORA daqui, no painel da Focus NFe: são
+  /// credenciais, e este banco é lido por muita gente que não precisa delas.
+  ///
+  /// Enquanto `emiteNotaFiscal` é falso a loja segue no cupom não fiscal — é o
+  /// que permite ligar a emissão numa loja de cada vez.
+  emiteNotaFiscal   Boolean @default(false)
+  inscricaoEstadual String?
+  /// CRT: 1 Simples Nacional, 2 Simples com excesso de sublimite, 3 regime normal.
+  /// Decide se o item vai com CSOSN (Simples) ou com CST e alíquota (normal).
+  regimeTributario  Int?
+  /// Série da numeração. A sequência é da Focus; a série é do emitente, e mudá-la
+  /// depois de emitir reinicia a contagem — por isso fica cadastrada, não fixa.
+  serieNfce         Int?
+  serieNfe          Int?
+  /// O que a venda comum usa quando o produto não traz exceção. 5102 dentro do
+  /// estado, 6102 para fora — venda de mercadoria adquirida de terceiros.
+  cfopVendaInterna       String?
+  cfopVendaInterestadual String?
+  /// CSOSN padrão do Simples: 102 (tributada sem permissão de crédito).
+  csosnPadrao       String?
+
   ativo Boolean @default(true)
 
   @@map("lojas")
@@ -76,6 +104,20 @@ model Produto {
   /// aqui pelo balcão pode nascer sem ela, e travar o cadastro por causa de um
   /// código fiscal seria impedir a venda por causa da contabilidade.
   ncm       String?
+  /// Origem da mercadoria na NF-e: "0" nacional, "1" importação direta, "2"
+  /// mercado interno importado… Vazio vale como nacional, que é o caso de tudo
+  /// o que a rede vende.
+  origemFiscal String?
+  /// ===== Exceções à tributação padrão da loja =====
+  ///
+  /// Vazios na esmagadora maioria dos produtos: quem manda é o padrão do
+  /// emitente. Preenchidos só onde a regra difere — tipicamente substituição
+  /// tributária, que troca o CSOSN para 500 e o CFOP para 5405 e ainda exige o
+  /// CEST. Guardar por produto é a única forma correta: a ST é definida por
+  /// NCM, não pela loja.
+  cfop  String?
+  csosn String?
+  cest  String?
   /// Produto não é apagado: sai das buscas e do caixa, e o histórico das vendas
   /// que o incluem continua íntegro. Apagar deixaria itens órfãos no relatório.
   ativo     Boolean @default(true)

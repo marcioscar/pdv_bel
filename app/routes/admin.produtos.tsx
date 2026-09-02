@@ -94,11 +94,16 @@ type EmEdicao = {
   precoCombo: string
   quantidadeCombo: string
   ncm: string
+  origemFiscal: string
+  cfop: string
+  csosn: string
+  cest: string
 }
 
 const NOVO: EmEdicao = {
   id: null, codigo: "", descricao: "", unidade: "", preco: "",
   precoCombo: "", quantidadeCombo: "", ncm: "",
+  origemFiscal: "", cfop: "", csosn: "", cest: "",
 }
 
 export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
@@ -131,10 +136,14 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
 
   const inativos = produtos.length - produtos.filter((p) => p.ativo).length
 
+  // Depende de QUEM está em edição, não do objeto: `edicao` é recriado a cada
+  // tecla, e com ele na dependência o foco voltava para o Código a cada
+  // caractere digitado em qualquer outro campo.
+  const emEdicao = edicao ? (edicao.id ?? "novo") : null
   useEffect(() => {
-    if (edicao) primeiroCampo.current?.focus()
+    if (emEdicao) primeiroCampo.current?.focus()
     else campoBusca.current?.focus()
-  }, [edicao])
+  }, [emEdicao])
 
   useEffect(() => {
     if (!aviso) return
@@ -179,6 +188,10 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
         precoCombo: edicao.precoCombo,
         quantidadeCombo: edicao.quantidadeCombo,
         ncm: edicao.ncm,
+        origemFiscal: edicao.origemFiscal,
+        cfop: edicao.cfop,
+        csosn: edicao.csosn,
+        cest: edicao.cest,
       },
       { method: "post" }
     )
@@ -273,7 +286,40 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
             onEnter={salvar}
             className="col-span-2"
           />
-          <div className="col-span-2 flex gap-2">
+          {/* Tributação: vazia quase sempre. Quem manda é o padrão da loja, em
+              Cadastros › Fiscal — aqui só entra o produto que foge dele, que na
+              prática é o de substituição tributária. */}
+          <div className="col-span-2 self-end pb-2 text-[10px] leading-tight text-muted-foreground">
+            <span className="font-semibold uppercase tracking-wider">Tributação própria</span>
+            <br />
+            vazio = padrão da loja
+          </div>
+          <CampoEdicao
+            rotulo="Origem"
+            valor={edicao.origemFiscal}
+            onChange={(v) => setEdicao({ ...edicao, origemFiscal: v.replace(/\D/g, "").slice(0, 1) })}
+            className="col-span-1"
+          />
+          <CampoEdicao
+            rotulo="CFOP"
+            valor={edicao.cfop}
+            onChange={(v) => setEdicao({ ...edicao, cfop: v.replace(/\D/g, "").slice(0, 4) })}
+            className="col-span-1"
+          />
+          <CampoEdicao
+            rotulo="CSOSN"
+            valor={edicao.csosn}
+            onChange={(v) => setEdicao({ ...edicao, csosn: v.replace(/\D/g, "").slice(0, 3) })}
+            className="col-span-1"
+          />
+          <CampoEdicao
+            rotulo="CEST"
+            valor={edicao.cest}
+            onChange={(v) => setEdicao({ ...edicao, cest: v.replace(/\D/g, "").slice(0, 7) })}
+            className="col-span-2"
+          />
+
+          <div className="col-span-5 flex justify-end gap-2">
             <Button
               type="button"
               size="sm"
@@ -406,6 +452,10 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
                               ? formatarQuantidade(produto.quantidadeCombo)
                               : "",
                           ncm: produto.ncm ?? "",
+                          origemFiscal: produto.origemFiscal ?? "",
+                          cfop: produto.cfop ?? "",
+                          csosn: produto.csosn ?? "",
+                          cest: produto.cest ?? "",
                         })
                       }
                     >

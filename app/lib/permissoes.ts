@@ -215,6 +215,12 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         descricao: "Certificado do Inter e da SEFAZ, por loja — validade e renovação",
         somenteGerente: true,
       },
+      {
+        para: "/admin/fiscal",
+        rotulo: "Fiscal",
+        descricao: "O que a nota precisa saber de cada loja: IE, regime, CFOP e CSOSN",
+        somenteGerente: true,
+      },
     ],
   },
 ]
