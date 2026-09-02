@@ -657,15 +657,19 @@ async function emitirNaVenda(vendaId: string, operador: string) {
     const autorizada = nota?.status === "autorizado"
 
     /*
-     * O DANFE só substitui o cupom em PRODUÇÃO.
+     * O DANFE substitui o cupom na bobina em dois casos, e só neles: NFC-e, e em
+     * produção.
      *
-     * Em homologação a SEFAZ carimba "SEM VALOR FISCAL" e troca a descrição do
-     * primeiro item pela frase de teste: entregar isso ao cliente no lugar do
-     * cupom seria pior do que não emitir nada. O caminho continua sendo
-     * exercitado — a nota é emitida e fica registrada —, mas quem sai na bobina
-     * é o cupom, até o token de produção entrar.
+     * NFC-e porque o DANFE dela é do tamanho da bobina — o da NF-e é A4, e sairia
+     * espremido e ilegível na impressora térmica. A NF-e fica no botão da tela de
+     * Vendas, para o vendedor mandar para a impressora comum ou por e-mail.
+     *
+     * Produção porque em homologação a SEFAZ carimba "SEM VALOR FISCAL" e troca a
+     * descrição do primeiro item pela frase de teste: entregar isso ao cliente no
+     * lugar do cupom seria pior do que não emitir nada.
      */
-    const valeComoDocumento = autorizada && ambienteFocus() === "producao"
+    const valeComoDocumento =
+      autorizada && nota?.modelo === "nfce" && ambienteFocus() === "producao"
 
     return {
       emitida: autorizada,
@@ -675,7 +679,9 @@ async function emitirNaVenda(vendaId: string, operador: string) {
       danfe: valeComoDocumento ? `/notas/${resultado.notaId}/danfe` : null,
       numero: nota?.numero ?? null,
       modelo: nota?.modelo ?? null,
-      teste: autorizada && !valeComoDocumento,
+      // Emitida, mas o papel não sai daqui: em homologação, ou por ser NF-e.
+      teste: autorizada && ambienteFocus() !== "producao",
+      naTelaDeVendas: autorizada && nota?.modelo === "nfe",
     }
   } catch (erro) {
     console.error("[pdv] falha ao emitir a nota da venda", vendaId, erro)
@@ -1162,8 +1168,15 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     if (nota?.emitida) {
       const documento = `${nota.modelo === "nfe" ? "NF-e" : "NFC-e"} ${nota.numero ?? ""}`.trim()
       // Dizer "de teste" é o que impede alguém de achar que o balcão já está
-      // emitindo nota de verdade enquanto o token é o de homologação.
-      partes.push(nota.teste ? `${documento} (teste)` : documento)
+      // emitindo nota de verdade enquanto o token é o de homologação. E dizer
+      // onde a NF-e está evita o vendedor procurar um papel que não saiu.
+      partes.push(
+        nota.teste
+          ? `${documento} (teste)`
+          : nota.naTelaDeVendas
+            ? `${documento} — imprima em Vendas`
+            : documento
+      )
     }
 
     // A falha da nota é dita, e não escondida: a venda valeu, mas alguém precisa
