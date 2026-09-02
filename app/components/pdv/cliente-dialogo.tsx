@@ -1,14 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { useFetcher } from "react-router"
-import { Loader2, UserPlus } from "lucide-react"
+import { UserPlus } from "lucide-react"
 
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { Kbd } from "~/components/ui/kbd"
 import { Separator } from "~/components/ui/separator"
-import { formatarCpfCnpj, limparCep, UFS, validarCep } from "~/lib/documento"
-import type { EnderecoDoCep } from "~/routes/cep"
+import { FormularioCliente } from "~/components/pdv/formulario-cliente"
+import { formatarCpfCnpj } from "~/lib/documento"
 import { cn } from "~/lib/utils"
 
 export type ClienteResumo = {
@@ -59,17 +58,8 @@ export function ClienteDialogo({
   const [indice, setIndice] = useState(0)
   const [cadastrando, setCadastrando] = useState(direto)
 
-  // Os campos de endereço são controlados para o CEP poder preenchê-los.
-  const [endereco, setEndereco] = useState({ endereco: "", bairro: "", cidade: "", uf: "MG" })
-  const [cep, setCep] = useState("")
-  const [cepErro, setCepErro] = useState<string | null>(null)
-  const cepBuscado = useRef<string | null>(null)
-  const buscaCep = useFetcher<EnderecoDoCep | { erro: string }>()
-  const buscandoCep = buscaCep.state !== "idle"
-
   const campoBusca = useRef<HTMLInputElement>(null)
   const primeiroCampo = useRef<HTMLInputElement>(null)
-  const formulario = useRef<HTMLFormElement>(null)
 
   useEffect(() => {
     if (cadastrando) primeiroCampo.current?.focus()
@@ -77,35 +67,6 @@ export function ClienteDialogo({
   }, [cadastrando])
 
   useEffect(() => setIndice(0), [busca])
-
-  // Assim que o CEP fica completo, busca — sem o operador apertar nada.
-  useEffect(() => {
-    const limpo = limparCep(cep)
-    if (!validarCep(limpo) || cepBuscado.current === limpo) return
-    cepBuscado.current = limpo
-    setCepErro(null)
-    buscaCep.load(`/cep/${limpo}`)
-  }, [cep, buscaCep])
-
-  useEffect(() => {
-    if (buscaCep.state !== "idle" || !buscaCep.data) return
-
-    if ("erro" in buscaCep.data) {
-      setCepErro(buscaCep.data.erro)
-      return
-    }
-    const achado = buscaCep.data
-    setCepErro(null)
-    // Substitui os quatro campos, não só cidade/UF: preservar o que já estava
-    // deixava o bairro do CEP anterior numa cidade nova — endereço misturado,
-    // que iria para o boleto. O CEP é a fonte da verdade; dá para editar depois.
-    setEndereco({
-      endereco: achado.endereco,
-      bairro: achado.bairro,
-      cidade: achado.cidade,
-      uf: achado.uf,
-    })
-  }, [buscaCep.state, buscaCep.data])
 
   const encontrados = useMemo(() => {
     const termo = normalizar(busca)
@@ -134,15 +95,9 @@ export function ClienteDialogo({
         return
       }
 
-      if (cadastrando) {
-        // No formulário, Enter envia — mas não quando o foco está num botão.
-        if (evento.key === "Enter" && !(evento.target instanceof HTMLButtonElement)) {
-          evento.preventDefault()
-          evento.stopPropagation()
-          formulario.current?.requestSubmit()
-        }
-        return
-      }
+      // No formulário, o Enter é do próprio <form>: cadastrar de qualquer campo
+      // já é o comportamento nativo, e interceptar aqui só o duplicaria.
+      if (cadastrando) return
 
       if (evento.key === "ArrowDown" || evento.key === "ArrowUp") {
         evento.preventDefault()
@@ -184,7 +139,13 @@ export function ClienteDialogo({
       a última coisa em que se pensa ao mexer numa tela. */
       className="absolute inset-0 z-50 flex items-start justify-center bg-background/80 p-10 backdrop-blur-sm"
     >
-      <div className="w-full max-w-2xl rounded-xl border border-border bg-card p-6 shadow-xl">
+      <div
+        className={cn(
+          "w-full rounded-xl border border-border bg-card p-6 shadow-xl",
+          // O cadastro tem doze colunas; a lista de busca é uma coluna só.
+          cadastrando ? "max-w-3xl" : "max-w-2xl"
+        )}
+      >
         <div className="flex items-baseline justify-between">
           <h2 className="text-base font-semibold">
             {cadastrando ? "Novo cliente" : "Vincular cliente à venda"}
@@ -217,125 +178,45 @@ export function ClienteDialogo({
         <Separator className="my-4" />
 
         {cadastrando ? (
-          <form
-            ref={formulario}
-            onSubmit={(evento) => {
-              evento.preventDefault()
-              onCriar(new FormData(evento.currentTarget))
+          <FormularioCliente
+            gravando={gravando}
+            erro={erro}
+            primeiroCampo={primeiroCampo}
+            aoSalvar={(dados) => {
+              const formulario = new FormData()
+              for (const [campo, valor] of Object.entries(dados)) {
+                formulario.append(campo, valor)
+              }
+              onCriar(formulario)
             }}
-            className="grid grid-cols-6 gap-3"
-          >
-            <Campo
-              ref={primeiroCampo}
-              nome="nome"
-              rotulo="Nome / Razão social"
-              className="col-span-4"
-              obrigatorio
-            />
-            <Campo nome="cpfCnpj" rotulo="CPF / CNPJ" className="col-span-2" obrigatorio />
-
-            <div className="col-span-2">
-              <label
-                htmlFor="cep"
-                className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
-              >
-                CEP *
-                {buscandoCep ? <Loader2 className="size-3 animate-spin" aria-hidden /> : null}
-              </label>
-              <Input
-                id="cep"
-                name="cep"
-                value={cep}
-                onChange={(evento) => setCep(evento.target.value)}
-                required
-                inputMode="numeric"
-                autoComplete="off"
-                placeholder="30110-000"
-                aria-describedby={cepErro ? "cep-erro" : undefined}
-                className="rounded-lg"
-              />
-              {cepErro ? (
-                <p id="cep-erro" className="mt-1 text-[11px] font-medium text-destructive">
-                  {cepErro}
-                </p>
-              ) : null}
-            </div>
-            <Campo
-              nome="endereco"
-              rotulo="Endereço"
-              className="col-span-4"
-              obrigatorio
-              value={endereco.endereco}
-              onValueChange={(v) => setEndereco((a) => ({ ...a, endereco: v }))}
-            />
-
-            <Campo nome="numero" rotulo="Número" className="col-span-1" />
-            <Campo nome="complemento" rotulo="Complemento" className="col-span-2" />
-            <Campo
-              nome="bairro"
-              rotulo="Bairro"
-              className="col-span-3"
-              obrigatorio
-              value={endereco.bairro}
-              onValueChange={(v) => setEndereco((a) => ({ ...a, bairro: v }))}
-            />
-
-            <Campo
-              nome="cidade"
-              rotulo="Cidade"
-              className="col-span-3"
-              obrigatorio
-              value={endereco.cidade}
-              onValueChange={(v) => setEndereco((a) => ({ ...a, cidade: v }))}
-            />
-            <div className="col-span-1">
-              <label
-                htmlFor="uf"
-                className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
-              >
-                UF *
-              </label>
-              <select
-                id="uf"
-                name="uf"
-                required
-                value={endereco.uf}
-                onChange={(evento) => setEndereco((a) => ({ ...a, uf: evento.target.value }))}
-                className="h-9 w-full rounded-lg border border-border bg-input/50 px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
-              >
-                {UFS.map((uf) => (
-                  <option key={uf} value={uf}>
-                    {uf}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <Campo nome="ddd" rotulo="DDD" className="col-span-1" />
-            <Campo nome="telefone" rotulo="Telefone" className="col-span-1" />
-
-            <Campo nome="email" rotulo="E-mail" tipo="email" className="col-span-6" />
-
-            <div className="col-span-6 mt-1 flex items-center justify-between">
-              <span className="text-xs text-muted-foreground">
-                Os campos com * são exigidos pelo boleto.
-              </span>
-              <div className="flex gap-2">
-                <Button
-                  type="button"
-                  tabIndex={-1}
-                  variant="outline"
-                  onClick={() => setCadastrando(false)}
-                  className="rounded-lg"
-                >
-                  Voltar
-                </Button>
-                <Button type="submit" disabled={gravando} className="rounded-lg">
-                  {gravando ? "Gravando…" : "Cadastrar"}
-                  {gravando ? null : <Kbd>Enter</Kbd>}
-                </Button>
+            rodape={(salvar) => (
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">
+                  Endereço e documento são o que o boleto exige.
+                </span>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    tabIndex={-1}
+                    variant="outline"
+                    onClick={() => setCadastrando(false)}
+                    className="rounded-lg"
+                  >
+                    Voltar
+                  </Button>
+                  <Button
+                    type="button"
+                    disabled={gravando}
+                    onClick={salvar}
+                    className="rounded-lg"
+                  >
+                    {gravando ? "Gravando…" : "Cadastrar"}
+                    {gravando ? null : <Kbd>Enter</Kbd>}
+                  </Button>
+                </div>
               </div>
-            </div>
-          </form>
+            )}
+          />
         ) : (
           <>
             <Input
@@ -404,55 +285,12 @@ export function ClienteDialogo({
           </>
         )}
 
-        {erro ? (
+        {erro && !cadastrando ? (
           <p className="mt-3 text-xs font-medium text-destructive" role="alert">
             {erro}
           </p>
         ) : null}
       </div>
-    </div>
-  )
-}
-
-function Campo({
-  ref,
-  nome,
-  rotulo,
-  tipo = "text",
-  className,
-  obrigatorio,
-  value,
-  onValueChange,
-}: {
-  ref?: React.Ref<HTMLInputElement>
-  nome: string
-  rotulo: string
-  tipo?: string
-  className?: string
-  obrigatorio?: boolean
-  value?: string
-  onValueChange?: (valor: string) => void
-}) {
-  return (
-    <div className={className}>
-      <label
-        htmlFor={nome}
-        className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
-      >
-        {rotulo} {obrigatorio ? "*" : ""}
-      </label>
-      <Input
-        ref={ref}
-        id={nome}
-        name={nome}
-        type={tipo}
-        required={obrigatorio}
-        autoComplete="off"
-        className="rounded-lg"
-        {...(onValueChange
-          ? { value: value ?? "", onChange: (e) => onValueChange(e.target.value) }
-          : {})}
-      />
     </div>
   )
 }
