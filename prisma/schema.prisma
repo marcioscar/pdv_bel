@@ -985,6 +985,58 @@ model NotaFiscalRecebida {
 /// existe de verdade no banco, não um vocabulário novo — inventar uma
 /// grafia diferente ("Revenda" vs "revenda", "variável" vs "variavel") criaria
 /// uma categoria fantasma que o outro sistema não reconhece nos relatórios.
+/// A nota fiscal que a rede EMITIU — NFC-e do balcão ou NF-e do cliente empresa.
+///
+/// Nada a ver com `NotaFiscalRecebida`, que é o XML do fornecedor baixado da
+/// SEFAZ: aquela é o que entra, esta é o que sai.
+///
+/// Nasce antes da resposta da SEFAZ, com status "processando_autorizacao", e é
+/// atualizada quando o desfecho chega. Guardar só a nota autorizada perderia
+/// justamente a que deu errado — que é a que alguém precisa ver para consertar.
+model NotaFiscalEmitida {
+  id     String @id @default(auto()) @map("_id") @db.ObjectId
+  /// Nossa referência na Focus, e a trava contra emissão dupla: reenviar o mesmo
+  /// `ref` devolve a nota que já existe em vez de emitir outra.
+  ref    String @unique
+  /// "nfce" (modelo 65) ou "nfe" (modelo 55).
+  modelo String
+  /// "homologacao" | "producao". Fica gravado porque nota de homologação não
+  /// vale nada, e depois de trocar o token ninguém lembraria quais eram teste.
+  ambiente String
+
+  loja  String
+  /// A venda que originou a nota. Vazio na nota avulsa e na de transferência.
+  vendaId String? @db.ObjectId
+  /// Copiados no momento da emissão: a nota é um retrato, e o cadastro muda.
+  destinatarioNome    String?
+  destinatarioCpfCnpj String?
+  valorTotal          Float
+
+  /// processando_autorizacao | autorizado | erro_autorizacao | cancelado | denegado
+  status    String @default("processando_autorizacao")
+  numero    String?
+  serie     String?
+  /// Os 44 dígitos que identificam a nota na SEFAZ.
+  chave     String?
+  protocolo String?
+  /// Endereços na Focus — o DANFE da NFC-e é HTML, do tamanho da bobina.
+  caminhoDanfe String?
+  caminhoXml   String?
+  /// Sai impresso no DANFE da NFC-e e é o que o cliente usa para consultar.
+  qrcodeUrl    String?
+  /// A rejeição da SEFAZ por extenso, quando houve.
+  erro         String?
+
+  emitidaPor String?
+  criadaEm     DateTime @default(now())
+  atualizadaEm DateTime @updatedAt
+
+  @@index([loja, criadaEm])
+  @@index([status])
+  @@index([vendaId])
+  @@map("notas_fiscais_emitidas")
+}
+
 model Despesa {
   id            String   @id @default(auto()) @map("_id") @db.ObjectId
   conta         String

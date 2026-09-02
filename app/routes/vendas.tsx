@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { data, useFetcher, useRevalidator, useSearchParams } from "react-router"
-import { Loader2, Printer, Receipt } from "lucide-react"
+import { FileText, Loader2, Printer, Receipt } from "lucide-react"
 
 import type { Route } from "./+types/vendas"
 import { Topo } from "~/components/pdv/topo"
@@ -18,6 +18,13 @@ import {
   type CobrancaDaVenda,
 } from "~/lib/cobranca.server"
 import { cancelarVenda } from "~/lib/estoque.server"
+import { focusConfigurada } from "~/lib/focus.server"
+import {
+  atualizarStatusDaNota,
+  emitirDaVenda,
+  modeloDaVenda,
+  notasPendentes,
+} from "~/lib/nota-fiscal.server"
 import { exigirGerente, exigirUsuario } from "~/lib/sessao.server"
 import { consultarVendas, lerFiltroVendas, type FiltroVendas } from "~/lib/vendas.server"
 import { vendedoresDaLoja } from "~/lib/vendedores.server"
@@ -51,7 +58,58 @@ export async function loader({ request }: Route.LoaderArgs) {
     vendedoresDaLoja(eu.loja),
   ])
 
-  return { eu, filtro, vendedores, ...consulta }
+  /*
+   * A nota é assíncrona: sai daqui "processando" e a SEFAZ responde depois. Sem
+   * perguntar de novo ao abrir a tela, uma nota autorizada continuaria aparecendo
+   * como pendente para sempre. Só as pendentes, e em paralelo — Focus fora do ar
+   * não pode impedir a tela de abrir.
+   */
+  const pendentes = await notasPendentes(eu.loja)
+  if (pendentes.length > 0) {
+    await Promise.all(pendentes.map((nota) => atualizarStatusDaNota(nota.id)))
+  }
+
+  const emitidas = await db.notaFiscalEmitida.findMany({
+    where: { vendaId: { in: consulta.vendas.map((venda) => venda.id) } },
+    orderBy: { criadaEm: "desc" },
+  })
+
+  const notas: Record<string, {
+    modelo: string
+    status: string
+    numero: string | null
+    caminhoDanfe: string | null
+    erro: string | null
+  }> = {}
+  for (const nota of emitidas) {
+    if (!nota.vendaId || notas[nota.vendaId]) continue
+    notas[nota.vendaId] = {
+      modelo: nota.modelo,
+      status: nota.status,
+      numero: nota.numero,
+      caminhoDanfe: nota.caminhoDanfe,
+      erro: nota.erro,
+    }
+  }
+
+  return {
+    eu,
+    filtro,
+    vendedores,
+    notas,
+    // A tela só oferece emitir onde faz sentido: loja habilitada e Focus com
+    // token. Sem isso, o botão prometeria o que não pode cumprir.
+    podeEmitirNota: focusConfigurada() && Boolean(await lojaEmite(eu.loja)),
+    ...consulta,
+  }
+}
+
+async function lojaEmite(codigo: string) {
+  const loja = await db.loja.findUnique({
+    where: { codigo },
+    select: { emiteNotaFiscal: true },
+  })
+  return loja?.emiteNotaFiscal ?? false
 }
 
 export async function action({ request }: Route.ActionArgs) {
@@ -61,8 +119,10 @@ export async function action({ request }: Route.ActionArgs) {
 
   // Ver/emitir cobrança é operação de turno; cancelar desfaz faturamento e
   // estorna estoque, então é do gerente. A guarda vem antes de qualquer trabalho.
+  // Emitir nota e ver cobrança são operação de turno; cancelar desfaz
+  // faturamento, e por isso continua sendo do gerente.
   const eu =
-    acao === "cobranca"
+    acao === "cobranca" || acao === "nota"
       ? await exigirUsuario(request)
       : await exigirGerente(request, "cancelarVenda")
 
@@ -71,6 +131,23 @@ export async function action({ request }: Route.ActionArgs) {
       { ok: false as const, tipo: "cancelamento" as const, erro: "Venda inválida" },
       { status: 400 }
     )
+  }
+
+  if (acao === "nota") {
+    const resultado = await emitirDaVenda(vendaId, { emitidaPor: eu.nome })
+    return resultado.ok
+      ? {
+          ok: true as const,
+          tipo: "nota" as const,
+          mensagem:
+            resultado.status === "autorizado"
+              ? `${resultado.modelo.toUpperCase()} autorizada`
+              : `${resultado.modelo.toUpperCase()} enviada — aguardando a SEFAZ`,
+        }
+      : data(
+          { ok: false as const, tipo: "nota" as const, erro: resultado.erro },
+          { status: 400 }
+        )
   }
 
   // Ver/emitir a cobrança de uma venda a prazo.
@@ -149,7 +226,8 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Vendas({ loaderData }: Route.ComponentProps) {
-  const { eu, filtro, vendedores, vendas, total, foraDoPeriodo, paginas, resumo } = loaderData
+  const { eu, filtro, vendedores, vendas, total, foraDoPeriodo, paginas, resumo, notas, podeEmitirNota } =
+    loaderData
   const podeCancelar = ehGerente(eu.papel)
 
   const [params, setParams] = useSearchParams()
@@ -260,6 +338,29 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
       resposta.ok ? "sucesso" : "erro"
     )
   }, [fetcher.state, fetcher.data, avisar])
+
+  /**
+   * Emite a nota da venda selecionada.
+   *
+   * O modelo não é escolha de quem clica: cliente empresa e venda a prazo vão de
+   * NF-e, o resto do balcão de NFC-e. Oferecer a escolha seria oferecer a chance
+   * de emitir o documento errado.
+   */
+  const emitirNotaFiscal = useCallback(() => {
+    if (!ativa || cancelando) return
+    if (ativa.canceladaEm) {
+      avisar(`Venda #${ativa.numero} está cancelada`, "erro")
+      return
+    }
+
+    const jaTem = notas[ativa.id]
+    if (jaTem?.caminhoDanfe && jaTem.status === "autorizado") {
+      window.open(jaTem.caminhoDanfe, "_blank", "noopener")
+      return
+    }
+
+    fetcher.submit({ acao: "nota", vendaId: ativa.id }, { method: "post" })
+  }, [ativa, cancelando, avisar, fetcher, notas])
 
   const verCobranca = useCallback(() => {
     if (!ativa || cancelando) return
@@ -688,7 +789,7 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                               cancelada
                             </Badge>
                           ) : (
-                            <span className="text-xs text-muted-foreground">—</span>
+                            <SeloDaNota nota={notas[venda.id]} />
                           )}
                         </td>
                       </tr>
@@ -715,6 +816,14 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
 
           <div className="flex items-center justify-between border-t border-border px-5 py-3">
             <div className="flex items-center gap-2">
+              {podeEmitirNota ? (
+                <BotaoNota
+                  nota={ativa ? notas[ativa.id] : undefined}
+                  modelo={ativa ? modeloDaVenda(ativa) : "nfce"}
+                  desabilitado={!ativa || Boolean(ativa?.canceladaEm) || cancelando}
+                  onClick={emitirNotaFiscal}
+                />
+              ) : null}
               <Button
                 type="button"
                 tabIndex={-1}
@@ -847,6 +956,110 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
         </div>
       ) : null}
     </main>
+  )
+}
+
+type NotaDaVenda = {
+  modelo: string
+  status: string
+  numero: string | null
+  caminhoDanfe: string | null
+  erro: string | null
+}
+
+/**
+ * O que aconteceu com a nota daquela venda, em duas palavras.
+ *
+ * "processando" é estado normal e passageiro — a SEFAZ responde em segundos —,
+ * então ele não é vermelho: quem vê vermelho vai atrás de alguém, e não há o que
+ * fazer enquanto a fila anda.
+ */
+function SeloDaNota({ nota }: { nota: NotaDaVenda | undefined }) {
+  if (!nota) return <span className="text-xs text-muted-foreground">—</span>
+
+  const rotulo = nota.modelo === "nfe" ? "NF-e" : "NFC-e"
+
+  if (nota.status === "autorizado") {
+    const texto = nota.numero ? `${rotulo} ${nota.numero}` : rotulo
+    return nota.caminhoDanfe ? (
+      <a
+        href={nota.caminhoDanfe}
+        target="_blank"
+        rel="noopener"
+        onClick={(evento) => evento.stopPropagation()}
+        className="text-xs font-medium underline underline-offset-2"
+      >
+        {texto}
+      </a>
+    ) : (
+      <span className="text-xs font-medium">{texto}</span>
+    )
+  }
+
+  if (nota.status === "cancelado") {
+    return (
+      <Badge variant="outline" className="text-[10px]">
+        {rotulo} cancelada
+      </Badge>
+    )
+  }
+
+  if (nota.status === "erro_autorizacao" || nota.status === "denegado") {
+    return (
+      <span className="text-xs font-medium text-destructive" title={nota.erro ?? undefined}>
+        {rotulo} recusada
+      </span>
+    )
+  }
+
+  return <span className="text-xs text-muted-foreground">{rotulo} na fila…</span>
+}
+
+/**
+ * Um botão só para os dois momentos: emitir, e depois abrir o que foi emitido.
+ * Separá-los deixaria um botão morto na tela metade do tempo.
+ */
+function BotaoNota({
+  nota,
+  modelo,
+  desabilitado,
+  onClick,
+}: {
+  nota: NotaDaVenda | undefined
+  modelo: string
+  desabilitado: boolean
+  onClick: () => void
+}) {
+  const autorizada = nota?.status === "autorizado"
+  const pendente = nota?.status === "processando_autorizacao"
+  const rotulo = (nota?.modelo ?? modelo) === "nfe" ? "NF-e" : "NFC-e"
+
+  return (
+    <Button
+      type="button"
+      tabIndex={-1}
+      variant="outline"
+      size="sm"
+      disabled={desabilitado || pendente}
+      onClick={onClick}
+      title={
+        autorizada
+          ? "Abre o documento auxiliar da nota autorizada"
+          : nota?.erro
+            ? nota.erro
+            : `Emite a ${rotulo} desta venda`
+      }
+      className="rounded-lg"
+    >
+      <FileText className="size-4" aria-hidden />
+      {autorizada
+        ? `Ver ${rotulo}`
+        : pendente
+          ? `${rotulo} na fila…`
+          : nota?.status === "erro_autorizacao"
+            ? `Reenviar ${rotulo}`
+            : `Emitir ${rotulo}`}
+    </Button>
   )
 }
 

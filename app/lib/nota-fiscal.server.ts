@@ -1,0 +1,364 @@
+import { db } from "~/lib/db.server"
+import {
+  ambienteFocus,
+  cancelarNota,
+  consultarNota,
+  emitirNota,
+  ErroFocus,
+  type ModeloNota,
+  type RespostaFocus,
+} from "~/lib/focus.server"
+import { ehSimples, pagamentoNaNota, pendenciasDoEmitente, tributacaoDoItem } from "~/lib/fiscal"
+
+/**
+ * A emissão da nota a partir de uma venda já fechada.
+ *
+ * Depois da venda, e não durante: a venda existe, o dinheiro entrou e o estoque
+ * saiu. Se a SEFAZ recusar ou demorar, é a nota que fica pendente — nunca a
+ * venda, que já aconteceu no mundo.
+ *
+ * A frase do Simples nas informações adicionais não é enfeite: a LC 123 exige
+ * que a nota do optante diga que não gera crédito, e a falta dela é apontamento
+ * na fiscalização.
+ */
+const AVISO_SIMPLES =
+  "Documento emitido por ME ou EPP optante pelo Simples Nacional. " +
+  "Não gera direito a crédito fiscal de IPI."
+
+const OBJECT_ID = /^[0-9a-fA-F]{24}$/
+
+export type ResultadoEmissao =
+  | { ok: true; notaId: string; modelo: ModeloNota; status: string }
+  | { ok: false; erro: string }
+
+function arredondar(valor: number) {
+  return Math.round(valor * 100) / 100
+}
+
+/**
+ * O desconto da venda é do total; na nota ele é de cada item, e a soma tem que
+ * bater com o total ao centavo — divergência de um centavo é rejeição da SEFAZ.
+ * Por isso o rateio é proporcional e a sobra da divisão vai no último item.
+ */
+function ratearDesconto(subtotais: number[], desconto: number): number[] {
+  if (desconto <= 0) return subtotais.map(() => 0)
+
+  const soma = subtotais.reduce((total, valor) => total + valor, 0)
+  if (soma <= 0) return subtotais.map(() => 0)
+
+  const parcelas = subtotais.map((valor) => arredondar((valor / soma) * desconto))
+  const sobra = arredondar(desconto - parcelas.reduce((t, v) => t + v, 0))
+  parcelas[parcelas.length - 1] = arredondar(parcelas[parcelas.length - 1] + sobra)
+
+  return parcelas
+}
+
+/**
+ * Qual documento a venda pede.
+ *
+ * Cliente empresa e venda a prazo vão de NF-e: a primeira porque o comprador
+ * precisa da nota para se creditar, a segunda porque a cobrança fica registrada
+ * no nome dele. O resto do balcão é NFC-e, que é o cupom fiscal.
+ */
+export function modeloDaVenda(venda: {
+  forma: string
+  clienteCpfCnpj: string | null
+}): ModeloNota {
+  const documento = (venda.clienteCpfCnpj ?? "").replace(/\D/g, "")
+  if (documento.length === 14) return "nfe"
+  if (venda.forma === "prazo") return "nfe"
+  return "nfce"
+}
+
+/** Referência da nota na Focus. Determinística: a mesma venda dá o mesmo ref. */
+function refDaVenda(vendaId: string, modelo: ModeloNota) {
+  return `${modelo}-${vendaId}`
+}
+
+function daResposta(resposta: RespostaFocus) {
+  const erros = Array.isArray(resposta.erros) ? resposta.erros : []
+  const mensagemDeErro =
+    erros
+      .map((e) => [e.campo, e.mensagem].filter(Boolean).join(": "))
+      .filter(Boolean)
+      .join(" · ") || null
+
+  return {
+    status: typeof resposta.status === "string" ? resposta.status : "processando_autorizacao",
+    numero: resposta.numero ?? null,
+    serie: resposta.serie ?? null,
+    chave: resposta.chave_nfe ?? null,
+    protocolo: resposta.numero_protocolo ?? null,
+    caminhoDanfe: resposta.caminho_danfe ?? null,
+    caminhoXml: resposta.caminho_xml_nota_fiscal ?? null,
+    qrcodeUrl: resposta.qrcode_url ?? null,
+    erro: mensagemDeErro ?? resposta.mensagem_sefaz ?? null,
+  }
+}
+
+export async function emitirDaVenda(
+  vendaId: string,
+  { emitidaPor }: { emitidaPor: string }
+): Promise<ResultadoEmissao> {
+  if (!OBJECT_ID.test(vendaId)) return { ok: false, erro: "Venda inválida" }
+
+  const venda = await db.venda.findUnique({ where: { id: vendaId } })
+  if (!venda) return { ok: false, erro: "Venda não encontrada" }
+  if (venda.canceladaEm) return { ok: false, erro: "Venda cancelada não gera nota" }
+
+  const loja = await db.loja.findUnique({ where: { codigo: venda.loja } })
+  if (!loja) return { ok: false, erro: `Loja ${venda.loja} não cadastrada` }
+  if (!loja.emiteNotaFiscal) {
+    return { ok: false, erro: `${loja.nome} ainda não emite nota — ligue em Cadastros › Fiscal` }
+  }
+
+  const faltando = pendenciasDoEmitente(loja)
+  if (faltando.length > 0) {
+    return { ok: false, erro: `Cadastro fiscal de ${loja.codigo} incompleto: falta ${faltando.join(", ")}` }
+  }
+
+  const modelo = modeloDaVenda(venda)
+  const ref = refDaVenda(vendaId, modelo)
+
+  /*
+   * A trava contra nota dupla é dupla também: aqui, para não gastar a chamada, e
+   * na própria Focus, pelo `ref` — que devolve a nota existente em vez de emitir
+   * outra caso este primeiro filtro escape numa corrida.
+   */
+  const jaEmitida = await db.notaFiscalEmitida.findUnique({ where: { ref } })
+  if (jaEmitida && jaEmitida.status !== "erro_autorizacao") {
+    return { ok: false, erro: `Esta venda já tem ${modelo.toUpperCase()} ${jaEmitida.status}` }
+  }
+
+  const cliente = venda.clienteId
+    ? await db.cliente.findUnique({ where: { id: venda.clienteId } })
+    : null
+
+  if (modelo === "nfe" && !cliente) {
+    return { ok: false, erro: "NF-e precisa do cliente: vincule um cadastro à venda" }
+  }
+
+  // Os dados fiscais são do PRODUTO, e o item da venda guarda só o retrato
+  // comercial. Sem o NCM não há nota — e é por item, não pela venda inteira.
+  const produtos = await db.produto.findMany({
+    where: { id: { in: venda.itens.map((item) => item.produtoId) } },
+  })
+  const porId = new Map(produtos.map((p) => [p.id, p]))
+
+  const semNcm = venda.itens.filter((item) => !porId.get(item.produtoId)?.ncm)
+  if (semNcm.length > 0) {
+    return {
+      ok: false,
+      erro: `Sem NCM: ${semNcm.map((i) => i.codigo).join(", ")} — a SEFAZ recusa a nota inteira`,
+    }
+  }
+
+  const ufDestino = cliente?.uf || loja.uf || "DF"
+  const interestadual = ufDestino !== (loja.uf ?? "DF")
+  const descontos = ratearDesconto(
+    venda.itens.map((item) => item.subtotal),
+    venda.desconto
+  )
+
+  const items = venda.itens.map((item, i) => {
+    const produto = porId.get(item.produtoId)!
+    const tributacao = tributacaoDoItem(produto, loja, { interestadual })
+
+    return {
+      numero_item: i + 1,
+      codigo_produto: item.codigo,
+      descricao: item.descricao,
+      codigo_ncm: produto.ncm,
+      cfop: tributacao.cfop,
+      unidade_comercial: item.unidade,
+      unidade_tributavel: item.unidade,
+      quantidade_comercial: item.quantidade,
+      quantidade_tributavel: item.quantidade,
+      valor_unitario_comercial: item.preco,
+      valor_unitario_tributavel: item.preco,
+      valor_bruto: arredondar(item.subtotal),
+      valor_desconto: descontos[i] || undefined,
+      icms_origem: tributacao.origem,
+      icms_situacao_tributaria: tributacao.csosn,
+      codigo_cest: tributacao.cest ?? undefined,
+      inclui_no_total: 1,
+    }
+  })
+
+  const valorProdutos = arredondar(
+    venda.itens.reduce((total, item) => total + item.subtotal, 0)
+  )
+
+  const comum = {
+    data_emissao: dataComFuso(venda.criadaEm),
+    natureza_operacao: modelo === "nfce" ? "VENDA AO CONSUMIDOR" : "VENDA DE MERCADORIA",
+    tipo_documento: 1, // saída
+    finalidade_emissao: 1, // normal
+    presenca_comprador: "1", // operação presencial
+    modalidade_frete: "9", // sem frete
+    local_destino: interestadual ? "2" : "1",
+    cnpj_emitente: loja.cnpj,
+    nome_emitente: loja.razaoSocial,
+    inscricao_estadual_emitente: loja.inscricaoEstadual,
+    serie: (modelo === "nfce" ? loja.serieNfce : loja.serieNfe) ?? undefined,
+    valor_produtos: valorProdutos,
+    valor_desconto: venda.desconto || undefined,
+    valor_total: arredondar(venda.total),
+    informacoes_adicionais_contribuinte: ehSimples(loja.regimeTributario)
+      ? AVISO_SIMPLES
+      : undefined,
+    items,
+  }
+
+  const documentoCliente = (cliente?.cpfCnpj ?? "").replace(/\D/g, "")
+
+  const payload =
+    modelo === "nfce"
+      ? {
+          ...comum,
+          // Na NFC-e o consumidor é opcional: sem CPF, sai a nota "sem
+          // identificação do destinatário", que é o caso da maioria do balcão.
+          ...(documentoCliente.length === 11
+            ? { cpf_destinatario: documentoCliente, nome_destinatario: cliente!.nome }
+            : {}),
+          formas_pagamento: [
+            { forma_pagamento: pagamentoNaNota(venda.forma), valor_pagamento: arredondar(venda.total) },
+          ],
+        }
+      : {
+          ...comum,
+          nome_destinatario: cliente!.nome,
+          ...(documentoCliente.length === 14
+            ? { cnpj_destinatario: documentoCliente }
+            : { cpf_destinatario: documentoCliente }),
+          /*
+           * 1 contribuinte com IE, 2 isento, 9 não contribuinte. É o campo que a
+           * inscrição estadual do cadastro alimenta — e mandar 1 sem IE, ou IE
+           * sem o indicador, derruba a nota.
+           */
+          indicador_inscricao_estadual_destinatario: indicadorDeIe(cliente!.inscricaoEstadual),
+          ...(cliente!.inscricaoEstadual && cliente!.inscricaoEstadual !== "ISENTO"
+            ? { inscricao_estadual_destinatario: cliente!.inscricaoEstadual }
+            : {}),
+          logradouro_destinatario: cliente!.endereco,
+          numero_destinatario: cliente!.numero || "S/N",
+          complemento_destinatario: cliente!.complemento || undefined,
+          bairro_destinatario: cliente!.bairro,
+          municipio_destinatario: cliente!.cidade,
+          uf_destinatario: cliente!.uf,
+          cep_destinatario: cliente!.cep,
+          telefone_destinatario:
+            cliente!.ddd && cliente!.telefone ? `${cliente!.ddd}${cliente!.telefone}` : undefined,
+          email_destinatario: cliente!.email || undefined,
+          consumidor_final: documentoCliente.length === 14 ? 0 : 1,
+        }
+
+  const ambiente = ambienteFocus()
+
+  // A nota nasce antes da resposta: se a chamada cair no meio, fica o registro
+  // de que houve tentativa — e o `ref` impede que a próxima vire nota dupla.
+  const nota = await db.notaFiscalEmitida.upsert({
+    where: { ref },
+    create: {
+      ref,
+      modelo,
+      ambiente,
+      loja: venda.loja,
+      vendaId,
+      destinatarioNome: cliente?.nome ?? null,
+      destinatarioCpfCnpj: documentoCliente || null,
+      valorTotal: venda.total,
+      emitidaPor,
+    },
+    update: { status: "processando_autorizacao", erro: null, ambiente, emitidaPor },
+  })
+
+  try {
+    const resposta = await emitirNota(modelo, ref, payload)
+    const dados = daResposta(resposta)
+
+    await db.notaFiscalEmitida.update({ where: { id: nota.id }, data: dados })
+    return { ok: true, notaId: nota.id, modelo, status: dados.status }
+  } catch (erro) {
+    const mensagem =
+      erro instanceof ErroFocus ? erro.message : "Falha ao falar com a Focus NFe"
+
+    await db.notaFiscalEmitida.update({
+      where: { id: nota.id },
+      data: { status: "erro_autorizacao", erro: mensagem },
+    })
+
+    return { ok: false, erro: mensagem }
+  }
+}
+
+/** 1 contribuinte com IE, 2 isento, 9 não contribuinte (o consumidor comum). */
+function indicadorDeIe(inscricao: string | null) {
+  if (!inscricao) return 9
+  if (inscricao === "ISENTO") return 2
+  return 1
+}
+
+/**
+ * A SEFAZ compara a data de emissão com o relógio dela e recusa nota "do
+ * futuro". Brasília é UTC-3 fixo; sem o fuso explícito, um horário em UTC chega
+ * três horas adiantado.
+ */
+function dataComFuso(data: Date) {
+  const deslocada = new Date(data.getTime() - 3 * 60 * 60 * 1000)
+  return deslocada.toISOString().replace(/\.\d{3}Z$/, "-03:00")
+}
+
+/** Busca na Focus o desfecho de uma nota que ficou pendente. */
+export async function atualizarStatusDaNota(notaId: string) {
+  const nota = await db.notaFiscalEmitida.findUnique({ where: { id: notaId } })
+  if (!nota) return
+
+  try {
+    const resposta = await consultarNota(nota.modelo as ModeloNota, nota.ref)
+    await db.notaFiscalEmitida.update({ where: { id: notaId }, data: daResposta(resposta) })
+  } catch (erro) {
+    // Focus fora do ar não é motivo para marcar a nota como recusada: o status
+    // antigo continua valendo, e a próxima consulta tenta de novo.
+    console.error("[nota-fiscal] falha ao consultar", nota.ref, erro)
+  }
+}
+
+/** As notas ainda sem desfecho, para a tela perguntar por elas ao abrir. */
+export function notasPendentes(loja: string, limite = 10) {
+  return db.notaFiscalEmitida.findMany({
+    where: { loja, status: "processando_autorizacao" },
+    select: { id: true },
+    take: limite,
+  })
+}
+
+export async function cancelarNotaDaVenda(
+  vendaId: string,
+  justificativa: string
+): Promise<{ ok: true } | { ok: false; erro: string }> {
+  const nota = await db.notaFiscalEmitida.findFirst({
+    where: { vendaId, status: "autorizado" },
+  })
+  if (!nota) return { ok: false, erro: "Esta venda não tem nota autorizada" }
+
+  // A SEFAZ exige 15 caracteres; menos que isso volta como rejeição, depois da
+  // viagem.
+  if (justificativa.trim().length < 15) {
+    return { ok: false, erro: "A justificativa do cancelamento precisa de 15 letras ou mais" }
+  }
+
+  try {
+    const resposta = await cancelarNota(nota.modelo as ModeloNota, nota.ref, justificativa.trim())
+    await db.notaFiscalEmitida.update({
+      where: { id: nota.id },
+      data: { ...daResposta(resposta), status: "cancelado" },
+    })
+    return { ok: true }
+  } catch (erro) {
+    return {
+      ok: false,
+      erro: erro instanceof ErroFocus ? erro.message : "Falha ao cancelar na Focus NFe",
+    }
+  }
+}
