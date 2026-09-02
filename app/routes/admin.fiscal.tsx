@@ -128,21 +128,38 @@ export async function action({ request }: Route.ActionArgs) {
       )
     }
 
-    try {
-      // Um gatilho por modelo: a Focus separa os eventos, e sem os dois só um
-      // dos documentos avisaria.
-      await criarGatilho({ evento: "nfe", url, cnpj, segredo })
-      await criarGatilho({ evento: "nfce", url, cnpj, segredo })
-      return { ok: true as const, mensagem: "A Focus passa a avisar quando a SEFAZ responder" }
-    } catch (erro) {
-      return data(
-        {
-          ok: false as const,
-          erro: erro instanceof Error ? erro.message : "Falha ao cadastrar o aviso na Focus",
-        },
-        { status: 400 }
-      )
+    /*
+     * Um gatilho por modelo: a Focus separa os eventos, e sem os dois só um dos
+     * documentos avisaria. Cada um é tentado por conta própria — parar no
+     * primeiro deixava o segundo por cadastrar justamente quando o primeiro já
+     * existia, que é o caso mais comum de todos.
+     *
+     * "Já existe" não é falha: é o estado desejado, alcançado antes.
+     */
+    const feitos: string[] = []
+    const jaHavia: string[] = []
+    const falhas: string[] = []
+
+    for (const evento of ["nfe", "nfce"] as const) {
+      try {
+        await criarGatilho({ evento, url, cnpj, segredo })
+        feitos.push(evento.toUpperCase())
+      } catch (erro) {
+        const mensagem = erro instanceof Error ? erro.message : "falha"
+        if (/já existe|ja existe|already exists/i.test(mensagem)) jaHavia.push(evento.toUpperCase())
+        else falhas.push(`${evento.toUpperCase()}: ${mensagem}`)
+      }
     }
+
+    if (falhas.length > 0) {
+      return data({ ok: false as const, erro: falhas.join(" · ") }, { status: 400 })
+    }
+
+    const partes = []
+    if (feitos.length > 0) partes.push(`aviso cadastrado para ${feitos.join(" e ")}`)
+    if (jaHavia.length > 0) partes.push(`${jaHavia.join(" e ")} já tinha`)
+
+    return { ok: true as const, mensagem: `${partes.join(" · ")} — a nota se atualiza sozinha` }
   }
 
   const resultado = await salvarEmitente(codigo, lerEmitente(form))
@@ -477,7 +494,11 @@ function Avisos({
             </p>
           ) : focus.jaAvisa ? (
             <p className="mt-1 text-xs text-muted-foreground">
-              Cadastrado — a nota se atualiza sozinha quando a SEFAZ responde.
+              Cadastrado para {focus.gatilhos
+                .filter((g) => g.url === focus.urlDoAviso)
+                .map((g) => g.event.toUpperCase())
+                .join(" e ")}{" "}
+              — a nota se atualiza sozinha quando a SEFAZ responde.
             </p>
           ) : (
             <p className="mt-1 text-xs text-muted-foreground">
