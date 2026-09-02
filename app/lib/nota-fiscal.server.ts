@@ -12,6 +12,7 @@ import {
 import {
   ehSimples,
   modeloDaVenda,
+  PIS_COFINS_SIMPLES,
   pagamentoNaNota,
   pendenciasDoEmitente,
   tributacaoDoItem,
@@ -171,6 +172,16 @@ export async function emitirDaVenda(
       icms_origem: tributacao.origem,
       icms_situacao_tributaria: tributacao.csosn,
       codigo_cest: tributacao.cest ?? undefined,
+      // Zerados, mas presentes: no Simples não há destaque, e a nota precisa
+      // dizer isso item a item.
+      pis_situacao_tributaria: PIS_COFINS_SIMPLES,
+      pis_base_calculo: 0,
+      pis_aliquota_porcentual: 0,
+      pis_valor: 0,
+      cofins_situacao_tributaria: PIS_COFINS_SIMPLES,
+      cofins_base_calculo: 0,
+      cofins_aliquota_porcentual: 0,
+      cofins_valor: 0,
       inclui_no_total: 1,
     }
   })

@@ -37,6 +37,23 @@ export const CSOSN_ST = "500"
 /** Mercadoria nacional. */
 export const ORIGEM_NACIONAL = "0"
 
+/**
+ * PIS e COFINS do optante do Simples.
+ *
+ * A NF-e exige o grupo dos dois em CADA item — a rejeição é literalmente "NF-e
+ * sem grupo do PIS", e derruba a nota inteira. Quem é do Simples não destaca
+ * esses tributos (eles estão dentro da guia única), mas precisa declarar isso:
+ * é o que o CST 49, "outras operações de saída", diz, com base, alíquota e valor
+ * zerados.
+ *
+ * A NFC-e passa sem porque a Focus preenche um padrão; mandar explícito nos dois
+ * documentos é o que faz a nota depender do que está escrito aqui, e não de um
+ * default de terceiro que pode mudar.
+ *
+ * Se o contador pedir outro CST, é este número que muda.
+ */
+export const PIS_COFINS_SIMPLES = "49"
+
 /** CRT — o regime que o emitente declara na nota. */
 export const REGIMES = [
   { id: 1, rotulo: "Simples Nacional", detalhe: "item vai com CSOSN, sem destaque de ICMS" },
