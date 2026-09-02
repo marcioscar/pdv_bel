@@ -76,6 +76,11 @@ model Loja {
   /// estado, 6102 para fora — venda de mercadoria adquirida de terceiros.
   cfopVendaInterna       String?
   cfopVendaInterestadual String?
+  /// Mercadoria que vai para outro estabelecimento da rede não é venda: é
+  /// transferência, e sai com CFOP próprio (5152 dentro do estado). QI e QNE são
+  /// CNPJs diferentes, então a carga entre elas precisa de nota — e a nota
+  /// precisa dizer que é transferência, não venda ao consumidor.
+  cfopTransferencia      String?
   /// CSOSN padrão do Simples: 102 (tributada sem permissão de crédito).
   csosnPadrao       String?
 

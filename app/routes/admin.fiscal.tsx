@@ -8,9 +8,9 @@ import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { formatarCpfCnpj } from "~/lib/documento"
 import {
+  CFOP_TRANSFERENCIA,
   CFOP_VENDA_INTERESTADUAL,
   CFOP_VENDA_INTERNA,
-  CSOSN_PADRAO,
   pendenciasDoEmitente,
   REGIMES,
 } from "~/lib/fiscal"
@@ -49,6 +49,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       serieNfe: loja.serieNfe,
       cfopVendaInterna: loja.cfopVendaInterna ?? "",
       cfopVendaInterestadual: loja.cfopVendaInterestadual ?? "",
+      cfopTransferencia: loja.cfopTransferencia ?? "",
       csosnPadrao: loja.csosnPadrao ?? "",
       pendencias: pendenciasDoEmitente(loja),
     })),
@@ -113,8 +114,9 @@ export default function AdminFiscal({ loaderData }: Route.ComponentProps) {
 
       <div className="flex items-center justify-between border-t border-border px-5 py-2.5 text-xs">
         <span className="text-muted-foreground">
-          CFOP, CSOSN e substituição tributária são definição do contador — o
-          sistema só repete o que estiver aqui
+          Carga entre lojas da rede sai como transferência, não como venda ·
+          CFOP e CSOSN são definição do contador — o sistema só repete o que
+          estiver aqui
         </span>
         {aviso ? (
           <span
@@ -147,6 +149,7 @@ function Emitente({
     serieNfe: loja.serieNfe ? String(loja.serieNfe) : "",
     cfopVendaInterna: loja.cfopVendaInterna,
     cfopVendaInterestadual: loja.cfopVendaInterestadual,
+    cfopTransferencia: loja.cfopTransferencia,
     csosnPadrao: loja.csosnPadrao,
   })
 
@@ -281,14 +284,21 @@ function Emitente({
           className="col-span-2"
         />
         <Campo
+          rotulo="CFOP transferência"
+          valor={form.cfopTransferencia}
+          onChange={(v) => alterar({ cfopTransferencia: v.replace(/\D/g, "").slice(0, 4) })}
+          placeholder={CFOP_TRANSFERENCIA}
+          className="col-span-2"
+        />
+        <Campo
           rotulo="CSOSN padrão"
           valor={form.csosnPadrao}
-          onChange={(v) => alterar({ csosnPadrao: v.replace(/\D/g, "").slice(0, 3) })}
-          placeholder={CSOSN_PADRAO}
+          onChange={(v) => alterar({ csosnPadrao: v.replace(/\D/g, "").slice(0, 4) })}
+          placeholder="0102"
           className="col-span-2"
         />
 
-        <div className="col-span-6 flex items-end justify-end">
+        <div className="col-span-4 flex items-end justify-end">
           <Button type="button" size="sm" disabled={gravando} onClick={salvar} className="rounded-lg">
             <Check className="size-4" />
             {gravando ? "Salvando…" : "Salvar"}

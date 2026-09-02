@@ -19,6 +19,15 @@ export const CFOP_VENDA_INTERNA = "5102"
 export const CFOP_VENDA_INTERESTADUAL = "6102"
 /** Venda de mercadoria já com o ICMS retido por substituição tributária. */
 export const CFOP_VENDA_ST = "5405"
+/**
+ * Transferência de mercadoria adquirida de terceiros para outro estabelecimento
+ * da mesma empresa, dentro do estado.
+ *
+ * É o caso da carga que sai da QI para a QNE: são CNPJs diferentes (matriz e
+ * filial), a mercadoria muda de estabelecimento e por isso precisa de nota — mas
+ * ninguém comprou nada, e uma nota de venda ali inventaria faturamento.
+ */
+export const CFOP_TRANSFERENCIA = "5152"
 
 /** Simples Nacional, tributada sem permissão de crédito de ICMS. */
 export const CSOSN_PADRAO = "102"
@@ -45,10 +54,27 @@ export function ehSimples(regime: number | null | undefined) {
   return regime === 1 || regime === 2
 }
 
+/**
+ * O CSOSN escrito com quatro dígitos, como aparece na maioria dos sistemas e na
+ * conversa com o contador: "0102" é a ORIGEM (0, nacional) colada no CSOSN
+ * (102). A Focus quer os dois separados — `icms_origem` e
+ * `icms_situacao_tributaria` —, então quem digita do jeito que conhece não pode
+ * acabar com um "0102" indo inteiro para o campo errado.
+ *
+ * Três dígitos passam intactos, com a origem em branco: quem digitou "102" está
+ * falando só do CSOSN.
+ */
+export function separarOrigemDoCsosn(bruto: string): { origem: string | null; csosn: string } {
+  const so = bruto.replace(/\D/g, "")
+  if (so.length === 4) return { origem: so[0], csosn: so.slice(1) }
+  return { origem: null, csosn: so }
+}
+
 /** O que a loja usa quando o produto não traz exceção. */
 export type PadraoDaLoja = {
   cfopVendaInterna: string | null
   cfopVendaInterestadual: string | null
+  cfopTransferencia: string | null
   csosnPadrao: string | null
 }
 
@@ -79,20 +105,36 @@ export type TributacaoDoItem = {
 export function tributacaoDoItem(
   produto: ExcecaoDoProduto,
   loja: PadraoDaLoja,
-  { interestadual = false }: { interestadual?: boolean } = {}
+  {
+    interestadual = false,
+    transferencia = false,
+  }: { interestadual?: boolean; transferencia?: boolean } = {}
 ): TributacaoDoItem {
-  const csosn = produto.csosn || loja.csosnPadrao || CSOSN_PADRAO
+  const doProduto = separarOrigemDoCsosn(produto.csosn ?? "")
+  const daLoja = separarOrigemDoCsosn(loja.csosnPadrao ?? "")
+  const csosn = doProduto.csosn || daLoja.csosn || CSOSN_PADRAO
 
-  const padrao = interestadual
-    ? loja.cfopVendaInterestadual || CFOP_VENDA_INTERESTADUAL
-    : loja.cfopVendaInterna || CFOP_VENDA_INTERNA
+  const padrao = transferencia
+    ? loja.cfopTransferencia || CFOP_TRANSFERENCIA
+    : interestadual
+      ? loja.cfopVendaInterestadual || CFOP_VENDA_INTERESTADUAL
+      : loja.cfopVendaInterna || CFOP_VENDA_INTERNA
 
-  const cfop = produto.cfop || (csosn === CSOSN_ST && !interestadual ? CFOP_VENDA_ST : padrao)
+  /*
+   * A dedução do 5405 vale só para VENDA: transferência de mercadoria com ICMS
+   * retido tem CFOP próprio (5409), e adivinhar ali seria adivinhar errado —
+   * quem tiver esse caso cadastra o CFOP no produto.
+   */
+  const cfop =
+    produto.cfop ||
+    (csosn === CSOSN_ST && !interestadual && !transferencia ? CFOP_VENDA_ST : padrao)
 
   return {
     cfop,
     csosn,
-    origem: produto.origemFiscal || ORIGEM_NACIONAL,
+    // A origem tem três fontes, nesta ordem: o campo próprio do produto, o
+    // primeiro dígito do CSOSN de quatro casas, e nacional.
+    origem: produto.origemFiscal || doProduto.origem || daLoja.origem || ORIGEM_NACIONAL,
     cest: produto.cest || null,
   }
 }
@@ -125,9 +167,14 @@ export function validarCfop(valor: string) {
   return valor.length === 4 && SO_DIGITOS.test(valor) && /^[1-7]/.test(valor)
 }
 
-/** CSOSN do Simples: três dígitos. O CST do regime normal tem dois. */
+/**
+ * CSOSN do Simples: três dígitos, ou quatro quando vem com a origem na frente
+ * ("0102"). O CST do regime normal tem dois.
+ */
 export function validarCsosn(valor: string) {
-  return (valor.length === 3 || valor.length === 2) && SO_DIGITOS.test(valor)
+  if (!SO_DIGITOS.test(valor)) return false
+  if (valor.length === 4) return /^[0-8]/.test(valor)
+  return valor.length === 3 || valor.length === 2
 }
 
 /** CEST: sete dígitos, exigido em quem tem substituição tributária. */
