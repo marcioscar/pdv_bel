@@ -18,11 +18,11 @@ import {
   type CobrancaDaVenda,
 } from "~/lib/cobranca.server"
 import { cancelarVenda } from "~/lib/estoque.server"
-import { focusConfigurada } from "~/lib/focus.server"
+import { focusConfigurada, urlDoArquivo } from "~/lib/focus.server"
+import { modeloDaVenda } from "~/lib/fiscal"
 import {
   atualizarStatusDaNota,
   emitirDaVenda,
-  modeloDaVenda,
   notasPendentes,
 } from "~/lib/nota-fiscal.server"
 import { exigirGerente, exigirUsuario } from "~/lib/sessao.server"
@@ -87,7 +87,9 @@ export async function loader({ request }: Route.LoaderArgs) {
       modelo: nota.modelo,
       status: nota.status,
       numero: nota.numero,
-      caminhoDanfe: nota.caminhoDanfe,
+      // Normaliza na leitura também: as notas gravadas antes de o endereço virar
+      // absoluto continuariam apontando para o próprio PDV.
+      caminhoDanfe: urlDoArquivo(nota.caminhoDanfe),
       erro: nota.erro,
     }
   }

@@ -5,10 +5,17 @@ import {
   consultarNota,
   emitirNota,
   ErroFocus,
+  urlDoArquivo,
   type ModeloNota,
   type RespostaFocus,
 } from "~/lib/focus.server"
-import { ehSimples, pagamentoNaNota, pendenciasDoEmitente, tributacaoDoItem } from "~/lib/fiscal"
+import {
+  ehSimples,
+  modeloDaVenda,
+  pagamentoNaNota,
+  pendenciasDoEmitente,
+  tributacaoDoItem,
+} from "~/lib/fiscal"
 
 /**
  * A emissão da nota a partir de uma venda já fechada.
@@ -53,23 +60,6 @@ function ratearDesconto(subtotais: number[], desconto: number): number[] {
   return parcelas
 }
 
-/**
- * Qual documento a venda pede.
- *
- * Cliente empresa e venda a prazo vão de NF-e: a primeira porque o comprador
- * precisa da nota para se creditar, a segunda porque a cobrança fica registrada
- * no nome dele. O resto do balcão é NFC-e, que é o cupom fiscal.
- */
-export function modeloDaVenda(venda: {
-  forma: string
-  clienteCpfCnpj: string | null
-}): ModeloNota {
-  const documento = (venda.clienteCpfCnpj ?? "").replace(/\D/g, "")
-  if (documento.length === 14) return "nfe"
-  if (venda.forma === "prazo") return "nfe"
-  return "nfce"
-}
-
 /** Referência da nota na Focus. Determinística: a mesma venda dá o mesmo ref. */
 function refDaVenda(vendaId: string, modelo: ModeloNota) {
   return `${modelo}-${vendaId}`
@@ -89,8 +79,8 @@ function daResposta(resposta: RespostaFocus) {
     serie: resposta.serie ?? null,
     chave: resposta.chave_nfe ?? null,
     protocolo: resposta.numero_protocolo ?? null,
-    caminhoDanfe: resposta.caminho_danfe ?? null,
-    caminhoXml: resposta.caminho_xml_nota_fiscal ?? null,
+    caminhoDanfe: urlDoArquivo(resposta.caminho_danfe),
+    caminhoXml: urlDoArquivo(resposta.caminho_xml_nota_fiscal),
     qrcodeUrl: resposta.qrcode_url ?? null,
     erro: mensagemDeErro ?? resposta.mensagem_sefaz ?? null,
   }
@@ -190,7 +180,12 @@ export async function emitirDaVenda(
   )
 
   const comum = {
-    data_emissao: dataComFuso(venda.criadaEm),
+    /*
+     * Agora, e não a hora da venda: a nota é emitida no momento em que é
+     * transmitida, e a SEFAZ compara com o relógio dela. Emitir hoje uma venda
+     * de semana passada com a data de lá volta como "data de emissão atrasada".
+     */
+    data_emissao: dataComFuso(new Date()),
     natureza_operacao: modelo === "nfce" ? "VENDA AO CONSUMIDOR" : "VENDA DE MERCADORIA",
     tipo_documento: 1, // saída
     finalidade_emissao: 1, // normal

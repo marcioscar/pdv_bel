@@ -1,5 +1,7 @@
 import "~/lib/env.server"
 
+import type { ModeloNota } from "~/lib/fiscal"
+
 /**
  * Cliente da API da Focus NFe — NFC-e (modelo 65) e NF-e (modelo 55).
  *
@@ -143,8 +145,22 @@ async function chamar(
   return dados
 }
 
-/** Modelo do documento, do jeito que a Focus nomeia os endpoints. */
-export type ModeloNota = "nfce" | "nfe"
+export type { ModeloNota } from "~/lib/fiscal"
+
+/**
+ * O endereço completo de um arquivo devolvido pela Focus.
+ *
+ * `caminho_danfe` e `caminho_xml_nota_fiscal` vêm relativos ("/notas_fiscais/...")
+ * e são relativos ao SITE da Focus, não ao /v2 da API — e muito menos ao nosso.
+ * Guardar o caminho cru fazia o link do DANFE apontar para o próprio PDV, onde
+ * não existe.
+ */
+export function urlDoArquivo(caminho: string | null | undefined) {
+  if (!caminho) return null
+  if (/^https?:\/\//.test(caminho)) return caminho
+  const site = URLS[ambienteFocus()].replace(/\/v2$/, "")
+  return `${site}${caminho.startsWith("/") ? "" : "/"}${caminho}`
+}
 
 export function emitirNota(modelo: ModeloNota, ref: string, payload: unknown) {
   return chamar("POST", `/${modelo}?ref=${encodeURIComponent(ref)}`, payload)

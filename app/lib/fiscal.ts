@@ -139,6 +139,30 @@ export function tributacaoDoItem(
   }
 }
 
+/** "nfce" (modelo 65) ou "nfe" (modelo 55), como a Focus nomeia os endpoints. */
+export type ModeloNota = "nfce" | "nfe"
+
+/**
+ * Qual documento a venda pede.
+ *
+ * Cliente empresa e venda a prazo vão de NF-e: a primeira porque o comprador
+ * precisa da nota para se creditar, a segunda porque a cobrança fica registrada
+ * no nome dele. O resto do balcão é NFC-e, que é o cupom fiscal.
+ *
+ * Mora aqui, e não no módulo de servidor, porque a TELA também precisa saber: é
+ * o que escreve "Emitir NFC-e" ou "Emitir NF-e" no botão antes de qualquer
+ * chamada — e um `.server` importado pelo componente quebra o build.
+ */
+export function modeloDaVenda(venda: {
+  forma: string
+  clienteCpfCnpj: string | null
+}): ModeloNota {
+  const documento = (venda.clienteCpfCnpj ?? "").replace(/\D/g, "")
+  if (documento.length === 14) return "nfe"
+  if (venda.forma === "prazo") return "nfe"
+  return "nfce"
+}
+
 /**
  * Código da forma de pagamento na nota (tabela da SEFAZ), a partir da forma
  * usada no caixa.
