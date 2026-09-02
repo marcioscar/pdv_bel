@@ -48,16 +48,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   const publico = enderecoDoApp(request)
   const urlDoAviso = `${publico}/webhooks/focus/nota`
 
-  /*
-   * Cadastrar o aviso a partir do ambiente errado é o tipo de erro que só
-   * aparece semanas depois: o segredo enviado à Focus é o do .env de QUEM
-   * cadastra, e se quem cadastra é a máquina de desenvolvimento, o servidor de
-   * produção recusa todo aviso por segredo divergente — e ninguém liga uma coisa
-   * à outra. Só cadastra quem está atendendo no próprio endereço público.
-   */
-  const aqui = new URL(request.url)
-  const daquiMesmo =
-    publico === `${aqui.protocol.replace(":", "")}://${request.headers.get("x-forwarded-host") ?? aqui.host}`
+  const daquiMesmo = mesmoServidor(request, publico)
 
   return {
     excecoes,
@@ -93,6 +84,28 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
 }
 
+/**
+ * Este servidor é o que atende no endereço público?
+ *
+ * Cadastrar o aviso a partir do ambiente errado é o tipo de erro que só aparece
+ * semanas depois: o segredo enviado à Focus é o do .env de QUEM cadastra, e se
+ * quem cadastra é a máquina de desenvolvimento, o servidor de produção recusa
+ * todo aviso por segredo divergente — e ninguém liga uma coisa à outra.
+ *
+ * A comparação é só do HOST, de propósito. Atrás do proxy do easypanel o pedido
+ * chega como `http` enquanto o endereço público é `https`, e comparar o protocolo
+ * junto reprovava até a própria produção — que era exatamente o caso que a trava
+ * existia para permitir.
+ */
+function mesmoServidor(request: Request, publico: string) {
+  try {
+    const daqui = request.headers.get("x-forwarded-host") ?? new URL(request.url).host
+    return new URL(publico).host === daqui
+  } catch {
+    return false
+  }
+}
+
 export async function action({ request }: Route.ActionArgs) {
   await exigirUsuario(request)
 
@@ -104,12 +117,7 @@ export async function action({ request }: Route.ActionArgs) {
     const cnpj = String(form.get("cnpj") ?? "")
     const segredo = process.env.FOCUS_NFE_WEBHOOK_SEGREDO?.trim()
 
-    const aqui = new URL(request.url)
-    const publico = enderecoDoApp(request)
-    const daquiMesmo =
-      publico === `${aqui.protocol.replace(":", "")}://${request.headers.get("x-forwarded-host") ?? aqui.host}`
-
-    if (!daquiMesmo || url.includes("localhost")) {
+    if (!mesmoServidor(request, enderecoDoApp(request)) || url.includes("localhost")) {
       return data(
         {
           ok: false as const,
