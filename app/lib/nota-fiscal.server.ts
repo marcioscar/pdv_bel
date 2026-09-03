@@ -46,18 +46,23 @@ function arredondar(valor: number) {
 }
 
 /**
- * O desconto da venda é do total; na nota ele é de cada item, e a soma tem que
- * bater com o total ao centavo — divergência de um centavo é rejeição da SEFAZ.
- * Por isso o rateio é proporcional e a sobra da divisão vai no último item.
+ * Reparte um valor do total entre os itens, proporcionalmente ao que cada um
+ * pesa.
+ *
+ * Desconto e frete são do documento inteiro para quem vende, e de cada item para
+ * a SEFAZ — que confere se a soma dos itens bate com o total, ao centavo.
+ * Divergência de um centavo é rejeição: "Total do Frete difere do somatorio dos
+ * itens" foi exatamente isso. Por isso a sobra da divisão vai no último item, em
+ * vez de se perder no arredondamento.
  */
-function ratearDesconto(subtotais: number[], desconto: number): number[] {
-  if (desconto <= 0) return subtotais.map(() => 0)
+function ratearProporcional(subtotais: number[], valor: number): number[] {
+  if (valor <= 0) return subtotais.map(() => 0)
 
-  const soma = subtotais.reduce((total, valor) => total + valor, 0)
+  const soma = subtotais.reduce((total, parcela) => total + parcela, 0)
   if (soma <= 0) return subtotais.map(() => 0)
 
-  const parcelas = subtotais.map((valor) => arredondar((valor / soma) * desconto))
-  const sobra = arredondar(desconto - parcelas.reduce((t, v) => t + v, 0))
+  const parcelas = subtotais.map((parcela) => arredondar((parcela / soma) * valor))
+  const sobra = arredondar(valor - parcelas.reduce((t, v) => t + v, 0))
   parcelas[parcelas.length - 1] = arredondar(parcelas[parcelas.length - 1] + sobra)
 
   return parcelas
@@ -174,10 +179,31 @@ export async function emitirDaVenda(
 
   const ufDestino = cliente?.uf || loja.uf || "DF"
   const interestadual = ufDestino !== (loja.uf ?? "DF")
-  const descontos = ratearDesconto(
-    venda.itens.map((item) => item.subtotal),
-    venda.desconto
-  )
+  /*
+   * Frete e observação só existem na NF-e. Na NFC-e o cliente leva a mercadoria
+   * na mão, e o campo de observação da nota de consumidor não é lugar de recado
+   * — a bobina já sai apertada.
+   */
+  const frete =
+    modelo === "nfe" && extras?.freteModalidade && modalidadeFreteValida(extras.freteModalidade)
+      ? extras.freteModalidade
+      : FRETE_SEM_TRANSPORTE
+  const valorFrete = modelo === "nfe" ? arredondar(extras?.freteValor ?? 0) : 0
+  const observacao = modelo === "nfe" ? (extras?.observacao ?? "").trim() : ""
+
+  /*
+   * A frase do Simples é exigida por lei e não pode ser substituída pelo recado
+   * do vendedor: as duas coisas convivem no mesmo campo, uma depois da outra.
+   */
+  const informacoes = [ehSimples(loja.regimeTributario) ? AVISO_SIMPLES : "", observacao]
+    .filter(Boolean)
+    .join(" ")
+
+  const subtotais = venda.itens.map((item) => item.subtotal)
+  const descontos = ratearProporcional(subtotais, venda.desconto)
+  // O frete é repartido pelos itens pelo mesmo motivo do desconto: a SEFAZ soma
+  // os itens e confere com o total do documento.
+  const fretes = ratearProporcional(subtotais, valorFrete)
 
   const items = venda.itens.map((item, i) => {
     const produto = porId.get(item.produtoId)!
@@ -197,6 +223,7 @@ export async function emitirDaVenda(
       valor_unitario_tributavel: item.preco,
       valor_bruto: arredondar(item.subtotal),
       valor_desconto: descontos[i] || undefined,
+      valor_frete: fretes[i] || undefined,
       icms_origem: tributacao.origem,
       icms_situacao_tributaria: tributacao.csosn,
       codigo_cest: tributacao.cest ?? undefined,
@@ -217,26 +244,6 @@ export async function emitirDaVenda(
   const valorProdutos = arredondar(
     venda.itens.reduce((total, item) => total + item.subtotal, 0)
   )
-
-  /*
-   * Frete e observação só existem na NF-e. Na NFC-e o cliente leva a mercadoria
-   * na mão, e o campo de observação da nota de consumidor não é lugar de recado
-   * — a bobina já sai apertada.
-   */
-  const frete =
-    modelo === "nfe" && extras?.freteModalidade && modalidadeFreteValida(extras.freteModalidade)
-      ? extras.freteModalidade
-      : FRETE_SEM_TRANSPORTE
-  const valorFrete = modelo === "nfe" ? arredondar(extras?.freteValor ?? 0) : 0
-  const observacao = modelo === "nfe" ? (extras?.observacao ?? "").trim() : ""
-
-  /*
-   * A frase do Simples é exigida por lei e não pode ser substituída pelo recado
-   * do vendedor: as duas coisas convivem no mesmo campo, uma depois da outra.
-   */
-  const informacoes = [ehSimples(loja.regimeTributario) ? AVISO_SIMPLES : "", observacao]
-    .filter(Boolean)
-    .join(" ")
 
   const comum = {
     /*
