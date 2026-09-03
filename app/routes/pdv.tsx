@@ -586,6 +586,10 @@ export async function action({ request }: Route.ActionArgs) {
       )
     }
 
+    // Mesma regra do fechamento comum: emite se quem fechou pediu.
+    const querNota = Boolean((bruto as { emitirNota?: unknown }).emitirNota)
+    const nota = querNota ? await emitirNaVenda(resultado.vendaId, eu.nome) : null
+
     return {
       ok: true as const,
       tipo: "pixStatus" as const,
@@ -594,6 +598,7 @@ export async function action({ request }: Route.ActionArgs) {
       vendaId: resultado.vendaId,
       pagoEm: pix.pagoEm,
       endToEndId: pix.endToEndId,
+      nota,
     }
   }
 
@@ -621,7 +626,18 @@ export async function action({ request }: Route.ActionArgs) {
      * o estoque saiu. Falha da SEFAZ, da Focus ou da internet vira nota pendente
      * e cupom não fiscal impresso — nunca uma venda perdida no balcão.
      */
-    const nota = await emitirNaVenda(resultado.vendaId, eu.nome)
+    /*
+     * Emitir é escolha de quem fecha, e vem no próprio pedido. Fora do balcão
+     * ela raramente muda; no balcão, muda: venda que o cliente não quer nota,
+     * conferência de caixa, teste. Quando não vier, o padrão da tela é o que
+     * vale — e ele já leva em conta o modelo.
+     */
+    const querNota =
+      typeof bruto === "object" && bruto !== null && "emitirNota" in bruto
+        ? Boolean((bruto as { emitirNota?: unknown }).emitirNota)
+        : true
+
+    const nota = querNota ? await emitirNaVenda(resultado.vendaId, eu.nome) : null
     return { ...resultado, tipo: "venda" as const, nota }
   }
 
@@ -658,27 +674,11 @@ export async function action({ request }: Route.ActionArgs) {
 async function emitirNaVenda(vendaId: string, operador: string) {
   try {
     /*
-     * NF-e não sai daqui. Ela pede frete e observação, que são decisão de quem
-     * está vendendo e não têm como ser adivinhados no fechamento — e depois de
-     * autorizada não se corrige. Fica no botão da tela de Vendas, que pergunta
-     * as duas coisas antes de emitir.
+     * A NF-e sai daqui SEM frete e SEM observação — no fechamento não há como
+     * perguntar, e depois de autorizada não se corrige. Quem precisa dessas duas
+     * coisas desliga a nota na conferência e emite pela tela de Vendas, que
+     * pergunta antes. A tela avisa disso ao ligar a nota numa venda de empresa.
      */
-    const venda = await db.venda.findUnique({
-      where: { id: vendaId },
-      select: { forma: true, clienteCpfCnpj: true },
-    })
-    if (venda && modeloDaVenda(venda) === "nfe") {
-      return {
-        emitida: false as const,
-        erro: null,
-        danfe: null,
-        numero: null,
-        modelo: "nfe" as const,
-        teste: false,
-        naTelaDeVendas: true,
-      }
-    }
-
     const resultado = await emitirDaVenda(vendaId, { emitidaPor: operador })
     if (!resultado.ok) {
       return {
@@ -725,9 +725,9 @@ async function emitirNaVenda(vendaId: string, operador: string) {
       // Emitida, mas o papel não sai daqui: nota de homologação não vale como
       // documento, então quem sai na bobina continua sendo o cupom.
       teste: autorizada && ambienteFocus() !== "producao",
-      // Só a NF-e cai neste caso, e ela nem chega até aqui — sai antes, lá em
-      // cima. O campo existe para as duas saídas terem o mesmo formato.
-      naTelaDeVendas: false,
+      // O DANFE da NF-e é A4 e não vai para a bobina: quem a emitiu daqui
+      // imprime na tela de Vendas.
+      naTelaDeVendas: autorizada && nota?.modelo === "nfe",
     }
   } catch (erro) {
     console.error("[pdv] falha ao emitir a nota da venda", vendaId, erro)
@@ -773,6 +773,12 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   // Nasce vazio a cada venda, de propósito: ver `faltaVendedor` no diálogo.
   const [vendedorCodigo, setVendedorCodigo] = useState("")
   const [imprimirCupom, setImprimirCupom] = useState(true)
+  /*
+   * Emitir a nota é decisão desta venda, não do sistema. Começa ligada onde a
+   * loja emite — o documento fiscal é a regra, não a exceção — e o operador
+   * desliga quando não quer: conferência, teste, cliente que não quer nota.
+   */
+  const [emitirNota, setEmitirNota] = useState(false)
   const [erroFinalizacao, setErroFinalizacao] = useState<string | null>(null)
   const [ajudaAberta, setAjudaAberta] = useState(false)
   const [aviso, setAviso] = useState<Aviso>(null)
@@ -1003,13 +1009,16 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           condicao: condicaoEscolhida?.id ?? null,
           vendedorCodigo,
           autorizacaoId,
+          // A escolha da conferência viaja com a venda: o servidor não tem como
+          // saber se este cliente quis nota.
+          emitirNota,
         },
         { method: "post", encType: "application/json" }
       )
     },
     [
-      autorizacaoId, cliente, fetcher, forma, gravando, totais.desconto, venda.itens,
-      vendedorCodigo,
+      autorizacaoId, cliente, emitirNota, fetcher, forma, gravando, totais.desconto,
+      venda.itens, vendedorCodigo,
     ]
   )
 
@@ -1264,6 +1273,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           desconto: totais.desconto,
           forma: "pix",
           recebido: null,
+          emitirNota,
         },
         { method: "post", encType: "application/json" }
       )
@@ -1377,6 +1387,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     f.submit(
       {
         intencao: "pixConferir",
+        emitirNota,
         txid,
         itens: itens.map((i) => ({ produtoId: i.produtoId, quantidade: i.quantidade })),
         desconto,
@@ -1458,6 +1469,12 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
    * documentos liga com F7 depois de escolher a forma.
    */
   const cupomPadrao = (f: FormaPagamento) => f !== "prazo"
+
+  // A conferência abre com a nota ligada quando a loja emite; a escolha vale
+  // para esta venda e some com ela.
+  useEffect(() => {
+    if (finalizando) setEmitirNota(fiscal.emite)
+  }, [finalizando, fiscal.emite])
 
   /** F10: abre a conferência. Nada é gravado aqui. */
   const abrirFinalizacao = useCallback(() => {
@@ -2021,6 +2038,8 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           }}
           imprimir={imprimirCupom}
           fiscal={fiscal}
+          emitirNota={emitirNota}
+          onEmitirNotaChange={setEmitirNota}
           onImprimirChange={setImprimirCupom}
           gravando={gravando}
           erro={erroFinalizacao}

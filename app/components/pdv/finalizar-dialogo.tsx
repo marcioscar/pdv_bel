@@ -60,6 +60,8 @@ type Props = {
   onImprimirChange: (imprimir: boolean) => void;
   /** Se esta loja emite nota, e se o que sai vale como documento. */
   fiscal: { emite: boolean; producao: boolean };
+  emitirNota: boolean;
+  onEmitirNotaChange: (emitir: boolean) => void;
   gravando: boolean;
   erro: string | null;
   onConfirmar: () => void;
@@ -97,6 +99,8 @@ export function FinalizarDialogo({
   imprimir,
   onImprimirChange,
   fiscal,
+  emitirNota,
+  onEmitirNotaChange,
   gravando,
   erro,
   onConfirmar,
@@ -274,6 +278,16 @@ export function FinalizarDialogo({
       if (key === "F7") {
         evento.preventDefault();
         onImprimirChange(!imprimir);
+        return;
+      }
+      /*
+       * F4, e não F5: F5 é recarregar a página no navegador, e mesmo com
+       * preventDefault a tecla é arriscada demais para uma escolha que muda o
+       * que sai impresso. F4 está livre dentro da conferência.
+       */
+      if (key === "F4" && fiscal.emite) {
+        evento.preventDefault();
+        onEmitirNotaChange(!emitirNota);
       }
     }
 
@@ -290,6 +304,9 @@ export function FinalizarDialogo({
     onFechar,
     onFormaChange,
     onImprimirChange,
+    onEmitirNotaChange,
+    emitirNota,
+    fiscal.emite,
     opcoes,
     pausado,
   ]);
@@ -304,17 +321,26 @@ export function FinalizarDialogo({
    */
   const nota = (() => {
     if (!fiscal.emite) {
-      return { sai: false, rotulo: "Nota fiscal", situacao: "esta loja ainda não emite" }
+      return {
+        rotulo: "Nota fiscal",
+        situacao: "esta loja ainda não emite",
+        aviso: null as string | null,
+      }
     }
 
     const modelo = modeloDaVenda({ forma, clienteCpfCnpj: cliente?.cpfCnpj ?? null })
-    if (modelo === "nfe") {
-      return { sai: false, rotulo: "NF-e", situacao: "emitir na tela de Vendas" }
+    const rotulo = modelo === "nfe" ? "NF-e" : "NFC-e"
+
+    if (!emitirNota) {
+      return { rotulo, situacao: "não emitir", aviso: null }
     }
+
     return {
-      sai: true,
-      rotulo: "NFC-e",
-      situacao: fiscal.producao ? "sai com a venda" : "sai com a venda (teste)",
+      rotulo,
+      situacao: fiscal.producao ? "emitir com a venda" : "emitir com a venda (teste)",
+      // A NF-e emitida aqui sai sem frete e sem observação, e não se corrige
+      // depois. Quem precisa dos dois desliga e emite pela tela de Vendas.
+      aviso: modelo === "nfe" ? "sem frete e sem observação" : null,
     }
   })()
 
@@ -632,14 +658,22 @@ export function FinalizarDialogo({
             <Kbd className="shrink-0">F7</Kbd>
           </button>
 
-          {/* Não é botão: é o que VAI acontecer com esta venda. A nota não se
-              escolhe — o documento é decidido pelo cliente e pela forma de
-              pagamento —, mas quem fecha precisa saber o que vai sair, e o que
-              não vai sair daqui. */}
-          <div
+          {/* O MODELO não se escolhe — quem decide é o cliente e a forma de
+              pagamento. Emitir, sim: venda que o cliente não quer nota, teste,
+              conferência de caixa. O documento fiscal é a regra, então começa
+              ligado; desligar é ato consciente de quem fecha. */}
+          <button
+            type="button"
+            tabIndex={-1}
+            disabled={!fiscal.emite}
+            onClick={() => onEmitirNotaChange(!emitirNota)}
             className={cn(
-              "flex items-center gap-2 rounded-lg border p-3",
-              nota.sai ? "border-border" : "border-dashed border-border opacity-60"
+              "flex items-center gap-2 rounded-lg border p-3 text-left transition-colors",
+              !fiscal.emite
+                ? "border-dashed border-border opacity-60"
+                : emitirNota
+                  ? "border-primary bg-primary/5"
+                  : "border-dashed border-border"
             )}
           >
             <FileText className="size-4 shrink-0 text-muted-foreground" aria-hidden />
@@ -648,8 +682,12 @@ export function FinalizarDialogo({
                 {nota.rotulo}
               </div>
               <div className="text-sm font-medium">{nota.situacao}</div>
+              {nota.aviso ? (
+                <div className="text-[10px] text-muted-foreground">{nota.aviso}</div>
+              ) : null}
             </div>
-          </div>
+            {fiscal.emite ? <Kbd className="shrink-0">F4</Kbd> : null}
+          </button>
         </div>
 
         {erro ? (
