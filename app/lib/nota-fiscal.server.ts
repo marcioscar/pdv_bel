@@ -339,32 +339,66 @@ export function notasPendentes(loja: string, limite = 10) {
   })
 }
 
-export async function cancelarNotaDaVenda(
+/**
+ * Desfaz a nota da venda que está sendo cancelada.
+ *
+ * A ordem importa e é a mesma do boleto: a nota é cancelada na SEFAZ ANTES de a
+ * venda ser desfeita aqui. Na ordem inversa, uma falha deixaria uma nota viva
+ * numa venda que não existe mais — e isso não aparece em tela nenhuma, só na
+ * apuração do contador, semanas depois.
+ *
+ * Venda sem nota é o caso comum e não é erro: devolve `cancelada: false` e o
+ * cancelamento segue.
+ *
+ * Quando a SEFAZ recusa o cancelamento, a venda NÃO é desfeita. Quase sempre é
+ * prazo vencido (a NFC-e tem minutos; a NF-e, 24 horas), e nesse ponto a nota é
+ * um fato fiscal: o caminho é uma nota de devolução, com o contador, não um
+ * botão de cancelar que apaga a venda e deixa o documento de pé.
+ */
+export async function desfazerNotaDaVenda(
   vendaId: string,
   justificativa: string
-): Promise<{ ok: true } | { ok: false; erro: string }> {
+): Promise<{ ok: true; cancelada: boolean } | { ok: false; erro: string }> {
   const nota = await db.notaFiscalEmitida.findFirst({
-    where: { vendaId, status: "autorizado" },
+    where: { vendaId, status: { in: ["autorizado", "processando_autorizacao"] } },
+    orderBy: { criadaEm: "desc" },
   })
-  if (!nota) return { ok: false, erro: "Esta venda não tem nota autorizada" }
+  if (!nota) return { ok: true, cancelada: false }
+
+  /*
+   * Nota na fila não pode ser cancelada — nem existe ainda para a SEFAZ. Vale
+   * perguntar uma vez, porque o desfecho costuma chegar em segundos e o gerente
+   * pode estar cancelando logo depois de fechar.
+   */
+  if (nota.status === "processando_autorizacao") {
+    await atualizarStatusDaNota(nota.id)
+    const agora = await db.notaFiscalEmitida.findUnique({ where: { id: nota.id } })
+
+    if (agora?.status === "processando_autorizacao") {
+      return {
+        ok: false,
+        erro: "A nota ainda está sendo autorizada pela SEFAZ — tente cancelar em instantes",
+      }
+    }
+    if (agora?.status !== "autorizado") return { ok: true, cancelada: false }
+  }
 
   // A SEFAZ exige 15 caracteres; menos que isso volta como rejeição, depois da
   // viagem.
-  if (justificativa.trim().length < 15) {
-    return { ok: false, erro: "A justificativa do cancelamento precisa de 15 letras ou mais" }
-  }
+  const motivo = justificativa.trim().padEnd(15, ".")
 
   try {
-    const resposta = await cancelarNota(nota.modelo as ModeloNota, nota.ref, justificativa.trim())
+    const resposta = await cancelarNota(nota.modelo as ModeloNota, nota.ref, motivo)
     await db.notaFiscalEmitida.update({
       where: { id: nota.id },
-      data: { ...daResposta(resposta), status: "cancelado" },
+      data: { ...daResposta(resposta), status: "cancelado", erro: null },
     })
-    return { ok: true }
+    return { ok: true, cancelada: true }
   } catch (erro) {
+    const detalhe = erro instanceof ErroFocus ? erro.message : "Falha ao falar com a Focus NFe"
     return {
       ok: false,
-      erro: erro instanceof ErroFocus ? erro.message : "Falha ao cancelar na Focus NFe",
+      erro: `A nota ${nota.numero ? `${nota.numero} ` : ""}não pôde ser cancelada: ${detalhe}`,
     }
   }
 }

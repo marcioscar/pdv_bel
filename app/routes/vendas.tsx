@@ -22,6 +22,7 @@ import { focusConfigurada, urlDoArquivo } from "~/lib/focus.server"
 import { modeloDaVenda } from "~/lib/fiscal"
 import {
   atualizarStatusDaNota,
+  desfazerNotaDaVenda,
   emitirDaVenda,
   notasPendentes,
 } from "~/lib/nota-fiscal.server"
@@ -188,6 +189,30 @@ export async function action({ request }: Route.ActionArgs) {
     }
   }
 
+  /*
+   * A nota vem primeiro, pelo mesmo motivo do boleto: desfazer a venda com a
+   * nota de pé deixaria um documento fiscal sem venda, e isso não aparece em
+   * tela nenhuma — só na apuração do contador.
+   *
+   * Recusa da SEFAZ interrompe o cancelamento inteiro. Quase sempre é prazo
+   * vencido, e aí a nota é fato consumado: o caminho é uma nota de devolução,
+   * não um botão que apaga a venda e deixa o documento valendo.
+   */
+  const numeroDaVenda = await db.venda.findUnique({
+    where: { id: vendaId },
+    select: { numero: true },
+  })
+  const nota = await desfazerNotaDaVenda(
+    vendaId,
+    `Cancelamento da venda ${numeroDaVenda?.numero ?? ""} no PDV por ${eu.nome}`.trim()
+  )
+  if (!nota.ok) {
+    return data(
+      { ok: false as const, tipo: "cancelamento" as const, erro: nota.erro },
+      { status: 400 }
+    )
+  }
+
   // O boleto é cancelado no Inter ANTES de a venda ser desfeita aqui. Na ordem
   // inversa, uma falha no banco deixaria um boleto vivo numa venda cancelada — e
   // isso não aparece em nenhuma tela. Falhando assim, a venda segue ativa, e a
@@ -208,6 +233,7 @@ export async function action({ request }: Route.ActionArgs) {
   const partes = [
     `${resultado.estornados} ${resultado.estornados === 1 ? "item estornado" : "itens estornados"}`,
   ]
+  if (nota.cancelada) partes.push("nota fiscal cancelada na SEFAZ")
   if (cobrancas.canceladas > 0) {
     partes.push(
       `${cobrancas.canceladas} ${cobrancas.canceladas === 1 ? "boleto cancelado" : "boletos cancelados"} no Inter`
@@ -929,6 +955,17 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                       : `Os ${vendaConfirmando.cobrancas.length} boletos serão cancelados no Inter`}
                   </b>{" "}
                   — se algum já estiver pago, o cancelamento é recusado.
+                </>
+              ) : null}
+              {notas[vendaConfirmando.id]?.status === "autorizado" ? (
+                <>
+                  {" "}
+                  <b className="font-semibold text-foreground">
+                    A {notas[vendaConfirmando.id].modelo === "nfe" ? "NF-e" : "NFC-e"}{" "}
+                    {notas[vendaConfirmando.id].numero} será cancelada na SEFAZ
+                  </b>{" "}
+                  — passado o prazo dela, o cancelamento é recusado e a venda
+                  continua de pé.
                 </>
               ) : null}
             </p>
