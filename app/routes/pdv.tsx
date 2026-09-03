@@ -779,6 +779,11 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
    * desliga quando não quer: conferência, teste, cliente que não quer nota.
    */
   const [emitirNota, setEmitirNota] = useState(false)
+  /*
+   * O CPF que o consumidor pede na nota, sem cadastro. Vive na venda, não no
+   * cliente: quem pede crédito da Nota Legal informa o CPF e vai embora.
+   */
+  const [cpfNaNota, setCpfNaNota] = useState("")
   const [erroFinalizacao, setErroFinalizacao] = useState<string | null>(null)
   const [ajudaAberta, setAjudaAberta] = useState(false)
   const [aviso, setAviso] = useState<Aviso>(null)
@@ -1012,13 +1017,14 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           // A escolha da conferência viaja com a venda: o servidor não tem como
           // saber se este cliente quis nota.
           emitirNota,
+          cpfNaNota,
         },
         { method: "post", encType: "application/json" }
       )
     },
     [
-      autorizacaoId, cliente, emitirNota, fetcher, forma, gravando, totais.desconto,
-      venda.itens, vendedorCodigo,
+      autorizacaoId, cliente, cpfNaNota, emitirNota, fetcher, forma, gravando,
+      totais.desconto, venda.itens, vendedorCodigo,
     ]
   )
 
@@ -1201,6 +1207,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     setCondicao(null)
     setForma("pix")
     setFinalizando(false)
+    setCpfNaNota("")
     setRecebidoTexto("")
     // A liberação vale para uma venda só; deixá-la no estado faria a próxima
     // venda nascer com a permissão da anterior. A baixa cobre o caso em que a
@@ -1274,6 +1281,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           forma: "pix",
           recebido: null,
           emitirNota,
+          cpfNaNota,
         },
         { method: "post", encType: "application/json" }
       )
@@ -1388,6 +1396,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       {
         intencao: "pixConferir",
         emitirNota,
+        cpfNaNota,
         txid,
         itens: itens.map((i) => ({ produtoId: i.produtoId, quantidade: i.quantidade })),
         desconto,
@@ -2040,6 +2049,8 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           fiscal={fiscal}
           emitirNota={emitirNota}
           onEmitirNotaChange={setEmitirNota}
+          cpfNaNota={cpfNaNota}
+          onCpfNaNotaChange={setCpfNaNota}
           onImprimirChange={setImprimirCupom}
           gravando={gravando}
           erro={erroFinalizacao}

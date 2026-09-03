@@ -4,6 +4,7 @@ import {
   CalendarClock,
   CreditCard,
   FileText,
+  IdCard,
   Link2,
   Printer,
   QrCode,
@@ -18,7 +19,7 @@ import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { Kbd } from "~/components/ui/kbd";
 import { Separator } from "~/components/ui/separator";
-import { formatarCpfCnpj } from "~/lib/documento";
+import { formatarCpfCnpj, mascararCpfCnpj, validarCpf } from "~/lib/documento";
 import { modeloDaVenda } from "~/lib/fiscal";
 import { interpretarValor, moeda } from "~/lib/moeda";
 import { FORMAS_PAGAMENTO, type FormaPagamento } from "~/lib/pdv";
@@ -62,6 +63,9 @@ type Props = {
   fiscal: { emite: boolean; producao: boolean };
   emitirNota: boolean;
   onEmitirNotaChange: (emitir: boolean) => void;
+  /** CPF que o consumidor pediu na nota, sem virar cadastro (Nota Legal). */
+  cpfNaNota: string;
+  onCpfNaNotaChange: (cpf: string) => void;
   gravando: boolean;
   erro: string | null;
   onConfirmar: () => void;
@@ -101,6 +105,8 @@ export function FinalizarDialogo({
   fiscal,
   emitirNota,
   onEmitirNotaChange,
+  cpfNaNota,
+  onCpfNaNotaChange,
   gravando,
   erro,
   onConfirmar,
@@ -140,6 +146,7 @@ export function FinalizarDialogo({
    * completo, que o boleto recusa pela metade.
    */
   const [escolhendoCliente, setEscolhendoCliente] = useState(false);
+  const campoCpf = useRef<HTMLInputElement>(null);
   const [buscaCliente, setBuscaCliente] = useState("");
   const [indiceCliente, setIndiceCliente] = useState(0);
 
@@ -275,6 +282,12 @@ export function FinalizarDialogo({
         setEscolhendoCliente(true);
         return;
       }
+      if (key === "F2" && !cliente && fiscal.emite) {
+        evento.preventDefault();
+        campoCpf.current?.focus();
+        campoCpf.current?.select();
+        return;
+      }
       if (key === "F7") {
         evento.preventDefault();
         onImprimirChange(!imprimir);
@@ -307,6 +320,7 @@ export function FinalizarDialogo({
     onEmitirNotaChange,
     emitirNota,
     fiscal.emite,
+    cliente,
     opcoes,
     pausado,
   ]);
@@ -319,6 +333,11 @@ export function FinalizarDialogo({
    * tela de Vendas; e a loja que ainda não emite continua no cupom não fiscal.
    * Prometer errado aqui é o que faz alguém procurar um documento que não veio.
    */
+  // Só a partir de 11 dígitos vale julgar: julgar antes acusaria de inválido
+  // todo CPF pela metade, enquanto ainda está sendo digitado.
+  const digitosCpf = cpfNaNota.replace(/\D/g, "");
+  const cpfInvalido = digitosCpf.length === 11 && !validarCpf(digitosCpf);
+
   const nota = (() => {
     if (!fiscal.emite) {
       return {
@@ -633,6 +652,46 @@ export function FinalizarDialogo({
           </button>
         )}
 
+        {/*
+          O CPF na nota é outra coisa que o cliente: quem pede crédito da Nota
+          Legal informa o CPF, leva o cupom e vai embora — não quer cadastro, e
+          obrigar a um seria perder a venda por causa de um formulário. Some da
+          tela quando há cliente vinculado, porque aí o documento é o dele.
+        */}
+        {!cliente && fiscal.emite ? (
+          <div
+            className={cn(
+              "mt-2 flex items-center gap-3 rounded-lg border p-3",
+              cpfInvalido ? "border-destructive/40 bg-destructive/5" : "border-border"
+            )}
+          >
+            <IdCard className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+            <div className="min-w-0 flex-1">
+              <label
+                htmlFor="cpf-na-nota"
+                className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
+              >
+                CPF na nota
+              </label>
+              <Input
+                id="cpf-na-nota"
+                ref={campoCpf}
+                value={cpfNaNota}
+                onChange={(evento) => onCpfNaNotaChange(mascararCpfCnpj(evento.target.value))}
+                placeholder="000.000.000-00"
+                inputMode="numeric"
+                autoComplete="off"
+                aria-invalid={cpfInvalido || undefined}
+                className="mt-0.5 h-8 rounded-lg border-0 bg-transparent px-0 font-mono text-sm tabular-nums shadow-none focus-visible:ring-0"
+              />
+            </div>
+            <span className="shrink-0 text-[10px] text-muted-foreground">
+              {cpfInvalido ? "CPF inválido" : "Nota Legal · opcional"}
+            </span>
+            <Kbd className="shrink-0">F2</Kbd>
+          </div>
+        ) : null}
+
         <div className="mt-2 grid grid-cols-2 gap-2">
           <button
             type="button"
@@ -702,7 +761,7 @@ export function FinalizarDialogo({
           type="button"
           tabIndex={-1}
           size="lg"
-          disabled={gravando || faltaDinheiro || faltaCliente || faltaVendedor}
+          disabled={gravando || faltaDinheiro || faltaCliente || faltaVendedor || cpfInvalido}
           onClick={onConfirmar}
           className="h-14 w-full rounded-xl text-base font-semibold"
         >

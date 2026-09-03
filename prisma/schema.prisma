@@ -356,6 +356,14 @@ model Venda {
   vendedorNome String?
   itens    VendaItem[]
 
+  /// O CPF que o consumidor pediu na nota, sem virar cadastro.
+  ///
+  /// No DF é o que dá direito ao crédito da Nota Legal, e quem pede quase nunca
+  /// quer se cadastrar: informa o CPF, leva o cupom e vai embora. Guardado na
+  /// VENDA, e não em Cliente, justamente por isso — e porque a nota é um retrato:
+  /// quem emitir de novo precisa do mesmo CPF que foi dito no balcão.
+  cpfNaNota      String?
+
   /// Cliente é obrigatório na venda a prazo (o boleto precisa do pagador).
   /// Nome e documento ficam copiados para o histórico não mudar se o cadastro mudar.
   clienteId      String?   @db.ObjectId

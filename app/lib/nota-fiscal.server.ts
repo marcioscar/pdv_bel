@@ -272,7 +272,13 @@ export async function emitirDaVenda(
     items,
   }
 
-  const documentoCliente = (cliente?.cpfCnpj ?? "").replace(/\D/g, "")
+  /*
+   * O documento do destinatário tem duas origens: o cadastro, quando a venda tem
+   * cliente, e o CPF avulso que o consumidor pediu no balcão. O cadastro vem
+   * primeiro — quem tem ficha tem nome, endereço e IE, e a nota fica mais
+   * completa —, mas o CPF sozinho basta para a NFC-e, que é o caso da Nota Legal.
+   */
+  const documentoCliente = (cliente?.cpfCnpj ?? venda.cpfNaNota ?? "").replace(/\D/g, "")
 
   const payload =
     modelo === "nfce"
@@ -280,8 +286,16 @@ export async function emitirDaVenda(
           ...comum,
           // Na NFC-e o consumidor é opcional: sem CPF, sai a nota "sem
           // identificação do destinatário", que é o caso da maioria do balcão.
+          /*
+           * Na NFC-e o consumidor é opcional, e o nome também: com CPF avulso
+           * não há nome nenhum a informar, e inventar um seria pior. A SEFAZ
+           * aceita a nota só com o CPF, que é o que a Nota Legal precisa.
+           */
           ...(documentoCliente.length === 11
-            ? { cpf_destinatario: documentoCliente, nome_destinatario: cliente!.nome }
+            ? {
+                cpf_destinatario: documentoCliente,
+                ...(cliente ? { nome_destinatario: cliente.nome } : {}),
+              }
             : {}),
           formas_pagamento: [
             { forma_pagamento: pagamentoNaNota(venda.forma), valor_pagamento: arredondar(venda.total) },
@@ -327,7 +341,7 @@ export async function emitirDaVenda(
       ambiente,
       loja: venda.loja,
       vendaId,
-      destinatarioNome: cliente?.nome ?? null,
+      destinatarioNome: cliente?.nome ?? (venda.cpfNaNota ? "Consumidor" : null),
       destinatarioCpfCnpj: documentoCliente || null,
       valorTotal: arredondar(venda.total + valorFrete),
       observacao: observacao || null,

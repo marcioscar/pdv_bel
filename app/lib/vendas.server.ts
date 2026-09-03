@@ -6,6 +6,7 @@ import {
   marcarAutorizacaoUsada,
 } from "~/lib/autorizacao.server"
 import { caixaAberto } from "~/lib/caixa.server"
+import { validarCpf } from "~/lib/documento"
 import { db } from "~/lib/db.server"
 import { depoisDoDia, diaAtras, diaDeHoje, inicioDoDia } from "~/lib/dia"
 import { movimentosDeVenda, saldosDosProdutos } from "~/lib/estoque.server"
@@ -39,6 +40,8 @@ export type PedidoRecebido = {
   forma: string
   recebido: number | null
   clienteId: string | null
+  /** CPF pedido na nota, sem cadastro. Só dígitos, ou null. */
+  cpfNaNota: string | null
   /**
    * Id de uma condição de CONDICOES_PAGAMENTO; só usado na venda a prazo.
    *
@@ -136,6 +139,16 @@ export function lerPedido(bruto: unknown): PedidoRecebido | null {
       ? corpo.autorizacaoId
       : null
 
+  /*
+   * O CPF da nota é conferido AQUI, e não só na tela: um CPF com dígito errado
+   * derruba a nota inteira na SEFAZ, e o erro apareceria depois da venda
+   * fechada. Vazio é o caso comum e não é erro.
+   */
+  const cpfBruto =
+    typeof corpo.cpfNaNota === "string" ? corpo.cpfNaNota.replace(/\D/g, "") : ""
+  if (cpfBruto && !validarCpf(cpfBruto)) return null
+  const cpfNaNota = cpfBruto || null
+
   const clienteId =
     typeof corpo.clienteId === "string" && OBJECT_ID.test(corpo.clienteId)
       ? corpo.clienteId
@@ -149,6 +162,7 @@ export function lerPedido(bruto: unknown): PedidoRecebido | null {
     forma: typeof corpo.forma === "string" ? corpo.forma : "",
     recebido,
     clienteId,
+    cpfNaNota,
     condicao: typeof corpo.condicao === "string" ? corpo.condicao : null,
     // Aceito como texto e conferido contra o banco na gravação: aqui só se
     // garante o formato, não de quem é o código.
@@ -498,6 +512,7 @@ async function gravarUmaVez(
         clienteId: cliente?.id ?? null,
         clienteNome: cliente?.nome ?? null,
         clienteCpfCnpj: cliente?.cpfCnpj ?? null,
+        cpfNaNota: pedido.cpfNaNota,
         vencimento,
         condicao,
         pixTxid: pedido.pixTxid ?? null,
