@@ -66,6 +66,19 @@ function refDaVenda(vendaId: string, modelo: ModeloNota) {
   return `${modelo}-${vendaId}`
 }
 
+/**
+ * O que a resposta da Focus muda na nota gravada.
+ *
+ * Campo ausente vira `undefined`, e não `null`, porque o Prisma ignora
+ * `undefined` e grava `null`. A diferença apareceu no cancelamento: a resposta
+ * dele não repete número, chave nem protocolo, e a nota cancelada ficava sem o
+ * número do documento que acabara de ser cancelado — justamente o dado que
+ * alguém procura depois.
+ *
+ * `erro` é o contrário: quando a nota alcança um estado bom, a mensagem antiga
+ * PRECISA ser apagada, senão a nota reenviada com sucesso continua exibindo a
+ * rejeição da tentativa anterior.
+ */
 function daResposta(resposta: RespostaFocus) {
   const erros = Array.isArray(resposta.erros) ? resposta.erros : []
   const mensagemDeErro =
@@ -74,16 +87,20 @@ function daResposta(resposta: RespostaFocus) {
       .filter(Boolean)
       .join(" · ") || null
 
+  const status =
+    typeof resposta.status === "string" ? resposta.status : "processando_autorizacao"
+  const deuCerto = status === "autorizado" || status === "cancelado"
+
   return {
-    status: typeof resposta.status === "string" ? resposta.status : "processando_autorizacao",
-    numero: resposta.numero ?? null,
-    serie: resposta.serie ?? null,
-    chave: resposta.chave_nfe ?? null,
-    protocolo: resposta.numero_protocolo ?? null,
-    caminhoDanfe: urlDoArquivo(resposta.caminho_danfe),
-    caminhoXml: urlDoArquivo(resposta.caminho_xml_nota_fiscal),
-    qrcodeUrl: resposta.qrcode_url ?? null,
-    erro: mensagemDeErro ?? resposta.mensagem_sefaz ?? null,
+    status,
+    numero: resposta.numero ?? undefined,
+    serie: resposta.serie ?? undefined,
+    chave: resposta.chave_nfe ?? undefined,
+    protocolo: resposta.numero_protocolo ?? undefined,
+    caminhoDanfe: urlDoArquivo(resposta.caminho_danfe) ?? undefined,
+    caminhoXml: urlDoArquivo(resposta.caminho_xml_nota_fiscal) ?? undefined,
+    qrcodeUrl: resposta.qrcode_url ?? undefined,
+    erro: mensagemDeErro ?? resposta.mensagem_sefaz ?? (deuCerto ? null : undefined),
   }
 }
 
@@ -391,7 +408,7 @@ export async function desfazerNotaDaVenda(
     const resposta = await cancelarNota(nota.modelo as ModeloNota, nota.ref, motivo)
     await db.notaFiscalEmitida.update({
       where: { id: nota.id },
-      data: { ...daResposta(resposta), status: "cancelado", erro: null },
+      data: { ...daResposta(resposta), status: "cancelado" },
     })
     return { ok: true, cancelada: true }
   } catch (erro) {
