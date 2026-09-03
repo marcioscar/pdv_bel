@@ -288,19 +288,11 @@ export function FinalizarDialogo({
         campoCpf.current?.select();
         return;
       }
+      // F7 gira o ciclo do que a venda produz: documento fiscal, cupom, nada.
       if (key === "F7") {
         evento.preventDefault();
-        onImprimirChange(!imprimir);
+        girarSaida();
         return;
-      }
-      /*
-       * F4, e não F5: F5 é recarregar a página no navegador, e mesmo com
-       * preventDefault a tecla é arriscada demais para uma escolha que muda o
-       * que sai impresso. F4 está livre dentro da conferência.
-       */
-      if (key === "F4" && fiscal.emite) {
-        evento.preventDefault();
-        onEmitirNotaChange(!emitirNota);
       }
     }
 
@@ -339,47 +331,93 @@ export function FinalizarDialogo({
   const cpfInvalido = digitosCpf.length === 11 && !validarCpf(digitosCpf);
 
   /**
-   * O que sai na bobina.
+   * O que esta venda produz — em um lugar só.
    *
-   * Um cartão só, porque é um papel só: com a NFC-e valendo, quem sai é o DANFE
-   * dela — o cupom não fiscal seria um segundo documento dizendo a mesma coisa.
-   * Dizer "Cupom" ali era mentira quando a nota estava ligada, e dois cartões
-   * marcados davam a impressão de dois papéis.
+   * Emitir a nota e imprimir o papel pareciam duas escolhas, e dois cartões
+   * acesos liam-se como dois documentos saindo. Nunca saíram dois: com a NFC-e
+   * valendo, o papel É o DANFE dela. Então é um ciclo de três: o documento
+   * fiscal, o cupom não fiscal, e nada.
+   *
+   * O modelo continua sem se escolher: NFC-e ou NF-e sai do cliente e da forma
+   * de pagamento.
    */
-  const papel = (() => {
-    if (!imprimir) return "não imprimir";
-    const nfceVale =
-      fiscal.emite &&
-      emitirNota &&
-      fiscal.producao &&
-      modeloDaVenda({ forma, clienteCpfCnpj: cliente?.cpfCnpj ?? null }) === "nfce";
-    return nfceVale ? "DANFE da NFC-e" : "cupom não fiscal";
-  })();
+  const modelo = modeloDaVenda({ forma, clienteCpfCnpj: cliente?.cpfCnpj ?? null });
+  const nomeDoModelo = modelo === "nfe" ? "NF-e" : "NFC-e";
 
-  const nota = (() => {
-    if (!fiscal.emite) {
+  const estado: "fiscal" | "cupom" | "nada" = emitirNota
+    ? "fiscal"
+    : imprimir
+      ? "cupom"
+      : "nada";
+
+  const saida = (() => {
+    if (estado === "fiscal") {
+      /*
+       * O DANFE da NF-e é A4 e não vai para a bobina; o da NFC-e em homologação
+       * não vale como documento. Nos dois casos quem sai é o cupom, e dizer isso
+       * evita o vendedor procurar um papel que não veio.
+       */
+      const papelDaVez =
+        modelo === "nfe"
+          ? "a nota sai na tela de Vendas"
+          : fiscal.producao
+            ? null
+            : "sai o cupom; a nota é de teste";
+
       return {
-        rotulo: "Nota fiscal",
-        situacao: "esta loja ainda não emite",
-        aviso: null as string | null,
-      }
+        estado,
+        destaque: true,
+        rotulo: nomeDoModelo,
+        situacao:
+          modelo === "nfe" || !fiscal.producao ? "emitir com a venda" : "emitir e imprimir",
+        aviso:
+          modelo === "nfe" && papelDaVez
+            ? `${papelDaVez} · sem frete e sem observação`
+            : papelDaVez,
+      };
     }
 
-    const modelo = modeloDaVenda({ forma, clienteCpfCnpj: cliente?.cpfCnpj ?? null })
-    const rotulo = modelo === "nfe" ? "NF-e" : "NFC-e"
-
-    if (!emitirNota) {
-      return { rotulo, situacao: "não emitir", aviso: null }
+    if (estado === "cupom") {
+      return {
+        estado,
+        destaque: true,
+        rotulo: "Papel",
+        situacao: "cupom não fiscal",
+        aviso: fiscal.emite ? "sem nota fiscal" : null,
+      };
     }
 
     return {
-      rotulo,
-      situacao: fiscal.producao ? "emitir com a venda" : "emitir com a venda (teste)",
-      // A NF-e emitida aqui sai sem frete e sem observação, e não se corrige
-      // depois. Quem precisa dos dois desliga e emite pela tela de Vendas.
-      aviso: modelo === "nfe" ? "sem frete e sem observação" : null,
+      estado,
+      destaque: false,
+      rotulo: "Papel",
+      situacao: "não imprimir",
+      aviso: fiscal.emite ? "sem nota fiscal" : null,
+    };
+  })();
+
+  /**
+   * Gira o ciclo. A loja que ainda não emite pula o primeiro estado: oferecer
+   * "emitir" onde a emissão está desligada seria prometer o que não acontece.
+   */
+  function girarSaida() {
+    if (estado === "fiscal") {
+      onEmitirNotaChange(false);
+      onImprimirChange(true);
+      return;
     }
-  })()
+    if (estado === "cupom") {
+      onImprimirChange(false);
+      return;
+    }
+    if (fiscal.emite) {
+      onEmitirNotaChange(true);
+      onImprimirChange(true);
+      return;
+    }
+    onImprimirChange(true);
+  }
+
 
   return (
     <div
@@ -710,60 +748,39 @@ export function FinalizarDialogo({
           </div>
         ) : null}
 
-        <div className="mt-2 grid grid-cols-2 gap-2">
-          <button
-            type="button"
-            tabIndex={-1}
-            onClick={() => onImprimirChange(!imprimir)}
-            className={cn(
-              "flex items-center gap-2 rounded-lg border p-3 text-left transition-colors hover:bg-muted/60",
-              imprimir ? "border-primary bg-primary/5" : "border-border",
-            )}
-          >
-            <Printer
-              className="size-4 shrink-0 text-muted-foreground"
-              aria-hidden
-            />
-            <div className="min-w-0 flex-1">
-              <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Papel
-              </div>
-              <div className="text-sm font-medium">{papel}</div>
-            </div>
-            <Kbd className="shrink-0">F7</Kbd>
-          </button>
-
-          {/* O MODELO não se escolhe — quem decide é o cliente e a forma de
-              pagamento. Emitir, sim: venda que o cliente não quer nota, teste,
-              conferência de caixa. O documento fiscal é a regra, então começa
-              ligado; desligar é ato consciente de quem fecha. */}
-          <button
-            type="button"
-            tabIndex={-1}
-            disabled={!fiscal.emite}
-            onClick={() => onEmitirNotaChange(!emitirNota)}
-            className={cn(
-              "flex items-center gap-2 rounded-lg border p-3 text-left transition-colors",
-              !fiscal.emite
-                ? "border-dashed border-border opacity-60"
-                : emitirNota
-                  ? "border-primary bg-primary/5"
-                  : "border-dashed border-border"
-            )}
-          >
+        {/*
+          Um cartão só, e não dois: emitir a nota e imprimir o papel pareciam
+          duas escolhas independentes, e dois cartões acesos liam-se como dois
+          documentos saindo. São uma coisa só — o que esta venda produz —, e por
+          isso giram num ciclo: documento fiscal, cupom, nada.
+        */}
+        <button
+          type="button"
+          tabIndex={-1}
+          onClick={girarSaida}
+          className={cn(
+            "mt-2 flex w-full items-center gap-3 rounded-lg border p-3 text-left transition-colors hover:bg-muted/60",
+            saida.destaque ? "border-primary bg-primary/5" : "border-dashed border-border"
+          )}
+        >
+          {saida.estado === "nada" ? (
+            <Printer className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+          ) : saida.estado === "cupom" ? (
+            <Printer className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+          ) : (
             <FileText className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-            <div className="min-w-0 flex-1">
-              <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                {nota.rotulo}
-              </div>
-              <div className="text-sm font-medium">{nota.situacao}</div>
-              {nota.aviso ? (
-                <div className="text-[10px] text-muted-foreground">{nota.aviso}</div>
-              ) : null}
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              {saida.rotulo}
             </div>
-            {fiscal.emite ? <Kbd className="shrink-0">F4</Kbd> : null}
-          </button>
-        </div>
+            <div className="text-sm font-medium">{saida.situacao}</div>
+            {saida.aviso ? (
+              <div className="text-[10px] text-muted-foreground">{saida.aviso}</div>
+            ) : null}
+          </div>
+          <Kbd className="shrink-0">F7</Kbd>
+        </button>
 
         {erro ? (
           <p className="mt-3 text-xs font-medium text-destructive" role="alert">
