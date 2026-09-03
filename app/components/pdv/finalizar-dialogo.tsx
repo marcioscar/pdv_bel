@@ -338,6 +338,24 @@ export function FinalizarDialogo({
   const digitosCpf = cpfNaNota.replace(/\D/g, "");
   const cpfInvalido = digitosCpf.length === 11 && !validarCpf(digitosCpf);
 
+  /**
+   * O que sai na bobina.
+   *
+   * Um cartão só, porque é um papel só: com a NFC-e valendo, quem sai é o DANFE
+   * dela — o cupom não fiscal seria um segundo documento dizendo a mesma coisa.
+   * Dizer "Cupom" ali era mentira quando a nota estava ligada, e dois cartões
+   * marcados davam a impressão de dois papéis.
+   */
+  const papel = (() => {
+    if (!imprimir) return "não imprimir";
+    const nfceVale =
+      fiscal.emite &&
+      emitirNota &&
+      fiscal.producao &&
+      modeloDaVenda({ forma, clienteCpfCnpj: cliente?.cpfCnpj ?? null }) === "nfce";
+    return nfceVale ? "DANFE da NFC-e" : "cupom não fiscal";
+  })();
+
   const nota = (() => {
     if (!fiscal.emite) {
       return {
@@ -708,11 +726,9 @@ export function FinalizarDialogo({
             />
             <div className="min-w-0 flex-1">
               <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Cupom
+                Papel
               </div>
-              <div className="text-sm font-medium">
-                {imprimir ? "Imprimir" : "Não imprimir"}
-              </div>
+              <div className="text-sm font-medium">{papel}</div>
             </div>
             <Kbd className="shrink-0">F7</Kbd>
           </button>
