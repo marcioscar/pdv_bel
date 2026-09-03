@@ -1027,6 +1027,16 @@ model NotaFiscalEmitida {
   /// A rejeição da SEFAZ por extenso, quando houve.
   erro         String?
 
+  /// O que o vendedor informou na hora de emitir, guardado para o reenvio não
+  /// perder o que foi digitado — e para se saber, depois, o que a nota dizia.
+  observacao      String?
+  /// Modalidade do frete na NF-e (0 CIF, 1 FOB, 2 terceiros, 3 e 4 próprio, 9
+  /// sem transporte). A NFC-e é sempre 9: o cliente leva na mão.
+  freteModalidade String?
+  /// Só quando o frete é cobrado na nota — soma no total dela, e por isso a nota
+  /// pode valer mais que a venda.
+  freteValor      Float?
+
   emitidaPor String?
   criadaEm     DateTime @default(now())
   atualizadaEm DateTime @updatedAt

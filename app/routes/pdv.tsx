@@ -31,6 +31,7 @@ import { criarCliente, lerCliente, listarClientes } from "~/lib/clientes.server"
 import { emitirParaVenda, type CobrancaDaVenda } from "~/lib/cobranca.server"
 import { saldosPorProduto } from "~/lib/estoque.server"
 import { contaDaLoja } from "~/lib/lojas.server"
+import { modeloDaVenda } from "~/lib/fiscal"
 import { ambienteFocus } from "~/lib/focus.server"
 import { emitirDaVenda } from "~/lib/nota-fiscal.server"
 import { SOMENTE_ATIVOS } from "~/lib/produtos.server"
@@ -646,8 +647,40 @@ export async function action({ request }: Route.ActionArgs) {
  */
 async function emitirNaVenda(vendaId: string, operador: string) {
   try {
+    /*
+     * NF-e não sai daqui. Ela pede frete e observação, que são decisão de quem
+     * está vendendo e não têm como ser adivinhados no fechamento — e depois de
+     * autorizada não se corrige. Fica no botão da tela de Vendas, que pergunta
+     * as duas coisas antes de emitir.
+     */
+    const venda = await db.venda.findUnique({
+      where: { id: vendaId },
+      select: { forma: true, clienteCpfCnpj: true },
+    })
+    if (venda && modeloDaVenda(venda) === "nfe") {
+      return {
+        emitida: false as const,
+        erro: null,
+        danfe: null,
+        numero: null,
+        modelo: "nfe" as const,
+        teste: false,
+        naTelaDeVendas: true,
+      }
+    }
+
     const resultado = await emitirDaVenda(vendaId, { emitidaPor: operador })
-    if (!resultado.ok) return { emitida: false as const, erro: resultado.erro, danfe: null }
+    if (!resultado.ok) {
+      return {
+        emitida: false as const,
+        erro: resultado.erro,
+        danfe: null,
+        numero: null,
+        modelo: null,
+        teste: false,
+        naTelaDeVendas: false,
+      }
+    }
 
     const nota = await db.notaFiscalEmitida.findUnique({
       where: { id: resultado.notaId },
@@ -679,13 +712,24 @@ async function emitirNaVenda(vendaId: string, operador: string) {
       danfe: valeComoDocumento ? `/notas/${resultado.notaId}/danfe` : null,
       numero: nota?.numero ?? null,
       modelo: nota?.modelo ?? null,
-      // Emitida, mas o papel não sai daqui: em homologação, ou por ser NF-e.
+      // Emitida, mas o papel não sai daqui: nota de homologação não vale como
+      // documento, então quem sai na bobina continua sendo o cupom.
       teste: autorizada && ambienteFocus() !== "producao",
-      naTelaDeVendas: autorizada && nota?.modelo === "nfe",
+      // Só a NF-e cai neste caso, e ela nem chega até aqui — sai antes, lá em
+      // cima. O campo existe para as duas saídas terem o mesmo formato.
+      naTelaDeVendas: false,
     }
   } catch (erro) {
     console.error("[pdv] falha ao emitir a nota da venda", vendaId, erro)
-    return { emitida: false as const, erro: "Falha ao emitir a nota", danfe: null }
+    return {
+      emitida: false as const,
+      erro: "Falha ao emitir a nota",
+      danfe: null,
+      numero: null,
+      modelo: null,
+      teste: false,
+      naTelaDeVendas: false,
+    }
   }
 }
 
@@ -1165,18 +1209,15 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
 
     const partes = [`Venda #${numero} registrada`]
     if (troco > 0) partes.push(`troco ${moeda(troco)}`)
-    if (nota?.emitida) {
+    if (nota?.naTelaDeVendas) {
+      // Venda para empresa: quem fecha precisa saber que a nota ainda não saiu, e
+      // onde ela sai.
+      partes.push("NF-e: emita em Vendas")
+    } else if (nota?.emitida) {
       const documento = `${nota.modelo === "nfe" ? "NF-e" : "NFC-e"} ${nota.numero ?? ""}`.trim()
       // Dizer "de teste" é o que impede alguém de achar que o balcão já está
-      // emitindo nota de verdade enquanto o token é o de homologação. E dizer
-      // onde a NF-e está evita o vendedor procurar um papel que não saiu.
-      partes.push(
-        nota.teste
-          ? `${documento} (teste)`
-          : nota.naTelaDeVendas
-            ? `${documento} — imprima em Vendas`
-            : documento
-      )
+      // emitindo nota de verdade enquanto o token é o de homologação.
+      partes.push(nota.teste ? `${documento} (teste)` : documento)
     }
 
     // A falha da nota é dita, e não escondida: a venda valeu, mas alguém precisa

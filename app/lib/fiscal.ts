@@ -54,6 +54,28 @@ export const ORIGEM_NACIONAL = "0"
  */
 export const PIS_COFINS_SIMPLES = "49"
 
+/**
+ * Quem contrata e paga o transporte, na tabela da NF-e.
+ *
+ * "Sem transporte" é o padrão do balcão: o cliente leva na mão. As outras entram
+ * quando a mercadoria é entregue, e a escolha muda quem responde pelo frete
+ * perante o fisco — não é detalhe de tela.
+ */
+export const MODALIDADES_FRETE = [
+  { id: "9", rotulo: "Sem transporte", detalhe: "o cliente leva" },
+  { id: "0", rotulo: "Por conta do emitente (CIF)", detalhe: "a loja paga o frete" },
+  { id: "1", rotulo: "Por conta do destinatário (FOB)", detalhe: "o cliente paga o frete" },
+  { id: "2", rotulo: "Por conta de terceiros", detalhe: "quem paga é um terceiro" },
+  { id: "3", rotulo: "Transporte próprio do emitente", detalhe: "entrega com veículo da loja" },
+  { id: "4", rotulo: "Transporte próprio do destinatário", detalhe: "o cliente busca com o veículo dele" },
+] as const
+
+export const FRETE_SEM_TRANSPORTE = "9"
+
+export function modalidadeFreteValida(valor: string) {
+  return MODALIDADES_FRETE.some((m) => m.id === valor)
+}
+
 /** CRT — o regime que o emitente declara na nota. */
 export const REGIMES = [
   { id: 1, rotulo: "Simples Nacional", detalhe: "item vai com CSOSN, sem destaque de ICMS" },

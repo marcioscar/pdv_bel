@@ -11,6 +11,8 @@ import {
 } from "~/lib/focus.server"
 import {
   ehSimples,
+  FRETE_SEM_TRANSPORTE,
+  modalidadeFreteValida,
   modeloDaVenda,
   PIS_COFINS_SIMPLES,
   pagamentoNaNota,
@@ -104,9 +106,18 @@ function daResposta(resposta: RespostaFocus) {
   }
 }
 
+/** O que o vendedor pode acrescentar à NF-e na hora de emitir. */
+export type ExtrasDaNota = {
+  /** Modalidade da tabela da SEFAZ. Vazio vale como "sem transporte". */
+  freteModalidade?: string
+  /** Só quando o frete é cobrado NA NOTA: soma no total dela. */
+  freteValor?: number
+  observacao?: string
+}
+
 export async function emitirDaVenda(
   vendaId: string,
-  { emitidaPor }: { emitidaPor: string }
+  { emitidaPor, extras }: { emitidaPor: string; extras?: ExtrasDaNota }
 ): Promise<ResultadoEmissao> {
   if (!OBJECT_ID.test(vendaId)) return { ok: false, erro: "Venda inválida" }
 
@@ -207,6 +218,26 @@ export async function emitirDaVenda(
     venda.itens.reduce((total, item) => total + item.subtotal, 0)
   )
 
+  /*
+   * Frete e observação só existem na NF-e. Na NFC-e o cliente leva a mercadoria
+   * na mão, e o campo de observação da nota de consumidor não é lugar de recado
+   * — a bobina já sai apertada.
+   */
+  const frete =
+    modelo === "nfe" && extras?.freteModalidade && modalidadeFreteValida(extras.freteModalidade)
+      ? extras.freteModalidade
+      : FRETE_SEM_TRANSPORTE
+  const valorFrete = modelo === "nfe" ? arredondar(extras?.freteValor ?? 0) : 0
+  const observacao = modelo === "nfe" ? (extras?.observacao ?? "").trim() : ""
+
+  /*
+   * A frase do Simples é exigida por lei e não pode ser substituída pelo recado
+   * do vendedor: as duas coisas convivem no mesmo campo, uma depois da outra.
+   */
+  const informacoes = [ehSimples(loja.regimeTributario) ? AVISO_SIMPLES : "", observacao]
+    .filter(Boolean)
+    .join(" ")
+
   const comum = {
     /*
      * Agora, e não a hora da venda: a nota é emitida no momento em que é
@@ -218,7 +249,7 @@ export async function emitirDaVenda(
     tipo_documento: 1, // saída
     finalidade_emissao: 1, // normal
     presenca_comprador: "1", // operação presencial
-    modalidade_frete: "9", // sem frete
+    modalidade_frete: frete,
     local_destino: interestadual ? "2" : "1",
     cnpj_emitente: loja.cnpj,
     nome_emitente: loja.razaoSocial,
@@ -226,10 +257,11 @@ export async function emitirDaVenda(
     serie: (modelo === "nfce" ? loja.serieNfce : loja.serieNfe) ?? undefined,
     valor_produtos: valorProdutos,
     valor_desconto: venda.desconto || undefined,
-    valor_total: arredondar(venda.total),
-    informacoes_adicionais_contribuinte: ehSimples(loja.regimeTributario)
-      ? AVISO_SIMPLES
-      : undefined,
+    valor_frete: valorFrete || undefined,
+    // O frete cobrado entra no total da nota: por isso a nota pode valer mais
+    // que a venda, e é isso que a tela avisa antes de emitir.
+    valor_total: arredondar(venda.total + valorFrete),
+    informacoes_adicionais_contribuinte: informacoes || undefined,
     items,
   }
 
@@ -290,10 +322,22 @@ export async function emitirDaVenda(
       vendaId,
       destinatarioNome: cliente?.nome ?? null,
       destinatarioCpfCnpj: documentoCliente || null,
-      valorTotal: venda.total,
+      valorTotal: arredondar(venda.total + valorFrete),
+      observacao: observacao || null,
+      freteModalidade: modelo === "nfe" ? frete : null,
+      freteValor: valorFrete || null,
       emitidaPor,
     },
-    update: { status: "processando_autorizacao", erro: null, ambiente, emitidaPor },
+    update: {
+      status: "processando_autorizacao",
+      erro: null,
+      ambiente,
+      emitidaPor,
+      valorTotal: arredondar(venda.total + valorFrete),
+      observacao: observacao || null,
+      freteModalidade: modelo === "nfe" ? frete : null,
+      freteValor: valorFrete || null,
+    },
   })
 
   try {

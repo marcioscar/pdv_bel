@@ -19,7 +19,7 @@ import {
 } from "~/lib/cobranca.server"
 import { cancelarVenda } from "~/lib/estoque.server"
 import { focusConfigurada, urlDoArquivo } from "~/lib/focus.server"
-import { modeloDaVenda } from "~/lib/fiscal"
+import { FRETE_SEM_TRANSPORTE, MODALIDADES_FRETE, modeloDaVenda } from "~/lib/fiscal"
 import {
   atualizarStatusDaNota,
   desfazerNotaDaVenda,
@@ -32,7 +32,7 @@ import { vendedoresDaLoja } from "~/lib/vendedores.server"
 import { Atalho, Campo, ESTILO_CAMPO, Pagina } from "~/components/pdv/filtros"
 import { diaAtras, diaDeHoje, PRIMEIRO_DIA } from "~/lib/dia"
 import { Input } from "~/components/ui/input"
-import { moeda } from "~/lib/moeda"
+import { interpretarValor, moeda } from "~/lib/moeda"
 import { ACOES_DE_GERENTE, ehGerente } from "~/lib/permissoes"
 import { FORMAS_PAGAMENTO } from "~/lib/pdv"
 import { useAtalhosDeSecao } from "~/lib/navegacao"
@@ -137,7 +137,14 @@ export async function action({ request }: Route.ActionArgs) {
   }
 
   if (acao === "nota") {
-    const resultado = await emitirDaVenda(vendaId, { emitidaPor: eu.nome })
+    const resultado = await emitirDaVenda(vendaId, {
+      emitidaPor: eu.nome,
+      extras: {
+        freteModalidade: String(form.get("freteModalidade") ?? ""),
+        freteValor: interpretarValor(String(form.get("freteValor") ?? "")) ?? 0,
+        observacao: String(form.get("observacao") ?? ""),
+      },
+    })
     return resultado.ok
       ? {
           ok: true as const,
@@ -292,6 +299,9 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
     emitindo: boolean
   } | null>(null)
   const [aviso, setAviso] = useState<{ texto: string; tipo: "erro" | "sucesso" } | null>(null)
+  // A NF-e passa por um diálogo antes de sair: frete e observação são decisões
+  // de quem está vendendo, e depois de autorizada a nota não se corrige.
+  const [emitindoNfe, setEmitindoNfe] = useState<string | null>(null)
 
   const linhaAtiva = useRef<HTMLTableRowElement>(null)
   const ultimaResposta = useRef<unknown>(null)
@@ -361,6 +371,7 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
     }
 
     setConfirmando(null)
+    if (resposta.tipo === "nota" && resposta.ok) setEmitindoNfe(null)
     avisar(
       resposta.ok ? resposta.mensagem : resposta.erro,
       resposta.ok ? "sucesso" : "erro"
@@ -387,7 +398,13 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
       return
     }
 
-    fetcher.submit({ acao: "nota", vendaId: ativa.id }, { method: "post" })
+    // NFC-e sai direto: não tem frete nem observação, e o cliente está esperando.
+    if (modeloDaVenda(ativa) === "nfce") {
+      fetcher.submit({ acao: "nota", vendaId: ativa.id }, { method: "post" })
+      return
+    }
+
+    setEmitindoNfe(ativa.id)
   }, [ativa, cancelando, avisar, fetcher, notas])
 
   const verCobranca = useCallback(() => {
@@ -515,6 +532,7 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
   ])
 
   const vendaConfirmando = vendas.find((venda) => venda.id === confirmando)
+  const vendaEmitindoNfe = vendas.find((venda) => venda.id === emitindoNfe)
 
   return (
     <main className="relative flex h-screen flex-col overflow-hidden bg-card text-foreground">
@@ -928,6 +946,20 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
         />
       ) : null}
 
+      {vendaEmitindoNfe ? (
+        <DialogoNfe
+          venda={vendaEmitindoNfe}
+          enviando={cancelando}
+          onFechar={() => setEmitindoNfe(null)}
+          onEmitir={(dados) =>
+            fetcher.submit(
+              { acao: "nota", vendaId: vendaEmitindoNfe.id, ...dados },
+              { method: "post" }
+            )
+          }
+        />
+      ) : null}
+
       {vendaConfirmando ? (
         <div
           role="dialog"
@@ -997,6 +1029,146 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
     </main>
   )
 }
+
+
+/**
+ * O que a NF-e precisa saber e a venda não conta.
+ *
+ * Frete e observação só existem aqui porque não têm como ser adivinhados: a
+ * modalidade diz quem responde pelo transporte perante o fisco, e a observação é
+ * o recado que vai impresso na nota. Depois de autorizada não se corrige nem uma
+ * coisa nem outra — daí perguntar antes, e não depois.
+ */
+function DialogoNfe({
+  venda,
+  enviando,
+  onFechar,
+  onEmitir,
+}: {
+  venda: { numero: number; total: number; clienteNome: string | null }
+  enviando: boolean
+  onFechar: () => void
+  onEmitir: (dados: { freteModalidade: string; freteValor: string; observacao: string }) => void
+}) {
+  const [freteModalidade, setFreteModalidade] = useState(FRETE_SEM_TRANSPORTE)
+  const [freteValor, setFreteValor] = useState("")
+  const [observacao, setObservacao] = useState("")
+
+  const primeiroCampo = useRef<HTMLSelectElement>(null)
+  useEffect(() => primeiroCampo.current?.focus(), [])
+
+  const cobrado = interpretarValor(freteValor) ?? 0
+
+  useEffect(() => {
+    function aoTeclar(evento: KeyboardEvent) {
+      if (evento.key === "Escape") {
+        evento.preventDefault()
+        evento.stopPropagation()
+        onFechar()
+      }
+    }
+    window.addEventListener("keydown", aoTeclar, true)
+    return () => window.removeEventListener("keydown", aoTeclar, true)
+  }, [onFechar])
+
+  return (
+    <div className="absolute inset-0 z-50 flex items-start justify-center bg-background/80 p-10 backdrop-blur-sm">
+      <div className="w-full max-w-lg rounded-xl border border-border bg-card p-6 shadow-xl">
+        <h2 className="text-base font-semibold">Emitir NF-e da venda #{venda.numero}</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {venda.clienteNome ?? "sem cliente"} · {moeda(venda.total)}
+        </p>
+
+        <div className="mt-5 flex flex-col gap-3">
+          <div>
+            <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Frete
+            </label>
+            <select
+              ref={primeiroCampo}
+              value={freteModalidade}
+              onChange={(evento) => setFreteModalidade(evento.target.value)}
+              className="h-9 w-full rounded-lg border border-border bg-background px-2 text-sm"
+            >
+              {MODALIDADES_FRETE.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.rotulo} — {m.detalhe}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* O valor só aparece quando há transporte: perguntar "quanto custou o
+              frete" numa venda que o cliente levou na mão é ruído. */}
+          {freteModalidade !== FRETE_SEM_TRANSPORTE ? (
+            <div>
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Valor do frete cobrado na nota
+              </label>
+              <Input
+                value={freteValor}
+                onChange={(evento) => setFreteValor(evento.target.value)}
+                placeholder="0,00"
+                inputMode="decimal"
+                autoComplete="off"
+                className="h-9 rounded-lg font-mono tabular-nums"
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                {cobrado > 0
+                  ? `A nota sai por ${moeda(venda.total + cobrado)} — a venda continua ${moeda(venda.total)}.`
+                  : "Deixe vazio quando o frete não é cobrado nesta nota."}
+              </p>
+            </div>
+          ) : null}
+
+          <div>
+            <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Observação
+            </label>
+            <textarea
+              value={observacao}
+              onChange={(evento) => setObservacao(evento.target.value)}
+              rows={3}
+              maxLength={500}
+              placeholder="Pedido 1234, entregar até sexta…"
+              className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
+            />
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Vai impresso na nota, junto da frase do Simples Nacional.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-5 flex items-center justify-between">
+          <span className="text-xs text-muted-foreground">
+            <Kbd>Esc</Kbd> volta · depois de autorizada, a nota não se corrige
+          </span>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              tabIndex={-1}
+              variant="outline"
+              onClick={onFechar}
+              className="rounded-lg"
+            >
+              Voltar
+            </Button>
+            <Button
+              type="button"
+              disabled={enviando}
+              onClick={() => onEmitir({ freteModalidade, freteValor, observacao })}
+              className="rounded-lg"
+            >
+              <FileText className="size-4" aria-hidden />
+              {enviando ? "Emitindo…" : "Emitir NF-e"}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 
 type NotaDaVenda = {
   modelo: string
