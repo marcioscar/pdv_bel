@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { data, useFetcher } from "react-router"
-import { Check, Plus, UserSearch, Users } from "lucide-react"
+import { Check, Plus, ShoppingCart, UserSearch, Users } from "lucide-react"
 
 import type { Route } from "./+types/admin.clientes"
 import { Badge } from "~/components/ui/badge"
@@ -440,6 +440,21 @@ function DialogoHistorico({ cliente }: { cliente: Cliente }) {
 
               {detalhando ? (
                 <div className="mb-2 rounded-lg bg-muted/40 px-3 py-2">
+                  <div className="mb-1.5 flex justify-end">
+                    {/*
+                      O caminho de volta ao balcão: o cliente pediu "o de
+                      sempre", e daqui sai o carrinho pronto. Os preços são os de
+                      hoje e o desconto não vem junto — o pedido é o mesmo, o
+                      acordo daquele dia não.
+                    */}
+                    <a
+                      href={`/?repetir=${compra.id}`}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-[11px] font-medium hover:bg-background"
+                    >
+                      <ShoppingCart className="size-3.5" aria-hidden />
+                      Repetir no caixa
+                    </a>
+                  </div>
                   <table className="w-full text-xs">
                     <tbody>
                       {compra.itens.map((item, i) => (

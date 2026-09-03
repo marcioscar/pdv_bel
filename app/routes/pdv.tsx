@@ -90,6 +90,8 @@ export function meta(_: Route.MetaArgs) {
   ]
 }
 
+const OBJECT_ID = /^[0-9a-fA-F]{24}$/
+
 const CAIXA = "01"
 
 /** Espera entre um documento e o outro na impressão em sequência. */
@@ -165,13 +167,33 @@ export async function loader({ request }: Route.LoaderArgs) {
    * preços não — quem precifica é o catálogo, na hora de gravar, como em toda
    * venda deste sistema.
    */
-  const idParaRetomar = new URL(request.url).searchParams.get("retomar")
+  const parametros = new URL(request.url).searchParams
+  const idParaRetomar = parametros.get("retomar")
   const retomada = idParaRetomar
     ? await db.autorizacao
         .findFirst({ where: { id: idParaRetomar, solicitanteId: eu.id } })
         .then((a) => (a && aprovacaoValida(a) ? a : null))
         .catch(() => null)
     : null
+
+  /**
+   * `?repetir=<id>` monta o carrinho a partir de uma compra anterior.
+   *
+   * É a resposta ao telefone: "manda o de sempre". Vem do histórico do cliente,
+   * e por isso aceita venda de QUALQUER loja que este operador alcança — o
+   * cliente comprou na QI e ligou para a SDS, e o pedido é o mesmo.
+   *
+   * O desconto NÃO volta: ele foi negociado naquela venda, às vezes com
+   * liberação do gerente, e repetir o pedido não é repetir o acordo. Os preços
+   * também não — quem precifica é o catálogo, na hora de fechar.
+   */
+  const idParaRepetir = parametros.get("repetir")
+  const repeticao =
+    idParaRepetir && OBJECT_ID.test(idParaRepetir)
+      ? await db.venda
+          .findFirst({ where: { id: idParaRepetir, loja: { in: eu.lojasPermitidas } } })
+          .catch(() => null)
+      : null
 
   return {
     eu,
@@ -193,9 +215,14 @@ export async function loader({ request }: Route.LoaderArgs) {
       cidade: c.cidade,
       uf: c.uf,
     })),
+    // Os dois caminhos que trazem carrinho pronto entram pela mesma porta; o que
+    // muda é a origem, e é ela que decide se há liberação junto.
     retomada: retomada
       ? {
+          origem: "autorizacao" as const,
           id: retomada.id,
+          numero: null,
+          quando: null,
           desconto: retomada.desconto,
           clienteId: retomada.clienteId,
           itens: retomada.itens.map((item) => ({
@@ -203,6 +230,19 @@ export async function loader({ request }: Route.LoaderArgs) {
             quantidade: item.quantidade,
           })),
         }
+      : repeticao
+        ? {
+            origem: "repeticao" as const,
+            id: repeticao.id,
+            numero: repeticao.numero,
+            quando: repeticao.criadaEm.toISOString(),
+            desconto: 0,
+            clienteId: repeticao.clienteId,
+            itens: repeticao.itens.map((item) => ({
+              produtoId: item.produtoId,
+              quantidade: item.quantidade,
+            })),
+          }
       : null,
   }
 }
@@ -1357,11 +1397,26 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       const escolhido = clientes.find((c) => c.id === retomada.clienteId)
       if (escolhido) setCliente(escolhido)
     }
-    setAutorizacaoId(retomada.id)
+    /*
+     * Só a autorização carrega liberação. O pedido repetido é um carrinho como
+     * outro qualquer: se ele esbarrar numa trava — desconto, cliente devendo —,
+     * passa pelo gerente como passaria se tivesse sido digitado agora.
+     */
+    if (retomada.origem === "autorizacao") setAutorizacaoId(retomada.id)
+
+    const quando = retomada.quando
+      ? new Date(retomada.quando).toLocaleDateString("pt-BR")
+      : null
+
+    const feito =
+      retomada.origem === "autorizacao"
+        ? "Venda liberada pelo gerente — carrinho retomado"
+        : `Pedido da venda #${retomada.numero} (${quando}) no carrinho — confira antes de fechar`
+
     avisar(
       faltaram.length > 0
-        ? `Venda liberada — mas o estoque caiu no meio: confira ${faltaram.join(", ")}`
-        : "Venda liberada pelo gerente — carrinho retomado",
+        ? `${feito} · o estoque não cobre tudo: confira ${faltaram.join(", ")}`
+        : feito,
       faltaram.length > 0 ? "erro" : "sucesso"
     )
   }, [avisar, clientes, produtos, retomada])
