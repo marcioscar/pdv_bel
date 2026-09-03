@@ -79,6 +79,8 @@ export default [
   route("loja", "routes/loja.tsx"),
   route("sair", "routes/sair.tsx"),
   route("saude", "routes/saude.tsx"),
+  // Dados, não tela: é o diálogo do cadastro de clientes que consulta.
+  route("clientes/:clienteId/historico", "routes/cliente.historico.tsx"),
   route("cep/:cep", "routes/cep.tsx"),
   route("cnpj/:cnpj", "routes/cnpj.tsx"),
   // Uma URL por conta do Inter (MATRIZ, NRT, SDS). A rota sem conta continua para

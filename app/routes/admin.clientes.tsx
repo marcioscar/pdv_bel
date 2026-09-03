@@ -10,6 +10,7 @@ import {
   DialogClose,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "~/components/ui/dialog"
@@ -23,7 +24,10 @@ import {
   lerCliente,
   listarClientes,
 } from "~/lib/clientes.server"
+import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
+import { FORMAS_PAGAMENTO } from "~/lib/pdv"
 import { exigirUsuario } from "~/lib/sessao.server"
+import type { HistoricoDoCliente } from "~/routes/cliente.historico"
 import { cn } from "~/lib/utils"
 
 export function meta(_: Route.MetaArgs) {
@@ -94,6 +98,7 @@ export default function AdminClientes({ loaderData }: Route.ComponentProps) {
   // animação de saída não perder o conteúdo; `chave` remonta o formulário a cada
   // abertura, que é o que garante campos limpos sem um efeito de sincronia.
   const [aberto, setAberto] = useState(false)
+  const [historico, setHistorico] = useState<Cliente | null>(null)
   const [editando, setEditando] = useState<Cliente | null>(null)
   const [chave, setChave] = useState(0)
 
@@ -191,6 +196,10 @@ export default function AdminClientes({ loaderData }: Route.ComponentProps) {
         </Button>
       </div>
 
+      <Dialog open={historico !== null} onOpenChange={(estado) => !estado && setHistorico(null)}>
+        {historico ? <DialogoHistorico cliente={historico} /> : null}
+      </Dialog>
+
       <Dialog open={aberto} onOpenChange={(estado) => setAberto(estado)}>
         <DialogoCliente
           key={chave}
@@ -286,6 +295,15 @@ export default function AdminClientes({ loaderData }: Route.ComponentProps) {
                       type="button"
                       variant="ghost"
                       size="xs"
+                      title="O que este cliente já comprou, na rede toda"
+                      onClick={() => setHistorico(cliente)}
+                    >
+                      Histórico
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
                       onClick={() => abrir(cliente)}
                     >
                       Editar
@@ -336,6 +354,130 @@ export default function AdminClientes({ loaderData }: Route.ComponentProps) {
         ) : null}
       </div>
     </div>
+  )
+}
+
+/**
+ * O que este cliente já comprou.
+ *
+ * A pergunta que ele faz por telefone é sempre a mesma — "repete o último
+ * pedido" —, e a resposta são os ITENS, não o valor. Por isso a compra abre
+ * mostrando o que levou, e não um resumo financeiro.
+ *
+ * Carrega quando abre, e não junto com a lista: são as compras de UM cliente
+ * que interessam, no momento em que alguém pergunta.
+ */
+function DialogoHistorico({ cliente }: { cliente: Cliente }) {
+  const busca = useFetcher<HistoricoDoCliente>()
+  const [aberta, setAberta] = useState<string | null>(null)
+
+  const carregar = busca.load
+  useEffect(() => {
+    carregar(`/clientes/${cliente.id}/historico`)
+  }, [carregar, cliente.id])
+
+  const compras = busca.data?.compras ?? []
+  const carregando = busca.state !== "idle" && !busca.data
+
+  // Só o que valeu: venda cancelada não conta como compra, mas continua na
+  // lista — quem pergunta pelo pedido antigo precisa saber se ele foi desfeito.
+  const validas = compras.filter((compra) => !compra.canceladaEm)
+  const gasto = validas.reduce((total, compra) => total + compra.total, 0)
+
+  return (
+    <DialogContent className="sm:max-w-3xl">
+      <DialogHeader>
+        <DialogTitle>{cliente.nome}</DialogTitle>
+        <DialogDescription>
+          {carregando
+            ? "Buscando as compras…"
+            : compras.length === 0
+              ? "Este cliente ainda não comprou nada com o cadastro vinculado."
+              : `${validas.length} ${validas.length === 1 ? "compra" : "compras"} · ${moeda(gasto)} · da rede toda, da mais recente para a mais antiga`}
+        </DialogDescription>
+      </DialogHeader>
+
+      <div className="max-h-[60vh] overflow-y-auto">
+        {compras.map((compra) => {
+          const cancelada = Boolean(compra.canceladaEm)
+          const detalhando = aberta === compra.id
+
+          return (
+            <div key={compra.id} className="border-b border-border last:border-0">
+              <button
+                type="button"
+                onClick={() => setAberta(detalhando ? null : compra.id)}
+                className={cn(
+                  "flex w-full items-center gap-3 px-1 py-2.5 text-left text-sm transition-colors hover:bg-muted/60",
+                  cancelada && "opacity-60"
+                )}
+              >
+                <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
+                  {new Date(compra.criadaEm).toLocaleDateString("pt-BR")}
+                </span>
+                <Badge variant="outline" className="shrink-0 font-mono text-[10px]">
+                  {compra.loja}
+                </Badge>
+                <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                  {compra.itens.length === 1
+                    ? compra.itens[0].descricao
+                    : `${compra.itens.length} itens · ${compra.itens[0]?.descricao ?? ""}`}
+                </span>
+                {cancelada ? (
+                  <Badge variant="destructive" className="shrink-0 text-[9px]">
+                    cancelada
+                  </Badge>
+                ) : null}
+                <span
+                  className={cn(
+                    "shrink-0 font-mono text-xs tabular-nums",
+                    cancelada && "line-through"
+                  )}
+                >
+                  {moeda(compra.total)}
+                </span>
+              </button>
+
+              {detalhando ? (
+                <div className="mb-2 rounded-lg bg-muted/40 px-3 py-2">
+                  <table className="w-full text-xs">
+                    <tbody>
+                      {compra.itens.map((item, i) => (
+                        <tr key={`${item.codigo}-${i}`}>
+                          <td className="py-1 pr-2 font-mono tabular-nums text-muted-foreground">
+                            {formatarQuantidade(item.quantidade)} {item.unidade}
+                          </td>
+                          <td className="py-1 pr-2">{item.descricao}</td>
+                          <td className="py-1 pr-2 font-mono text-[11px] tabular-nums text-muted-foreground">
+                            cód. {item.codigo}
+                          </td>
+                          <td className="py-1 text-right font-mono tabular-nums">
+                            {moeda(item.subtotal)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <p className="mt-1.5 text-[11px] text-muted-foreground">
+                    Venda #{compra.numero} ·{" "}
+                    {FORMAS_PAGAMENTO.find((f) => f.id === compra.forma)?.rotulo ?? compra.forma}
+                    {compra.desconto > 0 ? ` · desconto ${moeda(compra.desconto)}` : ""}
+                    {compra.vendedorNome ? ` · ${compra.vendedorNome}` : ""}
+                  </p>
+                </div>
+              ) : null}
+            </div>
+          )
+        })}
+      </div>
+
+      <DialogFooter className="sm:justify-between">
+        <span className="text-xs text-muted-foreground">
+          Clique numa compra para ver o que ele levou
+        </span>
+        <DialogClose render={<Button type="button" variant="outline" />}>Fechar</DialogClose>
+      </DialogFooter>
+    </DialogContent>
   )
 }
 

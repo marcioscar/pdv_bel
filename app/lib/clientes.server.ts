@@ -231,3 +231,46 @@ export async function atualizarCliente(
 
   return { ok: true, cliente }
 }
+
+/**
+ * O que este cliente comprou, da rede inteira e em ordem de recência.
+ *
+ * Existe para uma conversa concreta: o cliente liga e pede "repete o último
+ * pedido". Sem isto, quem atende procurava na tela de Vendas por nome, uma loja
+ * de cada vez, e a última compra podia ter sido feita na outra.
+ *
+ * A rede inteira de propósito: o cadastro é da rede, e quem comprou na QI e liga
+ * para a SDS continua sendo o mesmo cliente com o mesmo pedido de sempre.
+ *
+ * Traz os itens junto — são eles a resposta da pergunta. Sem os itens, a lista
+ * diria quanto ele gastou, que é o que ninguém perguntou.
+ */
+export async function historicoDoCliente(clienteId: string, { limite = 30 } = {}) {
+  if (!OBJECT_ID.test(clienteId)) return []
+
+  const vendas = await db.venda.findMany({
+    where: { clienteId },
+    orderBy: { criadaEm: "desc" },
+    take: limite,
+  })
+
+  return vendas.map((venda) => ({
+    id: venda.id,
+    numero: venda.numero,
+    loja: venda.loja,
+    criadaEm: venda.criadaEm,
+    forma: venda.forma,
+    total: venda.total,
+    desconto: venda.desconto,
+    canceladaEm: venda.canceladaEm,
+    vendedorNome: venda.vendedorNome,
+    itens: venda.itens.map((item) => ({
+      codigo: item.codigo,
+      descricao: item.descricao,
+      unidade: item.unidade,
+      quantidade: item.quantidade,
+      preco: item.preco,
+      subtotal: item.subtotal,
+    })),
+  }))
+}
