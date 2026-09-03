@@ -19,6 +19,7 @@ import { Input } from "~/components/ui/input";
 import { Kbd } from "~/components/ui/kbd";
 import { Separator } from "~/components/ui/separator";
 import { formatarCpfCnpj } from "~/lib/documento";
+import { modeloDaVenda } from "~/lib/fiscal";
 import { interpretarValor, moeda } from "~/lib/moeda";
 import { FORMAS_PAGAMENTO, type FormaPagamento } from "~/lib/pdv";
 import type { ClienteResumo } from "~/components/pdv/cliente-dialogo";
@@ -57,6 +58,8 @@ type Props = {
   onCadastrarCliente: () => void;
   imprimir: boolean;
   onImprimirChange: (imprimir: boolean) => void;
+  /** Se esta loja emite nota, e se o que sai vale como documento. */
+  fiscal: { emite: boolean; producao: boolean };
   gravando: boolean;
   erro: string | null;
   onConfirmar: () => void;
@@ -93,6 +96,7 @@ export function FinalizarDialogo({
   onCadastrarCliente,
   imprimir,
   onImprimirChange,
+  fiscal,
   gravando,
   erro,
   onConfirmar,
@@ -289,6 +293,30 @@ export function FinalizarDialogo({
     opcoes,
     pausado,
   ]);
+
+  /**
+   * O que a conferência promete sobre a nota.
+   *
+   * As três situações são diferentes de verdade: a NFC-e sai sozinha e vira o
+   * papel do cliente; a NF-e espera o vendedor informar frete e observação na
+   * tela de Vendas; e a loja que ainda não emite continua no cupom não fiscal.
+   * Prometer errado aqui é o que faz alguém procurar um documento que não veio.
+   */
+  const nota = (() => {
+    if (!fiscal.emite) {
+      return { sai: false, rotulo: "Nota fiscal", situacao: "esta loja ainda não emite" }
+    }
+
+    const modelo = modeloDaVenda({ forma, clienteCpfCnpj: cliente?.cpfCnpj ?? null })
+    if (modelo === "nfe") {
+      return { sai: false, rotulo: "NF-e", situacao: "emitir na tela de Vendas" }
+    }
+    return {
+      sai: true,
+      rotulo: "NFC-e",
+      situacao: fiscal.producao ? "sai com a venda" : "sai com a venda (teste)",
+    }
+  })()
 
   return (
     <div
@@ -604,18 +632,22 @@ export function FinalizarDialogo({
             <Kbd className="shrink-0">F7</Kbd>
           </button>
 
-          {/* Desabilitado a propósito: NF-e é projeto à parte (certificado A1,
-              SEFAZ, contingência), não um botão. O lugar dela já fica definido. */}
-          <div className="flex items-center gap-2 rounded-lg border border-dashed border-border p-3 opacity-50">
-            <FileText
-              className="size-4 shrink-0 text-muted-foreground"
-              aria-hidden
-            />
+          {/* Não é botão: é o que VAI acontecer com esta venda. A nota não se
+              escolhe — o documento é decidido pelo cliente e pela forma de
+              pagamento —, mas quem fecha precisa saber o que vai sair, e o que
+              não vai sair daqui. */}
+          <div
+            className={cn(
+              "flex items-center gap-2 rounded-lg border p-3",
+              nota.sai ? "border-border" : "border-dashed border-border opacity-60"
+            )}
+          >
+            <FileText className="size-4 shrink-0 text-muted-foreground" aria-hidden />
             <div className="min-w-0 flex-1">
               <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                NF-e
+                {nota.rotulo}
               </div>
-              <div className="text-sm font-medium">em breve</div>
+              <div className="text-sm font-medium">{nota.situacao}</div>
             </div>
           </div>
         </div>

@@ -32,7 +32,7 @@ import { emitirParaVenda, type CobrancaDaVenda } from "~/lib/cobranca.server"
 import { saldosPorProduto } from "~/lib/estoque.server"
 import { contaDaLoja } from "~/lib/lojas.server"
 import { modeloDaVenda } from "~/lib/fiscal"
-import { ambienteFocus } from "~/lib/focus.server"
+import { ambienteFocus, focusConfigurada } from "~/lib/focus.server"
 import { emitirDaVenda } from "~/lib/nota-fiscal.server"
 import { SOMENTE_ATIVOS } from "~/lib/produtos.server"
 import { autenticar, exigirUsuario } from "~/lib/sessao.server"
@@ -141,13 +141,14 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   // O catálogo inteiro vai para o cliente para a busca responder sem latência
   // por tecla. Acima de ~5 mil produtos, trocar por busca no servidor.
-  const [cadastro, saldos, clientes, vendedores] = await Promise.all([
+  const [cadastro, saldos, clientes, vendedores, loja] = await Promise.all([
     db.produto.findMany({ where: SOMENTE_ATIVOS, orderBy: { descricao: "asc" } }),
     saldosPorProduto(eu.loja),
     listarClientes(),
     // Poucos nomes, e vão inteiros para a tela pelo mesmo motivo do catálogo: o
     // caixa não pode esperar a rede para ver de quem é a comissão que digitou.
     vendedoresDaLoja(eu.loja),
+    db.loja.findUnique({ where: { codigo: eu.loja }, select: { emiteNotaFiscal: true } }),
   ])
 
   // O estoque não é um campo do produto: é a soma dos movimentos.
@@ -176,6 +177,15 @@ export async function loader({ request }: Route.LoaderArgs) {
     eu,
     produtos,
     vendedores,
+    /*
+     * O que o caixa precisa saber sobre nota fiscal: se esta loja emite e se
+     * vale como documento. A conferência do F10 usa isso para dizer, ANTES de
+     * fechar, o que vai sair — e o que não vai.
+     */
+    fiscal: {
+      emite: Boolean(loja?.emiteNotaFiscal) && focusConfigurada(),
+      producao: ambienteFocus() === "producao",
+    },
     clientes: clientes.map((c) => ({
       id: c.id,
       nome: c.nome,
@@ -742,7 +752,7 @@ export function shouldRevalidate() {
 type Aviso = { texto: string; tipo: "erro" | "sucesso" } | null
 
 export default function Pdv({ loaderData }: Route.ComponentProps) {
-  const { eu, produtos, clientes, retomada, vendedores } = loaderData
+  const { eu, produtos, clientes, retomada, vendedores, fiscal } = loaderData
 
   const [venda, despachar] = useReducer(reduzirVenda, vendaVazia)
   const [entrada, setEntrada] = useState("")
@@ -2010,6 +2020,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
             setClienteAberto(true)
           }}
           imprimir={imprimirCupom}
+          fiscal={fiscal}
           onImprimirChange={setImprimirCupom}
           gravando={gravando}
           erro={erroFinalizacao}
