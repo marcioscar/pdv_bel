@@ -9,6 +9,7 @@ import {
 } from "~/lib/notas-fiscais"
 import {
   consultarChaveNaSefaz,
+  consultarNsuAvulsoNaSefaz,
   consultarNsuNaSefaz,
   decodificarChave,
   resumoDoProcNFe,
@@ -58,6 +59,9 @@ export async function sincronizarNotasDaLoja(
   }
 
   let ultNsu = normalizarNsu(cursor?.ultNsu ?? "0")
+  // O maior NSU que a SEFAZ já disse existir. Guardado à parte porque as
+  // recusas precisam poder gravar o cursor sem inventar este número.
+  let maxNsuConhecido = normalizarNsu(cursor?.maxNsu ?? "0")
   let novas = 0
 
   for (let pagina = 0; pagina < maxPaginas; pagina++) {
@@ -66,8 +70,13 @@ export async function sincronizarNotasDaLoja(
       // A recusa por consumo indevido vale para o CNPJ inteiro e dura uma
       // hora: registrar aqui evita que o próximo clique gaste outra tentativa
       // à toa e estenda o castigo.
+      //
+      // Grava o `maxNsu` que já se conhecia, e não o `ultNsu` de agora: numa
+      // recusa a SEFAZ não informa quanto existe, e copiar o nosso próprio
+      // número para lá apaga a única prova de que ainda falta documento — a
+      // loja passa a parecer em dia justamente porque a consulta foi negada.
       if (/consumo indevido|limite de consultas/i.test(resultado.erro)) {
-        await guardarCursor(loja, ultNsu, ultNsu, esperaDeUmaHora())
+        await guardarCursor(loja, ultNsu, maxNsuConhecido, esperaDeUmaHora())
       }
       return { ok: false, erro: resultado.erro, novas }
     }
@@ -75,8 +84,30 @@ export async function sincronizarNotasDaLoja(
     for (const doc of resultado.documentos) {
       // procEventoNFe/resEvento são manifestação, cancelamento, carta de
       // correção — não são a nota em si, e a lista é só de notas.
-      if (!doc.schema.startsWith("resNFe") && !doc.schema.startsWith("procNFe")) continue
-      if (await gravarNota(loja, doc.schema, doc.xml)) novas++
+      const chave = ehNota(doc.schema) ? await gravarNota(loja, doc.schema, doc.xml, doc.nsu) : null
+      if (chave) novas++
+      // Registrado mesmo quando ignorado: é o que separa "evento que não
+      // interessa" de "documento que nunca chegou" na hora de procurar buraco.
+      await registrarDocumento(loja, doc.nsu, doc.schema, chave)
+    }
+
+    // A SEFAZ respondeu sem dizer até onde foi. Antes isto era preenchido com
+    // o NSU que nós mesmos tínhamos mandado — e o efeito era o cursor se
+    // declarar em dia sozinho: "até onde fui" batia com "quanto existe" porque
+    // os dois eram o nosso próprio número. Foi assim que dez dias de notas
+    // ficaram do lado de fora com a tela dizendo "em dia · faltam 0".
+    //
+    // Sem os dois campos, o cursor fica onde está: repetir a consulta custa uma
+    // chamada, pular documento custa uma nota fiscal que ninguém sabe que existe.
+    if (resultado.ultNSU == null || resultado.maxNSU == null) {
+      return {
+        ok: false,
+        novas,
+        erro:
+          `A SEFAZ respondeu (cStat ${resultado.cStat}: ${resultado.xMotivo}) sem informar ` +
+          `ultNSU/maxNSU. O cursor foi mantido em ${Number(ultNsu)} para não pular documento — ` +
+          `tente de novo em alguns minutos.`,
+      }
     }
 
     // Comparação numérica, e não de texto: a SEFAZ devolve o NSU com zeros à
@@ -87,6 +118,7 @@ export async function sincronizarNotasDaLoja(
     const anterior = ultNsu
     ultNsu = normalizarNsu(resultado.ultNSU)
     const maxNsu = normalizarNsu(resultado.maxNSU)
+    maxNsuConhecido = maxNsu
 
     const semProgresso = Number(ultNsu) <= Number(anterior)
     const emDia = Number(ultNsu) >= Number(maxNsu)
@@ -100,6 +132,108 @@ export async function sincronizarNotasDaLoja(
   }
 
   return { ok: true, novas, paginas: maxPaginas, completo: false }
+}
+
+export type BuracosDaSincronizacao = {
+  /** O primeiro NSU que já se viu — antes dele não há registro, então não há o que afirmar. */
+  de: number
+  /** Até onde o cursor diz ter ido. */
+  ate: number
+  /** Os NSUs nunca entregues, os primeiros primeiro. Truncado — o total vem à parte. */
+  faltando: number[]
+  total: number
+}
+
+/**
+ * Os NSUs que a sincronização nunca viu passar, dentro da faixa que ela já
+ * percorreu.
+ *
+ * O NSU é uma sequência contínua por CNPJ: se o 21950 e o 21952 chegaram e o
+ * 21951 não, aquele documento existiu e ficou de fora. É esta a pergunta que
+ * antes só se respondia rebobinando o cursor — o que a SEFAZ pune.
+ *
+ * Só enxerga dali para frente: o registro (`DocumentoDistribuido`) nasceu com
+ * esta correção, então buraco anterior a ele é invisível aqui. Para aqueles
+ * resta a busca por chave, com o DANFE do fornecedor na mão.
+ */
+export async function buracosDaSincronizacao(
+  loja: string,
+  limite = 200
+): Promise<BuracosDaSincronizacao> {
+  const [cursor, primeiro, quantos] = await Promise.all([
+    db.sincronizacaoSefaz.findUnique({ where: { loja } }),
+    db.documentoDistribuido.findFirst({ where: { loja }, select: { nsu: true }, orderBy: { nsu: "asc" } }),
+    db.documentoDistribuido.count({ where: { loja } }),
+  ])
+  if (!cursor || !primeiro) return { de: 0, ate: 0, faltando: [], total: 0 }
+
+  const de = Number(primeiro.nsu)
+  const ate = Number(cursor.ultNsu)
+
+  // Atalho pela contagem: se há tantos registros quanto números na faixa, não
+  // falta nenhum — e a tela, que faz esta pergunta a cada carregamento, não
+  // precisa trazer as dezenas de milhares de linhas para descobrir isso.
+  if (quantos >= ate - de + 1) return { de, ate, faltando: [], total: 0 }
+
+  const vistos = await db.documentoDistribuido.findMany({
+    where: { loja },
+    select: { nsu: true },
+    orderBy: { nsu: "asc" },
+  })
+  const numeros = new Set(vistos.map((v) => Number(v.nsu)))
+
+  const faltando: number[] = []
+  let total = 0
+  for (let n = de; n <= ate; n++) {
+    if (numeros.has(n)) continue
+    total++
+    if (faltando.length < limite) faltando.push(n)
+  }
+
+  return { de, ate, faltando, total }
+}
+
+export type ResultadoRecuperacao =
+  | { ok: true; buscados: number; notas: number; vazios: number }
+  | { ok: false; erro: string; buscados: number; notas: number }
+
+/**
+ * Busca NSUs específicos (`consNSU`) e grava o que vier.
+ *
+ * Um por chamada, de propósito: é o preço de poder reler o passado sem mexer
+ * no cursor de distribuição. Para na primeira recusa em vez de insistir — a
+ * cota é por hora e por CNPJ, e gastar o resto dela contra uma porta fechada
+ * só estende o bloqueio.
+ *
+ * NSU que a SEFAZ diz não ter nada fica registrado como vazio: a numeração não
+ * é densa por interessado, e sem isso o mesmo buraco seria perguntado para
+ * sempre, a cada vez consumindo cota.
+ */
+export async function recuperarNsus(loja: string, nsus: number[]): Promise<ResultadoRecuperacao> {
+  let buscados = 0
+  let notas = 0
+  let vazios = 0
+
+  for (const numero of nsus) {
+    const nsu = normalizarNsu(String(numero))
+    const resultado = await consultarNsuAvulsoNaSefaz(loja, nsu)
+    if (!resultado.ok) return { ok: false, erro: resultado.erro, buscados, notas }
+
+    buscados++
+
+    if (!resultado.documento) {
+      await registrarDocumento(loja, nsu, "vazio", null)
+      vazios++
+      continue
+    }
+
+    const { schema, xml, nsu: nsuDoDoc } = resultado.documento
+    const chave = ehNota(schema) ? await gravarNota(loja, schema, xml, nsuDoDoc || nsu) : null
+    if (chave) notas++
+    await registrarDocumento(loja, nsuDoDoc || nsu, schema, chave)
+  }
+
+  return { ok: true, buscados, notas, vazios }
 }
 
 /** Os 15 dígitos com zeros à esquerda que a SEFAZ usa — um formato só, sempre. */
@@ -127,14 +261,19 @@ function guardarCursor(loja: string, ultNsu: string, maxNsu: string, proximaCons
  * Nunca sobrescreve `situacao`: é a decisão do gerente sobre a nota, e uma
  * ressincronização não pode apagar o que ele já resolveu.
  */
-async function gravarNota(loja: string, schema: string, xml: string): Promise<boolean> {
+async function gravarNota(
+  loja: string,
+  schema: string,
+  xml: string,
+  nsu: string
+): Promise<string | null> {
   const completa = schema.startsWith("procNFe")
   const resumo = completa ? resumoDoProcNFe(xml) : resumoDoResNFe(xml)
   // Chave que não tem 44 dígitos é chave corrompida, não chave estranha: já
   // aconteceu (o parser convertia para número e estourava a precisão) e o
   // estrago foi gravar 49 duplicatas inúteis, porque a chave é a identidade
   // do documento. Melhor recusar do que guardar lixo com aparência de nota.
-  if (!resumo?.chaveAcesso || !/^\d{44}$/.test(resumo.chaveAcesso)) return false
+  if (!resumo?.chaveAcesso || !/^\d{44}$/.test(resumo.chaveAcesso)) return null
 
   const decodificada = decodificarChave(resumo.chaveAcesso)
   const numero = "numero" in resumo && resumo.numero ? Number(resumo.numero) : decodificada?.numero ?? null
@@ -154,12 +293,48 @@ async function gravarNota(loja: string, schema: string, xml: string): Promise<bo
     xml: completa ? xml : null,
   }
 
+  // O NSU é estável por documento e por interessado: reprocessar a mesma faixa
+  // devolve o mesmo número. Por isso a atualização também o grava — é o que
+  // conserta, na próxima passada, as notas gravadas com o "0" fixo de antes.
+  // Vazio não sobrescreve: melhor um zero antigo do que apagar o que se sabia.
+  const comNsu = nsu ? { ...dados, nsu } : dados
+
   await db.notaFiscalRecebida.upsert({
     where: { chaveAcesso: resumo.chaveAcesso },
-    create: { chaveAcesso: resumo.chaveAcesso, nsu: "0", ...dados },
+    create: { chaveAcesso: resumo.chaveAcesso, nsu: nsu || "0", ...dados },
+    update: comNsu,
+  })
+  return resumo.chaveAcesso
+}
+
+/** Se este `schema` de docZip é uma nota — o resto é evento, e evento não entra na lista. */
+function ehNota(schema: string) {
+  return schema.startsWith("resNFe") || schema.startsWith("procNFe")
+}
+
+/**
+ * Anota que este NSU foi entregue, seja ele nota ou evento.
+ *
+ * Idempotente: reprocessar a mesma faixa não duplica nem apaga — o NSU é
+ * estável por documento e por interessado.
+ */
+async function registrarDocumento(
+  loja: string,
+  nsuBruto: string,
+  esquema: string,
+  chaveAcesso: string | null
+) {
+  const nsu = normalizarNsu(nsuBruto)
+  // Documento sem NSU não dá para indexar, e inventar um "0" criaria um
+  // registro que mente sobre a posição na sequência.
+  if (!nsuBruto || Number(nsu) === 0) return
+
+  const dados = { esquema, chaveAcesso, virouNota: chaveAcesso != null }
+  await db.documentoDistribuido.upsert({
+    where: { loja_nsu: { loja, nsu } },
+    create: { loja, nsu, ...dados },
     update: dados,
   })
-  return true
 }
 
 /** CNPJ com 14 dígitos, zeros à esquerda inclusive — o formato do cadastro. */
@@ -317,7 +492,9 @@ export type ResultadoBuscaChave = ResultadoConsultaChave
 export async function buscarNotaPorChave(loja: string, chave: string): Promise<ResultadoBuscaChave> {
   const resultado = await consultarChaveNaSefaz(loja, chave)
   if (resultado.ok && resultado.documento) {
-    await gravarNota(loja, resultado.documento.schema, resultado.documento.xml)
+    const { schema, xml, nsu } = resultado.documento
+    const chaveGravada = await gravarNota(loja, schema, xml, nsu)
+    await registrarDocumento(loja, nsu, schema, chaveGravada)
   }
   return resultado
 }

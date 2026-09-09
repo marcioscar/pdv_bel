@@ -33,3 +33,13 @@ export type FiltroNotas = {
 
 /** O "tudo" desta tela: passado inteiro e futuro inteiro. */
 export const PERIODO_TODO = { de: PRIMEIRO_DIA, ate: ULTIMO_DIA }
+
+/**
+ * Quantos NSUs a recuperação de buracos busca por clique.
+ *
+ * Mora aqui, e não no módulo `.server`, porque o botão precisa dizer quantos
+ * vai buscar — e importar um `.server` de dentro de um componente quebra o
+ * pacote do navegador. O servidor recorta por este mesmo número: formulário
+ * adulterado não vira centenas de consultas à SEFAZ.
+ */
+export const NSUS_POR_RECUPERACAO = 10

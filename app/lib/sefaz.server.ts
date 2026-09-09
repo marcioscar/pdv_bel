@@ -209,7 +209,34 @@ const parser = new XMLParser({
   parseTagValue: false,
 })
 
-type DocZip = { schema: string; xml: string }
+/**
+ * Um documento como a SEFAZ o entrega: comprimido, com o schema que diz o que
+ * ele é e o NSU sob o qual foi distribuído.
+ *
+ * O NSU vem junto porque é a única forma de responder depois "este documento
+ * chegou a passar por aqui?". Sem ele gravado, descobrir se a sincronização
+ * pulou alguma coisa exige rebobinar o cursor às cegas e comparar o antes e o
+ * depois — que foi exatamente o que precisou ser feito quando quatro notas
+ * sumiram sem deixar rastro.
+ */
+type DocZip = { schema: string; xml: string; nsu: string }
+
+/**
+ * Os dois únicos desfechos em que a SEFAZ de fato RESPONDEU a consulta de
+ * distribuição: achou documento (138) ou não achou nenhum (137).
+ *
+ * Qualquer outro código é recusa — serviço paralisado (108/109), consumo
+ * indevido (656), rejeição de schema, ambiente errado. Tratar recusa como
+ * "não há nada" foi o que fez a tela anunciar "em dia" durante dez dias
+ * enquanto quatro notas de fornecedor ficavam do lado de fora.
+ */
+const CSTAT_COM_DOCUMENTO = "138"
+const CSTAT_SEM_DOCUMENTO = "137"
+
+function recusa(cStat: string, xMotivo: string): string {
+  if (cStat === "656") return `Limite de consultas por hora excedido nesta loja (${xMotivo})`
+  return `A SEFAZ recusou a consulta — cStat ${cStat}: ${xMotivo}`
+}
 
 export type ResultadoConsultaChave =
   | {
@@ -248,8 +275,8 @@ export async function consultarChaveNaSefaz(
   if (!chamada.ok) return chamada
 
   const { cStat, xMotivo, retorno } = chamada
-  if (cStat === "656") {
-    return { ok: false, erro: `Limite de consultas por hora excedido nesta loja (${xMotivo})` }
+  if (cStat !== CSTAT_COM_DOCUMENTO && cStat !== CSTAT_SEM_DOCUMENTO) {
+    return { ok: false, erro: recusa(cStat, xMotivo) }
   }
 
   const docZipBruto = retorno.loteDistDFeInt?.docZip
@@ -258,6 +285,41 @@ export async function consultarChaveNaSefaz(
     // cliente — é a SEFAZ dizendo "não tenho isso para te dar".
     return { ok: true, cStat, xMotivo, documento: null }
   }
+
+  const doc = Array.isArray(docZipBruto) ? docZipBruto[0] : docZipBruto
+  return { ok: true, cStat, xMotivo, documento: descompactarDocZip(doc) }
+}
+
+/**
+ * Busca UM documento pelo seu NSU (`consNSU`) — o método que a SEFAZ oferece
+ * justamente para recuperar um documento pontual.
+ *
+ * É o contrário de `distNSU`: aqui não se avança cursor nenhum, pede-se um
+ * número específico e pronto. E é a única forma legítima de reler o passado —
+ * rebobinar o cursor de distribuição para trás a SEFAZ recusa como consumo
+ * indevido ("deve ser utilizado o ultNSU nas solicitações subsequentes") e
+ * pune com uma hora de bloqueio do CNPJ inteiro.
+ *
+ * `documento: null` com cStat 137 quer dizer que aquele NSU não tem nada para
+ * esta empresa — acontece, a numeração não é densa por interessado.
+ */
+export async function consultarNsuAvulsoNaSefaz(
+  loja: string,
+  nsu: string,
+  ambiente: "producao" | "homologacao" = "producao"
+): Promise<ResultadoConsultaChave> {
+  const nsuFormatado = (nsu.replace(/\D/g, "") || "0").padStart(15, "0").slice(-15)
+
+  const chamada = await chamarDistribuicao(loja, `<consNSU><NSU>${nsuFormatado}</NSU></consNSU>`, ambiente)
+  if (!chamada.ok) return chamada
+
+  const { cStat, xMotivo, retorno } = chamada
+  if (cStat !== CSTAT_COM_DOCUMENTO && cStat !== CSTAT_SEM_DOCUMENTO) {
+    return { ok: false, erro: recusa(cStat, xMotivo) }
+  }
+
+  const docZipBruto = retorno.loteDistDFeInt?.docZip
+  if (!docZipBruto) return { ok: true, cStat, xMotivo, documento: null }
 
   const doc = Array.isArray(docZipBruto) ? docZipBruto[0] : docZipBruto
   return { ok: true, cStat, xMotivo, documento: descompactarDocZip(doc) }
@@ -279,8 +341,17 @@ export type ResultadoSincronizacaoNsu =
       ok: true
       cStat: string
       xMotivo: string
-      ultNSU: string
-      maxNSU: string
+      /**
+       * Até onde esta chamada foi e o quanto existe na SEFAZ — `null` quando a
+       * resposta não trouxe o campo.
+       *
+       * `null` de propósito, em vez do NSU que nós mesmos mandamos: preenchido
+       * com o nosso, "até onde fui" fica igual a "quanto existe" e o cursor se
+       * declara em dia sozinho, sem a SEFAZ ter dito isso em momento nenhum.
+       * Quem chama precisa poder distinguir "acabou" de "não me disseram".
+       */
+      ultNSU: string | null
+      maxNSU: string | null
       documentos: DocZip[]
     }
   | { ok: false; erro: string }
@@ -295,8 +366,8 @@ export async function consultarNsuNaSefaz(
   if (!chamada.ok) return chamada
 
   const { cStat, xMotivo, retorno } = chamada
-  if (cStat === "656") {
-    return { ok: false, erro: `Limite de consultas por hora excedido nesta loja (${xMotivo})` }
+  if (cStat !== CSTAT_COM_DOCUMENTO && cStat !== CSTAT_SEM_DOCUMENTO) {
+    return { ok: false, erro: recusa(cStat, xMotivo) }
   }
 
   const docZipBruto = retorno.loteDistDFeInt?.docZip
@@ -306,19 +377,18 @@ export async function consultarNsuNaSefaz(
     ok: true,
     cStat,
     xMotivo,
-    // Sem documento novo, a SEFAZ às vezes omite `ultNSU`/`maxNSU` da resposta —
-    // aí o cursor não andou, e o que já tínhamos continua sendo o mais atual.
-    ultNSU: retorno.ultNSU != null ? String(retorno.ultNSU) : nsuFormatado,
-    maxNSU: retorno.maxNSU != null ? String(retorno.maxNSU) : nsuFormatado,
+    ultNSU: retorno.ultNSU != null ? String(retorno.ultNSU) : null,
+    maxNSU: retorno.maxNSU != null ? String(retorno.maxNSU) : null,
     documentos: lista.map(descompactarDocZip),
   }
 }
 
 function descompactarDocZip(doc: any): DocZip {
   const schema = String(doc["@_schema"] ?? "")
+  const nsu = String(doc["@_NSU"] ?? "")
   const base64 = String(doc["#text"] ?? "")
   const xml = gunzipSync(Buffer.from(base64, "base64")).toString("utf8")
-  return { schema, xml }
+  return { schema, xml, nsu }
 }
 
 /**

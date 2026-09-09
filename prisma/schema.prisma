@@ -1017,6 +1017,42 @@ model SincronizacaoSefaz {
   @@map("sincronizacoes_sefaz")
 }
 
+/// Um documento que a distribuição da SEFAZ entregou, por NSU — inclusive os
+/// que não viram nota (evento, cancelamento, carta de correção).
+///
+/// Existe para uma pergunta que antes não tinha resposta: "a sincronização
+/// pulou alguma coisa?". O NSU é uma sequência contínua por CNPJ, então o que
+/// falta nesta coleção é exatamente o que nunca chegou — e a única forma de
+/// distinguir buraco de evento ignorado é registrar TAMBÉM o que se ignora.
+///
+/// Quatro notas de fornecedor, R$ 31 mil, ficaram do lado de fora por dez dias
+/// sem deixar rastro. Descobrir isso exigiu rebobinar o cursor às cegas, que a
+/// SEFAZ pune como consumo indevido. Estas linhas são o que dispensa aquilo.
+model DocumentoDistribuido {
+  id   String @id @default(auto()) @map("_id") @db.ObjectId
+  loja String
+
+  /// Sempre 15 dígitos com zeros à esquerda, como a SEFAZ devolve: assim a
+  /// ordem alfabética é a ordem numérica, e a faixa se consulta com `gte`/`lte`
+  /// sem converter nada.
+  nsu String
+
+  /// O `schema` do docZip: "procNFe_v4.00", "resNFe_v1.01", "procEventoNFe...".
+  /// Guardado cru porque é o que diz por que a linha virou (ou não virou) nota.
+  esquema     String
+  /// Só quando o documento é uma nota — evento não tem chave própria aqui.
+  chaveAcesso String?
+  /// Se este documento virou (ou atualizou) uma `NotaFiscalRecebida`.
+  virouNota   Boolean @default(false)
+
+  criadoEm DateTime @default(now())
+
+  /// Único e ordenado pela mesma chave: é assim que se pergunta "o que existe
+  /// entre estes dois NSUs" sem varrer a coleção.
+  @@unique([loja, nsu])
+  @@map("documentos_distribuidos")
+}
+
 /// Uma NF-e de fornecedor, indexada localmente a partir da sincronização com a
 /// SEFAZ — não é a entrada de estoque em si (isso é fase 3), é o catálogo do
 /// que está disponível para escolher.

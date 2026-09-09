@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react"
 import { Link, useFetcher, useNavigate, useNavigation, useSearchParams } from "react-router"
-import { FileSearch, Loader2, RefreshCw, Search } from "lucide-react"
+import { AlertTriangle, Download, FileSearch, Loader2, RefreshCw, Search } from "lucide-react"
 
 import type { Route } from "./+types/admin.notas-de-entrada"
 import { Badge } from "~/components/ui/badge"
@@ -12,18 +12,22 @@ import { formatarCpfCnpj } from "~/lib/documento"
 import { listarLojas } from "~/lib/lojas.server"
 import { moeda } from "~/lib/moeda"
 import {
+  NSUS_POR_RECUPERACAO,
   PERIODO_TODO,
   SITUACOES_NOTA,
   rotuloDaSituacaoNota,
   type FiltroNotas,
 } from "~/lib/notas-fiscais"
 import {
+  buracosDaSincronizacao,
   buscarNotaPorChave,
   consultarNotas,
   fornecedoresComNota,
   lerFiltroNotas,
+  recuperarNsus,
   sincronizarNotasDaLoja,
   situacaoSincronizacao,
+  type ResultadoRecuperacao,
   type ResultadoSincronizacao,
 } from "~/lib/notas-fiscais.server"
 import { sefazConfigurado, type ResultadoConsultaChave } from "~/lib/sefaz.server"
@@ -65,6 +69,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     : { notas: [], total: 0, foraDoPeriodo: 0, paginas: 1, resumo: null }
   const sincronizacao = loja ? await situacaoSincronizacao(loja) : null
   const fornecedores = loja ? await fornecedoresComNota(loja) : []
+  const buracos = loja ? await buracosDaSincronizacao(loja) : null
 
   return {
     lojas,
@@ -73,6 +78,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     loja,
     fornecedores,
     sincronizacao,
+    buracos,
     ...consulta,
   }
 }
@@ -80,6 +86,7 @@ export async function loader({ request }: Route.LoaderArgs) {
 type RespostaAction =
   | ({ intencao: "sincronizar" } & ResultadoSincronizacao)
   | ({ intencao: "buscarChave" } & ResultadoConsultaChave)
+  | ({ intencao: "recuperarBuracos" } & ResultadoRecuperacao)
 
 export async function action({ request }: Route.ActionArgs): Promise<RespostaAction> {
   await exigirGerente(request, "buscarNotaFiscal")
@@ -94,6 +101,19 @@ export async function action({ request }: Route.ActionArgs): Promise<RespostaAct
     const chave = String(form.get("chave") ?? "")
     const resultado = await buscarNotaPorChave(loja, chave)
     return { intencao: "buscarChave", ...resultado }
+  }
+
+  if (intencao === "recuperarBuracos") {
+    // A lista vem da tela, mas o servidor recorta: um formulário adulterado não
+    // pode transformar um clique em centenas de consultas à SEFAZ.
+    const pedidos = String(form.get("nsus") ?? "")
+      .split(",")
+      .map((n) => Number(n.trim()))
+      .filter((n) => Number.isInteger(n) && n > 0)
+      .slice(0, NSUS_POR_RECUPERACAO)
+
+    const resultado = await recuperarNsus(loja, pedidos)
+    return { intencao: "recuperarBuracos", ...resultado }
   }
 
   const resultado = await sincronizarNotasDaLoja(loja)
@@ -113,6 +133,7 @@ export default function AdminNotasDeEntrada({ loaderData }: Route.ComponentProps
     paginas,
     resumo,
     sincronizacao,
+    buracos,
   } = loaderData
 
   const [params, setParams] = useSearchParams()
@@ -121,6 +142,7 @@ export default function AdminNotasDeEntrada({ loaderData }: Route.ComponentProps
   const consultando = navegacao.state === "loading"
   const sincFetcher = useFetcher<RespostaAction>()
   const chaveFetcher = useFetcher<RespostaAction>()
+  const buracoFetcher = useFetcher<RespostaAction>()
   const [chave, setChave] = useState("")
   const [mostrarBuscaManual, setMostrarBuscaManual] = useState(false)
 
@@ -248,6 +270,61 @@ export default function AdminNotasDeEntrada({ loaderData }: Route.ComponentProps
             ? `${sincFetcher.data.novas} nota(s) nova(s) — ${sincFetcher.data.completo ? "sincronização em dia" : "ainda falta mais, clique de novo"}`
             : sincFetcher.data.erro}
         </p>
+      ) : null}
+
+      {/* Os documentos que a distribuição nunca entregou dentro da faixa já
+          percorrida. O NSU é sequência contínua por CNPJ: o que falta aqui
+          existiu e ficou de fora — e `consNSU` busca um a um, sem mexer no
+          cursor (rebobiná-lo a SEFAZ pune como consumo indevido). */}
+      {loja && buracos && buracos.total > 0 ? (
+        <div className="mt-3 rounded-lg border border-amber-600/30 bg-amber-600/5 p-3">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <AlertTriangle className="size-4 shrink-0 text-amber-600 dark:text-amber-500" aria-hidden />
+            <span className="text-sm font-medium">
+              {buracos.total} {buracos.total === 1 ? "documento nunca entregue" : "documentos nunca entregues"}
+            </span>
+            <span className="text-xs text-muted-foreground">
+              entre os NSU {buracos.de} e {buracos.ate} — buscados um a um, {NSUS_POR_RECUPERACAO} por clique
+            </span>
+
+            <buracoFetcher.Form method="post" className="ml-auto">
+              <input type="hidden" name="loja" value={loja} />
+              <input type="hidden" name="intencao" value="recuperarBuracos" />
+              <input
+                type="hidden"
+                name="nsus"
+                value={buracos.faltando.slice(0, NSUS_POR_RECUPERACAO).join(",")}
+              />
+              <Button type="submit" size="sm" variant="outline" disabled={buracoFetcher.state !== "idle"}>
+                {buracoFetcher.state !== "idle" ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Download className="size-4" />
+                )}
+                Recuperar próximos {Math.min(NSUS_POR_RECUPERACAO, buracos.faltando.length)}
+              </Button>
+            </buracoFetcher.Form>
+          </div>
+
+          <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+            {buracos.faltando.slice(0, 30).join(" · ")}
+            {buracos.total > 30 ? ` · … (+${buracos.total - 30})` : ""}
+          </p>
+
+          {buracoFetcher.data?.intencao === "recuperarBuracos" ? (
+            <p
+              className={cn(
+                "mt-1 text-xs",
+                buracoFetcher.data.ok ? "text-muted-foreground" : "text-destructive"
+              )}
+            >
+              {buracoFetcher.data.ok
+                ? `${buracoFetcher.data.buscados} NSU(s) consultado(s): ${buracoFetcher.data.notas} nota(s) recuperada(s), ` +
+                  `${buracoFetcher.data.vazios} sem documento para esta empresa.`
+                : `${buracoFetcher.data.erro} (${buracoFetcher.data.notas} nota(s) recuperada(s) antes de parar)`}
+            </p>
+          ) : null}
+        </div>
       ) : null}
 
       {mostrarBuscaManual && loja ? (
