@@ -143,6 +143,12 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         descricao: "Buscar o XML de uma nota do fornecedor na SEFAZ, pela chave de acesso",
         somenteGerente: true,
       },
+      {
+        para: "/admin/afs",
+        rotulo: "AFs (entrada sem nota)",
+        descricao: "Autorização de faturamento: a compra que chega sem NF-e e não vem da SEFAZ",
+        somenteGerente: true,
+      },
     ],
   },
   {
@@ -286,6 +292,8 @@ export const ACOES_DE_GERENTE = {
   buscarNotaFiscal: "Só gerente busca nota fiscal na SEFAZ — é dado fiscal da empresa",
   gerenciarCertificados: "Só gerente mexe em certificado — é credencial de acesso a banco e ao fisco",
   gerarDespesas: "Só gerente gera conta a pagar a partir da nota — é dinheiro comprometido",
+  lancarAf:
+    "Só gerente lança AF — dá entrada no estoque com custo e vira conta a pagar",
 } as const
 
 export type AcaoDeGerente = keyof typeof ACOES_DE_GERENTE

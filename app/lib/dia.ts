@@ -70,3 +70,19 @@ export function diaEmTexto(dia: string) {
   const [ano, mes, data] = dia.split("-")
   return `${data}/${mes}/${ano}`
 }
+
+/**
+ * "aaaa-mm-dd" → o meio-dia local daquele dia, ou `null` se não for uma data.
+ *
+ * Meio-dia, e não meia-noite: data pura guardada como instante vira "ontem"
+ * assim que alguém lê no fuso errado, e o meio-dia é a única hora que sobrevive
+ * a doze horas de deslocamento para qualquer lado.
+ *
+ * Vencimento de conta a pagar, data prometida de entrega e data de AF são todos
+ * este caso — dia que alguém escreveu num papel, não instante que aconteceu.
+ */
+export function meioDiaDe(dia: string | null | undefined): Date | null {
+  if (!dia || !/^\d{4}-\d{2}-\d{2}$/.test(dia)) return null
+  const [ano, mes, diaDoMes] = dia.split("-").map(Number)
+  return new Date(ano, mes - 1, diaDoMes, 12, 0, 0, 0)
+}

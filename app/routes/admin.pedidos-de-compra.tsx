@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { data, Link, useFetcher, useNavigation, useSearchParams } from "react-router"
-import { ClipboardList, GitCompare, Printer, Search, ShoppingBag, Truck } from "lucide-react"
+import { ClipboardList, FileText, GitCompare, Printer, Search, ShoppingBag, Truck } from "lucide-react"
 
 import type { Route } from "./+types/admin.pedidos-de-compra"
 import { Atalho, Campo, ESTILO_CAMPO, Pagina } from "~/components/pdv/filtros"
@@ -372,6 +372,18 @@ function LinhaPedido({
           >
             <GitCompare className="size-3.5" aria-hidden />
             Ver NF
+          </Link>
+        ) : null}
+        {/* Fornecedor que entrega sem emitir NF-e: a entrada é pela AF, e o
+            pedido já vai escolhido do outro lado. */}
+        {p.situacao === "enviado" || p.situacao === "parcial" ? (
+          <Link
+            to={`/admin/afs/nova?fornecedor=${p.fornecedorId}&pedido=${p.id}`}
+            className="inline-flex h-8 items-center gap-1 rounded-lg px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+            title="Chegou sem nota fiscal? Lance a AF que veio com a carga"
+          >
+            <FileText className="size-3.5" aria-hidden />
+            Lançar AF
           </Link>
         ) : null}
         {p.situacao === "rascunho" ? (

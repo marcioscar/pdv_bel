@@ -285,6 +285,8 @@ export async function fichaDoProduto(produtoId: string, lojas: string[]) {
       transferenciaNumero: m.transferenciaNumero,
       pedidoDeCompraId: m.pedidoDeCompraId,
       pedidoDeCompraNumero: m.pedidoDeCompraNumero,
+      autorizacaoFaturamentoId: m.autorizacaoFaturamentoId,
+      autorizacaoFaturamentoNumero: m.autorizacaoFaturamentoNumero,
       observacao: m.observacao,
     }
   })

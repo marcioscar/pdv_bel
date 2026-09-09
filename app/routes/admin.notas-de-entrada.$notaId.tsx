@@ -1,30 +1,17 @@
-import { useEffect, useState } from "react"
-import { Link, useFetcher, useSearchParams } from "react-router"
+import { Link, useSearchParams } from "react-router"
 import { ArrowLeft, FileSearch } from "lucide-react"
 
 import type { Route } from "./+types/admin.notas-de-entrada.$notaId"
 import { Badge } from "~/components/ui/badge"
-import { Button } from "~/components/ui/button"
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "~/components/ui/dialog"
-import { Input } from "~/components/ui/input"
-import { Label } from "~/components/ui/label"
 import { formatarCpfCnpj } from "~/lib/documento"
-import { interpretarValor, moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
+import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
+import { GerarDespesas, type RespostaDespesas } from "~/components/pdv/gerar-despesas"
 import {
   categoriasDeDespesa,
   duplicatasDaNota,
   fornecedorParaDespesa,
   gerarDespesas,
   type LinhaDeDespesa,
-  type ResultadoGerarDespesas,
 } from "~/lib/despesas.server"
 import { notaPorId } from "~/lib/notas-fiscais.server"
 import { criarFornecedor, lerFornecedor, proximoCodigoDeFornecedor } from "~/lib/fornecedores.server"
@@ -137,9 +124,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
 }
 
 type RespostaAction =
-  | ({ intencao: "gerarDespesas" } & ResultadoGerarDespesas)
-  | { intencao: "cadastrarFornecedor"; ok: true; nome: string }
-  | { intencao: "cadastrarFornecedor"; ok: false; erro: string }
+  | RespostaDespesas
   | RespostaEntrada
 
 export async function action({ request }: Route.ActionArgs): Promise<RespostaAction> {
@@ -200,14 +185,17 @@ export async function action({ request }: Route.ActionArgs): Promise<RespostaAct
   }
 
   await exigirGerente(request, "gerarDespesas")
-  const notaId = String(form.get("notaId") ?? "")
   let linhas: LinhaDeDespesa[] = []
   try {
     linhas = JSON.parse(String(form.get("linhas") ?? "[]"))
   } catch {
     linhas = []
   }
-  const resultado = await gerarDespesas(notaId, linhas, eu.nome)
+  const resultado = await gerarDespesas(
+    { tipo: "nota", id: String(form.get("documentoId") ?? "") },
+    linhas,
+    eu.nome
+  )
   return { intencao: "gerarDespesas", ...resultado }
 }
 
@@ -341,413 +329,28 @@ export default function DetalheNotaDeEntrada({ loaderData }: Route.ComponentProp
 
         <div className="rounded-lg border p-4">
           <GerarDespesas
-            nota={nota}
-            duplicatas={duplicatas}
-            fornecedorDaDespesa={fornecedorDaDespesa}
+            documento={{
+              tipo: "nota",
+              id: nota.id,
+              // O número da fatura nomeia as parcelas quando a nota o declara;
+              // sem ele, o número da própria nota é o que quem paga reconhece.
+              numero: duplicatas?.numeroFatura ?? String(nota.numero ?? ""),
+              valorTotal: nota.valorTotal,
+              despesasGeradasEm: nota.despesasGeradasEm,
+              despesasGeradasPor: nota.despesasGeradasPor,
+            }}
+            duplicatas={duplicatas?.duplicatas ?? null}
+            fornecedor={fornecedorDaDespesa}
             categorias={categorias}
-            enderecoEmitente={enderecoEmitente}
-            codigoSugerido={codigoSugerido}
+            cadastroRapido={{
+              emitenteCnpj: nota.emitenteCnpj,
+              emitenteNome: nota.emitenteNome,
+              endereco: enderecoEmitente,
+              codigoSugerido,
+            }}
           />
         </div>
       </div>
     </div>
-  )
-}
-
-type NotaComDetalhe = NonNullable<Awaited<ReturnType<typeof notaPorId>>>
-type DuplicatasDaNota = ReturnType<typeof duplicatasDaNota>
-type FornecedorDaDespesa = Awaited<ReturnType<typeof fornecedorParaDespesa>>
-type CategoriaDeDespesa = Awaited<ReturnType<typeof categoriasDeDespesa>>[number]
-type EnderecoEmitente = { cidade: string | null; bairro: string | null } | null
-
-type LinhaEditavel = {
-  conta: string
-  tipo: string
-  descricao: string
-  valorTexto: string
-  data: string
-}
-
-function hojeComoDia() {
-  const hoje = new Date()
-  return `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}-${String(hoje.getDate()).padStart(2, "0")}`
-}
-
-/**
- * Gera as contas a pagar (`despesas`) a partir dos vencimentos da própria
- * nota — a coleção não é deste projeto, é do sistema de contas a pagar que a
- * rede já usa; aqui só nasce o título, com a mesma cara que os já existentes.
- *
- * Sem duplicata na nota (à vista, sem boleto formal) começa com uma linha só,
- * pelo valor total, para não obrigar o gerente a montar do zero. "Acrescentar
- * linha" cobre o que às vezes vem por fora do que a nota lista.
- */
-function GerarDespesas({
-  nota,
-  duplicatas,
-  fornecedorDaDespesa,
-  categorias,
-  enderecoEmitente,
-  codigoSugerido,
-}: {
-  nota: NotaComDetalhe
-  duplicatas: DuplicatasDaNota | null
-  fornecedorDaDespesa: FornecedorDaDespesa | null
-  categorias: CategoriaDeDespesa[]
-  enderecoEmitente: EnderecoEmitente
-  codigoSugerido: string | null
-}) {
-  const fetcher = useFetcher<RespostaAction>()
-  const cadastroFetcher = useFetcher<RespostaAction>()
-  const gerando = fetcher.state !== "idle"
-
-  const [cadastroAberto, setCadastroAberto] = useState(false)
-  // Cadastrado agora mesmo, nesta tela: sobrepõe o que veio do loader sem
-  // precisar recarregar a página para o aviso âmbar sumir.
-  const [nomeCadastradoAgora, setNomeCadastradoAgora] = useState<string | null>(null)
-
-  useEffect(() => {
-    const resposta = cadastroFetcher.data
-    if (resposta?.intencao !== "cadastrarFornecedor" || !resposta.ok) return
-    setNomeCadastradoAgora(resposta.nome)
-    setCadastroAberto(false)
-  }, [cadastroFetcher.data])
-
-  const temCadastro = nomeCadastradoAgora != null || (fornecedorDaDespesa?.temCadastro ?? false)
-  const nomeDoFornecedor = nomeCadastradoAgora ?? fornecedorDaDespesa?.nome ?? nota.emitenteNome
-  // "revenda" quando a categoria ainda não foi carregada — mesmo valor que a
-  // coleção `contas` já usa para compra de mercadoria para revender.
-  const categoriaPadrao = categorias.find((c) => c.conta === "revenda")?.conta ?? "revenda"
-
-  const [linhas, setLinhas] = useState<LinhaEditavel[]>(() => {
-    const parcelas = duplicatas?.duplicatas ?? []
-
-    if (parcelas.length === 0) {
-      return [
-        {
-          conta: categoriaPadrao,
-          tipo: "variavel",
-          descricao: nomeDoFornecedor,
-          valorTexto: nota.valorTotal != null ? String(nota.valorTotal).replace(".", ",") : "",
-          data: hojeComoDia(),
-        },
-      ]
-    }
-
-    const numero = duplicatas?.numeroFatura ?? String(nota.numero ?? "")
-    return parcelas.map((p, i) => ({
-      conta: categoriaPadrao,
-      tipo: "variavel",
-      descricao: `${numero} ${i + 1}/${parcelas.length}`.trim(),
-      valorTexto: String(p.valor).replace(".", ","),
-      data: p.vencimento ?? "",
-    }))
-  })
-
-  function atualizar(i: number, campo: keyof LinhaEditavel, valor: string) {
-    setLinhas((atual) => atual.map((linha, idx) => (idx === i ? { ...linha, [campo]: valor } : linha)))
-  }
-
-  function adicionar() {
-    setLinhas((atual) => [
-      ...atual,
-      {
-        conta: categoriaPadrao,
-        tipo: "variavel",
-        descricao: nomeDoFornecedor,
-        valorTexto: "",
-        data: hojeComoDia(),
-      },
-    ])
-  }
-
-  function remover(i: number) {
-    setLinhas((atual) => atual.filter((_, idx) => idx !== i))
-  }
-
-  function gerar() {
-    const payload: LinhaDeDespesa[] = linhas.map((l) => ({
-      conta: l.conta.trim() || categoriaPadrao,
-      tipo: l.tipo.trim() || "variavel",
-      descricao: l.descricao.trim(),
-      valor: interpretarValor(l.valorTexto) ?? 0,
-      data: l.data,
-      // Só se preenche depois de pagar, no outro sistema — nasce sempre em
-      // branco daqui, e nem aparece como campo nesta tela.
-      contaCorrente: null,
-    }))
-    fetcher.submit(
-      { intencao: "gerarDespesas", notaId: nota.id, linhas: JSON.stringify(payload) },
-      { method: "post" }
-    )
-  }
-
-  const totalLancado = linhas.reduce((soma, l) => soma + (interpretarValor(l.valorTexto) ?? 0), 0)
-  const diferenca = nota.valorTotal != null ? totalLancado - nota.valorTotal : null
-
-  if (nota.despesasGeradasEm) {
-    return (
-      <div className="rounded-lg border border-emerald-600/30 bg-emerald-600/5 p-3 text-xs">
-        Contas a pagar geradas em {new Date(nota.despesasGeradasEm).toLocaleString("pt-BR")}
-        {nota.despesasGeradasPor ? ` por ${nota.despesasGeradasPor}` : ""}.
-      </div>
-    )
-  }
-
-  return (
-    <div>
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium">Contas a pagar</h3>
-        <Button type="button" size="xs" variant="ghost" onClick={adicionar}>
-          + Acrescentar linha
-        </Button>
-      </div>
-
-      {fornecedorDaDespesa && !temCadastro ? (
-        <div className="mt-2 flex items-start justify-between gap-2 rounded-lg border border-amber-600/30 bg-amber-600/5 p-2">
-          <p className="text-xs text-amber-600 dark:text-amber-500">
-            Este fornecedor não tem cadastro — usando o nome da própria nota (
-            {nomeDoFornecedor}), não o nome fantasia.
-          </p>
-          <Button
-            type="button"
-            size="xs"
-            variant="outline"
-            className="shrink-0"
-            onClick={() => setCadastroAberto(true)}
-          >
-            Cadastrar fornecedor
-          </Button>
-        </div>
-      ) : null}
-
-      <CadastroDeFornecedor
-        open={cadastroAberto}
-        onOpenChange={setCadastroAberto}
-        emitenteCnpj={nota.emitenteCnpj}
-        emitenteNome={nota.emitenteNome}
-        endereco={enderecoEmitente}
-        codigoSugerido={codigoSugerido}
-        fetcher={cadastroFetcher}
-      />
-
-      <div className="mt-3 overflow-x-auto">
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="border-b text-left text-muted-foreground">
-              <th className="w-36 py-1 pr-2">Vencimento</th>
-              <th className="w-28 py-1 pr-2 text-right">Valor</th>
-              <th className="py-1 pr-2">Descrição</th>
-              <th className="w-40 py-1 pr-2">Conta</th>
-              <th className="w-28 py-1 pr-2">Tipo</th>
-              <th className="w-8 py-1"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {linhas.map((linha, i) => (
-              <tr key={i} className="border-b last:border-0">
-                <td className="py-1 pr-2">
-                  <input
-                    type="date"
-                    value={linha.data}
-                    onChange={(e) => atualizar(i, "data", e.target.value)}
-                    className="h-7 w-full rounded border border-border bg-background px-1 text-xs"
-                  />
-                </td>
-                <td className="py-1 pr-2">
-                  <Input
-                    value={linha.valorTexto}
-                    onChange={(e) => atualizar(i, "valorTexto", e.target.value)}
-                    className="h-7 w-full text-right font-mono text-xs"
-                  />
-                </td>
-                <td className="py-1 pr-2">
-                  <Input
-                    value={linha.descricao}
-                    onChange={(e) => atualizar(i, "descricao", e.target.value)}
-                    className="h-7 w-full min-w-40 text-xs"
-                  />
-                </td>
-                <td className="py-1 pr-2">
-                  <select
-                    value={linha.conta}
-                    onChange={(e) => atualizar(i, "conta", e.target.value)}
-                    className="h-7 w-full rounded border border-border bg-background px-1 text-xs"
-                  >
-                    {categorias.map((c) => (
-                      <option key={c.id} value={c.conta}>
-                        {c.etiqueta}
-                      </option>
-                    ))}
-                  </select>
-                </td>
-                <td className="py-1 pr-2">
-                  <select
-                    value={linha.tipo}
-                    onChange={(e) => atualizar(i, "tipo", e.target.value)}
-                    className="h-7 w-full rounded border border-border bg-background px-1 text-xs"
-                  >
-                    <option value="variavel">variável</option>
-                    <option value="fixa">fixa</option>
-                  </select>
-                </td>
-                <td className="py-1">
-                  <Button type="button" size="xs" variant="ghost" onClick={() => remover(i)}>
-                    ×
-                  </Button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="mt-2 flex flex-wrap items-center gap-3">
-        <span className="text-xs text-muted-foreground">
-          Total lançado: {moeda(totalLancado)}
-          {diferenca != null && Math.abs(diferenca) > 0.01 ? (
-            <span className="ml-1 text-amber-600 dark:text-amber-500">
-              ({diferenca > 0 ? "+" : ""}
-              {moeda(diferenca)} vs. valor da nota)
-            </span>
-          ) : null}
-        </span>
-
-        <Button
-          type="button"
-          size="sm"
-          disabled={gerando || linhas.length === 0}
-          onClick={gerar}
-          className="ml-auto"
-        >
-          {gerando ? "Gerando…" : "Gerar contas a pagar"}
-        </Button>
-      </div>
-
-      {fetcher.data?.intencao === "gerarDespesas" && !fetcher.data.ok ? (
-        <p className="mt-1 text-xs text-destructive">{fetcher.data.erro}</p>
-      ) : null}
-    </div>
-  )
-}
-
-/**
- * Cadastro rápido do fornecedor, num dialog aberto direto de "Contas a
- * pagar" quando o CNPJ da nota não bate com nenhum cadastro — mesma ideia do
- * cadastro rápido de produto na conciliação: pré-preenche com o que a NF-e
- * já traz (razão social, CNPJ, cidade e bairro do emitente) e deixa tudo
- * editável, porque "código" e "nome fantasia" são coisa que só quem cadastra
- * sabe escolher.
- */
-function CadastroDeFornecedor({
-  open,
-  onOpenChange,
-  emitenteCnpj,
-  emitenteNome,
-  endereco,
-  codigoSugerido,
-  fetcher,
-}: {
-  open: boolean
-  onOpenChange: (aberto: boolean) => void
-  emitenteCnpj: string
-  emitenteNome: string
-  endereco: EnderecoEmitente
-  codigoSugerido: string | null
-  fetcher: ReturnType<typeof useFetcher<RespostaAction>>
-}) {
-  const [codigo, setCodigo] = useState(codigoSugerido ?? "")
-  const [razaoSocial, setRazaoSocial] = useState(emitenteNome)
-  const [nomeFantasia, setNomeFantasia] = useState("")
-  const [cidade, setCidade] = useState(endereco?.cidade ?? "")
-  const [bairro, setBairro] = useState(endereco?.bairro ?? "")
-
-  const cadastrando = fetcher.state !== "idle"
-  const resposta = fetcher.data
-  const erro = resposta?.intencao === "cadastrarFornecedor" && !resposta.ok ? resposta.erro : null
-
-  function cadastrar() {
-    fetcher.submit(
-      {
-        intencao: "cadastrarFornecedor",
-        codigo,
-        razaoSocial,
-        nomeFantasia,
-        documento: emitenteCnpj,
-        cidade,
-        bairro,
-      },
-      { method: "post" }
-    )
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Cadastrar fornecedor</DialogTitle>
-          <DialogDescription>
-            Pré-preenchido com o que a nota fiscal já traz, e o código com o próximo livre —
-            confira e complete o que faltar.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="grid gap-4">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="fornecedor-codigo">Código</Label>
-              <Input
-                id="fornecedor-codigo"
-                value={codigo}
-                onChange={(e) => setCodigo(e.target.value)}
-                className="font-mono"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="fornecedor-fantasia">Nome fantasia</Label>
-              {/* O foco começa aqui, e não no código: aquele já vem preenchido,
-                  este é o que sempre precisa ser digitado. */}
-              <Input
-                id="fornecedor-fantasia"
-                autoFocus
-                value={nomeFantasia}
-                onChange={(e) => setNomeFantasia(e.target.value)}
-                placeholder="Como se conhece no dia a dia"
-              />
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="fornecedor-razao">Razão social</Label>
-            <Input id="fornecedor-razao" value={razaoSocial} onChange={(e) => setRazaoSocial(e.target.value)} />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>CNPJ</Label>
-            <p className="text-sm text-muted-foreground">{formatarCpfCnpj(emitenteCnpj)}</p>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="fornecedor-cidade">Cidade</Label>
-              <Input id="fornecedor-cidade" value={cidade} onChange={(e) => setCidade(e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="fornecedor-bairro">Bairro</Label>
-              <Input id="fornecedor-bairro" value={bairro} onChange={(e) => setBairro(e.target.value)} />
-            </div>
-          </div>
-
-          {erro ? <p className="text-sm text-destructive">{erro}</p> : null}
-        </div>
-
-        <DialogFooter>
-          <DialogClose render={<Button type="button" variant="outline" />}>Cancelar</DialogClose>
-          <Button type="button" disabled={cadastrando} onClick={cadastrar}>
-            {cadastrando ? "Cadastrando…" : "Cadastrar"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   )
 }

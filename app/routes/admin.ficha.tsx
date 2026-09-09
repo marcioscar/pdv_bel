@@ -336,6 +336,14 @@ function Ficha({
                           pedido #{l.pedidoDeCompraNumero}
                         </a>
                       ) : null}
+                      {l.autorizacaoFaturamentoNumero ? (
+                        <Link
+                          to={`/admin/afs/${l.autorizacaoFaturamentoId}`}
+                          className="block font-mono text-[11px] underline"
+                        >
+                          AF {l.autorizacaoFaturamentoNumero}
+                        </Link>
+                      ) : null}
                       {l.observacao ? (
                         <span className="block max-w-[22rem] text-[11px] text-muted-foreground">
                           {l.observacao}

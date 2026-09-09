@@ -10,6 +10,7 @@ import {
   ULTIMO_DIA,
   depoisDoDia,
   inicioDoDia,
+  meioDiaDe,
 } from "~/lib/dia"
 import { SITUACOES_PEDIDO, type FiltroPedidos, type SituacaoPedido } from "~/lib/pedidos-compra"
 
@@ -103,24 +104,11 @@ export async function criarPedido(entrada: {
       total,
       criadoPor: entrada.operador,
       observacao: entrada.observacao?.trim() || null,
-      entregaPrometida: dataDoDia(entrada.entregaPrometida),
+      entregaPrometida: meioDiaDe(entrada.entregaPrometida),
     },
   })
 
   return { ok: true, numero: pedidoDeCompra.numero, id: pedidoDeCompra.id }
-}
-
-/**
- * "aaaa-mm-dd" vira o meio-dia local daquele dia.
- *
- * Meio-dia, e não meia-noite: `new Date("2026-08-26")` é interpretado como
- * UTC, e no fuso de Brasília isso volta como dia 25 às 21h — a data prometida
- * apareceria um dia antes na tela.
- */
-function dataDoDia(dia: string | null | undefined): Date | null {
-  if (!dia || !/^\d{4}-\d{2}-\d{2}$/.test(dia)) return null
-  const [ano, mes, diaDoMes] = dia.split("-").map(Number)
-  return new Date(ano, mes - 1, diaDoMes, 12, 0, 0, 0)
 }
 
 export type ResultadoEntrega = { ok: true } | { ok: false; erro: string }
@@ -143,7 +131,7 @@ export async function anotarEntregaPrometida(
 
   await db.pedidoDeCompra.update({
     where: { id },
-    data: { entregaPrometida: dataDoDia(dia) },
+    data: { entregaPrometida: meioDiaDe(dia) },
   })
   return { ok: true }
 }
@@ -450,6 +438,33 @@ export async function recebidoPorProduto(pedidoId: string): Promise<Map<string, 
     mapa.set(m.produtoId, arredondar((mapa.get(m.produtoId) ?? 0) + m.quantidade))
   }
   return mapa
+}
+
+/**
+ * Se um pedido fecha ao lançar estas quantidades — ou seja, se todo item dele
+ * já terá chegado por inteiro depois desta entrada.
+ *
+ * Mora aqui, e não em cada rotina de entrada, porque são três os caminhos que
+ * fazem mercadoria chegar (o recebimento simples, a conciliação com a NF-e e a
+ * AF) e a regra de "acabou de chegar tudo" tem que ser uma só. Duas cópias
+ * divergiriam no dia em que uma ganhasse a tolerância e a outra não.
+ *
+ * A tolerância de 0,001 é para quantidade fracionada: 3 × 0,333 não fecha 1,000
+ * em ponto flutuante, e sem ela o pedido ficaria "parcial" para sempre por
+ * causa de um milésimo que não existe na prateleira.
+ */
+export async function pedidoFechaCom(
+  pedido: { id: string; itens: { produtoId: string; quantidade: number }[] },
+  aLancar: { produtoId: string; quantidade: number }[]
+): Promise<boolean> {
+  const jaRecebido = await recebidoPorProduto(pedido.id)
+
+  return pedido.itens.every((item) => {
+    const agora = aLancar
+      .filter((i) => i.produtoId === item.produtoId)
+      .reduce((soma, i) => soma + i.quantidade, 0)
+    return (jaRecebido.get(item.produtoId) ?? 0) + agora >= item.quantidade - 0.001
+  })
 }
 
 /**

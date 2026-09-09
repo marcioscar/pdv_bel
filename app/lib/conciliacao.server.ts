@@ -1,5 +1,6 @@
 import { db } from "~/lib/db.server"
 import { calcularCustoReal, type ItemComCustoReal } from "~/lib/custo-nfe"
+import { pedidoFechaCom } from "~/lib/pedidos-compra.server"
 import { resumoDoProcNFe } from "~/lib/sefaz.server"
 
 /**
@@ -185,23 +186,7 @@ export async function receberComNota(
   }
 
   // Sem pedido não existe "esperado" contra o que fechar — a nota entra e pronto.
-  let completo = false
-  if (pedido) {
-    const recebidoAntes = await db.movimentoEstoque.findMany({
-      where: { pedidoDeCompraId: pedido.id, tipo: "entrada" },
-      select: { produtoId: true, quantidade: true },
-    })
-    const totalAntesPorProduto = new Map<string, number>()
-    for (const m of recebidoAntes) {
-      totalAntesPorProduto.set(m.produtoId, (totalAntesPorProduto.get(m.produtoId) ?? 0) + m.quantidade)
-    }
-
-    completo = pedido.itens.every((item) => {
-      const desteEnvio = itensParaGravar.find((i) => i.produtoId === item.produtoId)?.quantidade ?? 0
-      const total = (totalAntesPorProduto.get(item.produtoId) ?? 0) + desteEnvio
-      return total >= item.quantidade - 0.001
-    })
-  }
+  const completo = pedido ? await pedidoFechaCom(pedido, itensParaGravar) : false
 
   await db.$transaction(async (tx) => {
     await tx.movimentoEstoque.createMany({

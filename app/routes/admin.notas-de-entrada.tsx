@@ -168,6 +168,15 @@ export default function AdminNotasDeEntrada({ loaderData }: Route.ComponentProps
         <span className="text-xs text-muted-foreground">
           NF-e de fornecedor sincronizadas da SEFAZ, por empresa
         </span>
+        {/* Nem toda compra chega por aqui: quem entrega sem emitir NF-e manda
+            uma AF, que a SEFAZ nunca vai distribuir. Quem não achar a nota
+            precisa saber que existe o outro caminho. */}
+        <Link
+          to="/admin/afs"
+          className="ml-auto text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+        >
+          Chegou sem nota? Lançar AF
+        </Link>
       </div>
 
       <div className="mt-4 flex flex-wrap items-end gap-3">

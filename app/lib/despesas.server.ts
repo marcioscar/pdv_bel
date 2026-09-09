@@ -1,4 +1,7 @@
+import type { Prisma } from "@prisma/client"
+
 import { db } from "~/lib/db.server"
+import { meioDiaDe } from "~/lib/dia"
 import { arredondar } from "~/lib/moeda"
 import { resumoDoProcNFe } from "~/lib/sefaz.server"
 
@@ -63,64 +66,98 @@ export type LinhaDeDespesa = {
 export type ResultadoGerarDespesas = { ok: true; quantidade: number } | { ok: false; erro: string }
 
 /**
- * Grava as despesas de uma vez e marca a nota — feito junto para nunca deixar
- * a nota "meio gerada": ou as duplicatas todas viram título a pagar, ou
+ * De qual documento de entrada nasce a conta a pagar.
+ *
+ * Dois, hoje: a NF-e do fornecedor e a AF (autorização de faturamento), que é o
+ * papel de quem entrega sem emitir nota. A tela é a mesma nos dois casos — o
+ * que muda é de onde saem fornecedor, loja e a marca de "já gerada", e é só
+ * isso que este tipo separa.
+ */
+export type DocumentoDeDespesa = { tipo: "nota" | "af"; id: string }
+
+/**
+ * Grava as despesas de uma vez e marca o documento — feito junto para nunca
+ * deixar a nota "meio gerada": ou as duplicatas todas viram título a pagar, ou
  * nenhuma vira, sem meio-termo que confundiria quem concilia depois.
  *
- * Recusa gerar de novo para a mesma nota: duplicar título a pagar é o tipo de
- * erro que só aparece quando alguém já pagou os dois.
+ * Recusa gerar de novo para o mesmo documento: duplicar título a pagar é o tipo
+ * de erro que só aparece quando alguém já pagou os dois.
  */
 export async function gerarDespesas(
-  notaId: string,
+  documento: DocumentoDeDespesa,
   linhas: LinhaDeDespesa[],
   operador: string
 ): Promise<ResultadoGerarDespesas> {
   if (linhas.length === 0) return { ok: false, erro: "Nenhuma linha para gerar" }
 
-  const nota = await db.notaFiscalRecebida.findUnique({ where: { id: notaId } })
-  if (!nota) return { ok: false, erro: "Nota não encontrada" }
-  if (nota.despesasGeradasEm) {
+  const origem = await origemDaDespesa(documento)
+  if (!origem) return { ok: false, erro: "Documento não encontrado" }
+  if (origem.despesasGeradasEm) {
     return {
       ok: false,
-      erro: `Já foram geradas despesas desta nota, em ${nota.despesasGeradasEm.toLocaleDateString("pt-BR")} por ${nota.despesasGeradasPor}.`,
+      erro: `Já foram geradas despesas deste documento, em ${origem.despesasGeradasEm.toLocaleDateString("pt-BR")} por ${origem.despesasGeradasPor}.`,
     }
   }
 
+  const gravar: Prisma.DespesaCreateManyInput[] = []
   for (const linha of linhas) {
     if (!(linha.valor > 0)) return { ok: false, erro: `Valor inválido em "${linha.descricao}"` }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(linha.data)) {
-      return { ok: false, erro: `Data inválida em "${linha.descricao}"` }
+    const vencimento = meioDiaDe(linha.data)
+    if (!vencimento) return { ok: false, erro: `Data inválida em "${linha.descricao}"` }
+
+    gravar.push({
+      conta: linha.conta,
+      tipo: linha.tipo,
+      descricao: linha.descricao,
+      valor: arredondar(linha.valor),
+      fornecedor: origem.fornecedor,
+      data: vencimento,
+      loja: origem.loja,
+      contaCorrente: linha.contaCorrente,
+      pago: false,
+    })
+  }
+
+  await db.$transaction(async (tx) => {
+    await tx.despesa.createMany({ data: gravar })
+
+    const marca = { despesasGeradasEm: new Date(), despesasGeradasPor: operador }
+    if (documento.tipo === "nota") {
+      await tx.notaFiscalRecebida.update({ where: { id: documento.id }, data: marca })
+    } else {
+      await tx.autorizacaoDeFaturamento.update({ where: { id: documento.id }, data: marca })
+    }
+  })
+
+  return { ok: true, quantidade: gravar.length }
+}
+
+/**
+ * O que a geração precisa saber do documento, venha ele da SEFAZ ou do papel.
+ *
+ * A AF já guarda o nome fantasia do cadastro (foi de lá que ela escolheu o
+ * fornecedor), então só a nota precisa da tradução de razão social para nome
+ * curto — é a única das duas que nasce com o nome escrito pelo emitente.
+ */
+async function origemDaDespesa(documento: DocumentoDeDespesa) {
+  if (documento.tipo === "af") {
+    const af = await db.autorizacaoDeFaturamento.findUnique({ where: { id: documento.id } })
+    if (!af) return null
+    return {
+      fornecedor: af.fornecedorNome,
+      loja: af.loja,
+      despesasGeradasEm: af.despesasGeradasEm,
+      despesasGeradasPor: af.despesasGeradasPor,
     }
   }
 
-  const { nome: fornecedor } = await fornecedorParaDespesa(nota.emitenteCnpj, nota.emitenteNome)
-
-  await db.$transaction(async (tx) => {
-    await tx.despesa.createMany({
-      data: linhas.map((linha) => ({
-        conta: linha.conta,
-        tipo: linha.tipo,
-        descricao: linha.descricao,
-        valor: arredondar(linha.valor),
-        fornecedor,
-        data: dataDoDia(linha.data),
-        loja: nota.loja,
-        contaCorrente: linha.contaCorrente,
-        pago: false,
-      })),
-    })
-
-    await tx.notaFiscalRecebida.update({
-      where: { id: notaId },
-      data: { despesasGeradasEm: new Date(), despesasGeradasPor: operador },
-    })
-  })
-
-  return { ok: true, quantidade: linhas.length }
-}
-
-/** "aaaa-mm-dd" vira meio-dia local — mesma razão do `entregaPrometida` do pedido. */
-function dataDoDia(dia: string): Date {
-  const [ano, mes, diaDoMes] = dia.split("-").map(Number)
-  return new Date(ano, mes - 1, diaDoMes, 12, 0, 0, 0)
+  const nota = await db.notaFiscalRecebida.findUnique({ where: { id: documento.id } })
+  if (!nota) return null
+  const { nome } = await fornecedorParaDespesa(nota.emitenteCnpj, nota.emitenteNome)
+  return {
+    fornecedor: nome,
+    loja: nota.loja,
+    despesasGeradasEm: nota.despesasGeradasEm,
+    despesasGeradasPor: nota.despesasGeradasPor,
+  }
 }

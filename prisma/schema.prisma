@@ -274,10 +274,16 @@ model MovimentoEstoque {
   /// até o documento, não só ler um número solto na observação.
   notaFiscalRecebidaId String? @db.ObjectId
   notaFiscalNumero     Int?
+  /// A AF (autorização de faturamento) que gerou este movimento, quando a
+  /// mercadoria chegou sem NF-e. Mesmo padrão dos outros documentos: navegar
+  /// até ele, não só ler um número solto na observação. O número é texto
+  /// porque é o que o fornecedor escreveu no papel — há AF com letra e traço.
+  autorizacaoFaturamentoId     String? @db.ObjectId
+  autorizacaoFaturamentoNumero String?
   /// O custo unitário real desta entrada — produto mais impostos que somam por
   /// fora (IPI, ICMS-ST) mais o rateio de frete e outras despesas da nota,
-  /// calculado na conciliação. Só existe quando `notaFiscalRecebidaId` existe:
-  /// a entrada simples usa o custo esperado do pedido, que já está lá.
+  /// calculado na conciliação; na AF, o que o gerente digitou do papel. Não
+  /// existe na entrada simples pelo pedido, que usa o custo esperado já gravado lá.
   custoUnitario Float?
   observacao String?
 
@@ -285,6 +291,7 @@ model MovimentoEstoque {
   @@index([transferenciaId])
   @@index([pedidoDeCompraId])
   @@index([notaFiscalRecebidaId])
+  @@index([autorizacaoFaturamentoId])
   @@index([loja, criadoEm])
   @@index([vendaId])
   @@map("movimentos_estoque")
@@ -900,6 +907,80 @@ type PedidoItem {
   quantidade Float
   /// O custo esperado no dia do pedido. O que a nota cobrar pode divergir — e é
   /// justamente por guardar o esperado que a divergência fica visível depois.
+  custoUnitario Float
+  total         Float
+}
+
+/// Uma AF — autorização de faturamento: o papel que chega junto com a
+/// mercadoria quando o fornecedor não emite NF-e para a entrega.
+///
+/// Não tem nada a ver com `Autorizacao`, que é o gerente liberando uma venda
+/// travada no caixa. Aqui é compra: o documento que faz a mercadoria existir no
+/// estoque quando a SEFAZ nunca vai trazer nada sobre ela.
+///
+/// Por isso a AF é digitada, não sincronizada — e por isso ela é o documento
+/// definitivo desta entrada, não um provisório esperando a nota: para estes
+/// fornecedores a NF-e não vem depois. Forjar uma `NotaFiscalRecebida` com
+/// chave inventada para reaproveitar aquela tela criaria um documento fiscal
+/// que não existe; é mais honesto ter uma coleção que diz o que é.
+///
+/// Nasce já lançada: criar a AF e dar entrada no estoque são a mesma
+/// transação. Uma AF gravada sem movimento seria um papel sem mercadoria, e
+/// ninguém teria como saber qual das duas metades faltou.
+model AutorizacaoDeFaturamento {
+  id     String @id @default(auto()) @map("_id") @db.ObjectId
+  /// O número que o fornecedor escreveu no papel — texto, e não `Int`, porque
+  /// não é sequência nossa: vem com letra, traço e zero à esquerda.
+  numero String
+  /// Quem recebeu a mercadoria. Estoque é físico, como no movimento.
+  loja   String
+
+  fornecedorId String @db.ObjectId
+  /// Desnormalizados de propósito, como no pedido de compra: o cadastro pode
+  /// ser corrigido depois, e o que a AF registrou naquele dia não muda.
+  fornecedorNome      String
+  fornecedorDocumento String?
+
+  /// O pedido de compra que esta AF atende, quando há um. Opcional porque
+  /// chega mercadoria sem pedido formal — o que se perde sem ele é só a
+  /// comparação com o que foi combinado.
+  pedidoDeCompraId     String? @db.ObjectId
+  pedidoDeCompraNumero Int?
+
+  /// A data do papel. Guardada como data pura (meio-dia local), pela mesma
+  /// razão do `entregaPrometida` do pedido: ninguém emite AF às 14h37, e
+  /// gravar o horário faria "hoje" virar "ontem" na virada do fuso.
+  dataEmissao DateTime
+
+  itens AfItem[]
+  total Float
+
+  observacao String?
+
+  criadoEm  DateTime @default(now())
+  criadoPor String
+
+  /// Quando esta AF já virou conta a pagar (`Despesa`) — mesmo papel do campo
+  /// homônimo da nota recebida: existe só para não gerar duas vezes, porque
+  /// título a pagar duplicado só aparece quando alguém já pagou os dois.
+  despesasGeradasEm  DateTime?
+  despesasGeradasPor String?
+
+  /// Procurar "a AF 4471 da Vabene" é a busca de sempre — pelo papel na mão.
+  @@index([fornecedorDocumento, numero])
+  @@index([loja, criadoEm])
+  @@index([pedidoDeCompraId])
+  @@map("autorizacoes_de_faturamento")
+}
+
+type AfItem {
+  produtoId  String @db.ObjectId
+  codigo     String
+  descricao  String
+  unidade    String
+  quantidade Float
+  /// O custo unitário digitado do papel — já é o custo real desta entrada, sem
+  /// rateio a calcular: a AF não tem frete nem imposto por fora para ratear.
   custoUnitario Float
   total         Float
 }

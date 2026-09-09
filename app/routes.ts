@@ -48,6 +48,12 @@ export default [
       route("pedidos-de-compra", "routes/admin.pedidos-de-compra.tsx"),
       route("notas-de-entrada", "routes/admin.notas-de-entrada.tsx"),
       route("notas-de-entrada/:notaId", "routes/admin.notas-de-entrada.$notaId.tsx"),
+      // A compra que chega sem NF-e: a SEFAZ nunca vai trazer nada dela, então
+      // é digitada. "nova" antes de ":afId" é só clareza — a rota estática
+      // ganha da dinâmica de qualquer jeito.
+      route("afs", "routes/admin.afs.tsx"),
+      route("afs/nova", "routes/admin.afs.nova.tsx"),
+      route("afs/:afId", "routes/admin.afs.$afId.tsx"),
       route("vendas", "routes/admin.vendas.tsx"),
       route("caixas", "routes/admin.caixas.tsx"),
       route("caixas/:fechamentoId", "routes/admin.caixa.tsx"),
