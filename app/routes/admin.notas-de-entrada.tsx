@@ -173,14 +173,20 @@ export default function AdminNotasDeEntrada({ loaderData }: Route.ComponentProps
     ? Math.max(0, Number(sincronizacao.maxNsu) - Number(sincronizacao.ultNsu))
     : 0
 
-  // A SEFAZ bloqueia o CNPJ por uma hora quando se pergunta sem ter novidade.
-  // Desabilitar o botão é mais honesto que deixar clicar e levar a recusa.
+  // A SEFAZ bloqueia o CNPJ quando se pergunta sem ter novidade, e a punição é
+  // progressiva. Desabilitar o botão é mais honesto que deixar clicar e levar a
+  // recusa — que, além de não trazer nada, estica o castigo.
   const esperarAte = sincronizacao?.proximaConsultaEm
     ? new Date(sincronizacao.proximaConsultaEm)
     : null
   const minutosDeEspera = esperarAte
     ? Math.max(0, Math.ceil((esperarAte.getTime() - Date.now()) / 60_000))
     : 0
+  const recusas = sincronizacao?.recusasSeguidas ?? 0
+  const esperaEmTexto =
+    minutosDeEspera < 60
+      ? `${minutosDeEspera} min`
+      : `${Math.floor(minutosDeEspera / 60)} h${minutosDeEspera % 60 ? ` ${minutosDeEspera % 60} min` : ""}`
 
   return (
     <div className="p-4 sm:p-6">
@@ -229,7 +235,9 @@ export default function AdminNotasDeEntrada({ loaderData }: Route.ComponentProps
               disabled={sincronizando || minutosDeEspera > 0}
               title={
                 minutosDeEspera > 0
-                  ? `A SEFAZ pede uma hora de intervalo quando não há novidade — libera em ${minutosDeEspera} min`
+                  ? recusas > 0
+                    ? `A SEFAZ recusou por consumo indevido ${recusas}x seguidas e a punição dela é progressiva — libera em ${esperaEmTexto}`
+                    : `A SEFAZ pede uma hora de intervalo quando não há novidade — libera em ${esperaEmTexto}`
                   : undefined
               }
             >
@@ -238,7 +246,7 @@ export default function AdminNotasDeEntrada({ loaderData }: Route.ComponentProps
               ) : (
                 <RefreshCw className="size-4" />
               )}
-              {minutosDeEspera > 0 ? `Sincronizar (${minutosDeEspera} min)` : "Sincronizar"}
+              {minutosDeEspera > 0 ? `Sincronizar (${esperaEmTexto})` : "Sincronizar"}
             </Button>
           </sincFetcher.Form>
         ) : null}
@@ -259,7 +267,9 @@ export default function AdminNotasDeEntrada({ loaderData }: Route.ComponentProps
           Sincronizado até NSU {Number(sincronizacao.ultNsu)}
           {faltam > 0 ? ` — faltam ~${faltam} documentos (clique em Sincronizar de novo)` : " — em dia"}
           {minutosDeEspera > 0
-            ? ` · a SEFAZ pede 1h de intervalo sem novidade; libera em ${minutosDeEspera} min`
+            ? recusas > 0
+              ? ` · ${recusas} recusa(s) seguida(s) da SEFAZ por consumo indevido; libera em ${esperaEmTexto}`
+              : ` · a SEFAZ pede 1h de intervalo sem novidade; libera em ${esperaEmTexto}`
             : ""}
         </p>
       ) : null}

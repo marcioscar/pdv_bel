@@ -1012,6 +1012,16 @@ model SincronizacaoSefaz {
   /// empresa inteira num clique impaciente.
   proximaConsultaEm DateTime?
 
+  /// Quantas recusas por consumo indevido vieram seguidas, sem nenhuma consulta
+  /// bem-sucedida no meio.
+  ///
+  /// A punição da SEFAZ é progressiva: reincidir estica o bloqueio. Uma espera
+  /// fixa de uma hora fazia o sistema bater na porta exatamente na cadência que
+  /// prolonga o castigo — por isso a espera dobra a cada recusa seguida, e este
+  /// contador é o que sabe em qual degrau se está. Zera quando uma consulta
+  /// finalmente passa.
+  recusasSeguidas Int @default(0)
+
   atualizadoEm DateTime @updatedAt
 
   @@map("sincronizacoes_sefaz")

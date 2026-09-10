@@ -48,13 +48,15 @@ export async function sincronizarNotasDaLoja(
   const cursor = await db.sincronizacaoSefaz.findUnique({ where: { loja } })
 
   if (cursor?.proximaConsultaEm && cursor.proximaConsultaEm > new Date()) {
-    const minutos = Math.ceil((cursor.proximaConsultaEm.getTime() - Date.now()) / 60_000)
+    const quanto = emTexto(cursor.proximaConsultaEm.getTime() - Date.now())
     return {
       ok: false,
       novas: 0,
-      erro:
-        `Já está em dia com a SEFAZ. Ela bloqueia o CNPJ por uma hora quando se pergunta ` +
-        `sem ter novidade — pode tentar de novo em ${minutos} min.`,
+      erro: cursor.recusasSeguidas
+        ? `A SEFAZ recusou por consumo indevido ${cursor.recusasSeguidas}x seguidas e a punição dela é ` +
+          `progressiva — insistir estica o castigo. Próxima tentativa em ${quanto}.`
+        : `Já está em dia com a SEFAZ. Ela bloqueia o CNPJ por uma hora quando se pergunta ` +
+          `sem ter novidade — pode tentar de novo em ${quanto}.`,
     }
   }
 
@@ -67,16 +69,24 @@ export async function sincronizarNotasDaLoja(
   for (let pagina = 0; pagina < maxPaginas; pagina++) {
     const resultado = await consultarNsuNaSefaz(loja, ultNsu)
     if (!resultado.ok) {
-      // A recusa por consumo indevido vale para o CNPJ inteiro e dura uma
-      // hora: registrar aqui evita que o próximo clique gaste outra tentativa
-      // à toa e estenda o castigo.
+      // A recusa por consumo indevido vale para o CNPJ inteiro: registrar aqui
+      // evita que o próximo clique gaste outra tentativa à toa e estenda o
+      // castigo, que é progressivo.
       //
       // Grava o `maxNsu` que já se conhecia, e não o `ultNsu` de agora: numa
       // recusa a SEFAZ não informa quanto existe, e copiar o nosso próprio
       // número para lá apaga a única prova de que ainda falta documento — a
       // loja passa a parecer em dia justamente porque a consulta foi negada.
       if (/consumo indevido|limite de consultas/i.test(resultado.erro)) {
-        await guardarCursor(loja, ultNsu, maxNsuConhecido, esperaDeUmaHora())
+        const recusas = (cursor?.recusasSeguidas ?? 0) + 1
+        const ate = await guardarRecusa(loja, ultNsu, maxNsuConhecido, recusas)
+        return {
+          ok: false,
+          novas,
+          erro:
+            `${resultado.erro}. Recusa ${recusas} seguida — a punição da SEFAZ é progressiva, ` +
+            `então a próxima tentativa só fica liberada às ${ate.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}.`,
+        }
       }
       return { ok: false, erro: resultado.erro, novas }
     }
@@ -242,15 +252,65 @@ function normalizarNsu(valor: string) {
 }
 
 function esperaDeUmaHora() {
-  return new Date(Date.now() + 60 * 60_000)
+  return new Date(Date.now() + ESPERA_INICIAL_MS)
 }
 
+/**
+ * Consulta que passou: grava onde chegou e ZERA o contador de recusas.
+ *
+ * A espera de uma hora que às vezes vem junto não é castigo — é a regra de não
+ * perguntar de novo sem ter havido novidade. Confundir as duas faria a próxima
+ * recusa começar no degrau errado.
+ */
 function guardarCursor(loja: string, ultNsu: string, maxNsu: string, proximaConsultaEm: Date | null) {
+  const dados = { ultNsu, maxNsu, proximaConsultaEm, recusasSeguidas: 0 }
   return db.sincronizacaoSefaz.upsert({
     where: { loja },
-    update: { ultNsu, maxNsu, proximaConsultaEm },
-    create: { loja, ultNsu, maxNsu, proximaConsultaEm },
+    update: dados,
+    create: { loja, ...dados },
   })
+}
+
+/** Uma hora dobrando a cada recusa seguida, com teto — 1h, 2h, 4h, 8h. */
+const ESPERA_INICIAL_MS = 60 * 60_000
+const ESPERA_MAXIMA_MS = 8 * 60 * 60_000
+
+function esperaProgressiva(recusasSeguidas: number) {
+  const dobrada = ESPERA_INICIAL_MS * 2 ** Math.max(0, recusasSeguidas - 1)
+  return new Date(Date.now() + Math.min(dobrada, ESPERA_MAXIMA_MS))
+}
+
+/**
+ * Consulta recusada por consumo indevido: adia a próxima na medida do degrau em
+ * que se está.
+ *
+ * O teto de oito horas é deliberado. Sem ele, meia dúzia de cliques impacientes
+ * silenciariam a sincronização por dias — e nota de fornecedor que não chega é
+ * pior que espera longa, porque ninguém percebe.
+ */
+async function guardarRecusa(
+  loja: string,
+  ultNsu: string,
+  maxNsu: string,
+  recusasSeguidas: number
+): Promise<Date> {
+  const proximaConsultaEm = esperaProgressiva(recusasSeguidas)
+  const dados = { ultNsu, maxNsu, proximaConsultaEm, recusasSeguidas }
+  await db.sincronizacaoSefaz.upsert({
+    where: { loja },
+    update: dados,
+    create: { loja, ...dados },
+  })
+  return proximaConsultaEm
+}
+
+/** "45 min", "2 h", "3 h 20 min" — minuto puro fica ilegível a partir de uma hora. */
+function emTexto(milissegundos: number) {
+  const minutos = Math.max(1, Math.ceil(milissegundos / 60_000))
+  if (minutos < 60) return `${minutos} min`
+  const horas = Math.floor(minutos / 60)
+  const resto = minutos % 60
+  return resto ? `${horas} h ${resto} min` : `${horas} h`
 }
 
 /**
