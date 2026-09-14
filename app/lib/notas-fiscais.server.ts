@@ -47,18 +47,8 @@ export async function sincronizarNotasDaLoja(
 ): Promise<ResultadoSincronizacao> {
   const cursor = await db.sincronizacaoSefaz.findUnique({ where: { loja } })
 
-  if (cursor?.proximaConsultaEm && cursor.proximaConsultaEm > new Date()) {
-    const quanto = emTexto(cursor.proximaConsultaEm.getTime() - Date.now())
-    return {
-      ok: false,
-      novas: 0,
-      erro: cursor.recusasSeguidas
-        ? `A SEFAZ recusou por consumo indevido ${cursor.recusasSeguidas}x seguidas e a punição dela é ` +
-          `progressiva — insistir estica o castigo. Próxima tentativa em ${quanto}.`
-        : `Já está em dia com a SEFAZ. Ela bloqueia o CNPJ por uma hora quando se pergunta ` +
-          `sem ter novidade — pode tentar de novo em ${quanto}.`,
-    }
-  }
+  const fechada = janelaFechada(cursor)
+  if (fechada) return { ok: false, novas: 0, erro: fechada }
 
   let ultNsu = normalizarNsu(cursor?.ultNsu ?? "0")
   // O maior NSU que a SEFAZ já disse existir. Guardado à parte porque as
@@ -220,6 +210,17 @@ export type ResultadoRecuperacao =
  * sempre, a cada vez consumindo cota.
  */
 export async function recuperarNsus(loja: string, nsus: number[]): Promise<ResultadoRecuperacao> {
+  /*
+   * A MESMA janela da sincronização, e não uma checagem própria: a cota da
+   * SEFAZ é por CNPJ, e esta busca gasta da hora que a sincronização está
+   * esperando. Sem isto, recuperar um buraco durante a espera torrava a cota em
+   * silêncio — e a recusa aparecia depois, no botão de sincronizar, para quem
+   * tinha esperado direitinho.
+   */
+  const cursor = await db.sincronizacaoSefaz.findUnique({ where: { loja } })
+  const fechada = janelaFechada(cursor)
+  if (fechada) return { ok: false, erro: fechada, buscados: 0, notas: 0 }
+
   let buscados = 0
   let notas = 0
   let vazios = 0
@@ -227,7 +228,33 @@ export async function recuperarNsus(loja: string, nsus: number[]): Promise<Resul
   for (const numero of nsus) {
     const nsu = normalizarNsu(String(numero))
     const resultado = await consultarNsuAvulsoNaSefaz(loja, nsu)
-    if (!resultado.ok) return { ok: false, erro: resultado.erro, buscados, notas }
+    if (!resultado.ok) {
+      /*
+       * Recusa por consumo indevido aqui conta igual à da sincronização, no
+       * mesmo contador: é o mesmo CNPJ levando o mesmo castigo. Registrar só de
+       * um lado deixava o outro achando que podia perguntar, e a punição —
+       * progressiva — subia um degrau sem ninguém entender por quê.
+       */
+      if (/consumo indevido|limite de consultas/i.test(resultado.erro)) {
+        const recusas = (cursor?.recusasSeguidas ?? 0) + 1
+        const ate = await guardarRecusa(
+          loja,
+          normalizarNsu(cursor?.ultNsu ?? "0"),
+          normalizarNsu(cursor?.maxNsu ?? "0"),
+          recusas
+        )
+        return {
+          ok: false,
+          buscados,
+          notas,
+          erro:
+            `${resultado.erro}. Recusa ${recusas} seguida — a punição da SEFAZ é progressiva, ` +
+            `então a próxima consulta (desta busca ou da sincronização) só fica liberada às ` +
+            `${ate.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}.`,
+        }
+      }
+      return { ok: false, erro: resultado.erro, buscados, notas }
+    }
 
     buscados++
 
@@ -246,13 +273,36 @@ export async function recuperarNsus(loja: string, nsus: number[]): Promise<Resul
   return { ok: true, buscados, notas, vazios }
 }
 
+/**
+ * A janela ainda fechada, dita em palavras — ou `null` quando dá para perguntar.
+ *
+ * Uma função só porque a cota da SEFAZ é POR CNPJ, não por funcionalidade: a
+ * sincronização e a busca de buracos gastam da mesma hora. Cada uma com a sua
+ * própria checagem (ou, pior, uma sem nenhuma) faria a segunda torrar a cota
+ * que a primeira estava esperando — e a recusa cairia na cara de quem só
+ * apertou o botão da outra.
+ */
+function janelaFechada(cursor: {
+  proximaConsultaEm: Date | null
+  recusasSeguidas: number
+} | null): string | null {
+  if (!cursor?.proximaConsultaEm || cursor.proximaConsultaEm <= new Date()) return null
+
+  const quanto = emTexto(cursor.proximaConsultaEm.getTime() - Date.now())
+  return cursor.recusasSeguidas
+    ? `A SEFAZ recusou por consumo indevido ${cursor.recusasSeguidas}x seguidas e a punição dela é ` +
+      `progressiva — insistir estica o castigo. Próxima tentativa em ${quanto}.`
+    : `Já está em dia com a SEFAZ. Ela bloqueia o CNPJ por uma hora quando se pergunta ` +
+      `sem ter novidade — pode tentar de novo em ${quanto}.`
+}
+
 /** Os 15 dígitos com zeros à esquerda que a SEFAZ usa — um formato só, sempre. */
 function normalizarNsu(valor: string) {
   return (valor.replace(/\D/g, "") || "0").padStart(15, "0").slice(-15)
 }
 
 function esperaDeUmaHora() {
-  return new Date(Date.now() + ESPERA_INICIAL_MS)
+  return new Date(Date.now() + ESPERA_INICIAL_MS + MARGEM_MS)
 }
 
 /**
@@ -275,9 +325,25 @@ function guardarCursor(loja: string, ultNsu: string, maxNsu: string, proximaCons
 const ESPERA_INICIAL_MS = 60 * 60_000
 const ESPERA_MAXIMA_MS = 8 * 60 * 60_000
 
+/**
+ * A folga em cima de toda espera, e a razão dela é aritmética.
+ *
+ * Esperar EXATAMENTE uma hora é pedir de novo no primeiro instante em que a
+ * nossa hora fecha — e a hora que vale não é a nossa, é a que a SEFAZ contou do
+ * lado dela, com o relógio dela. Qualquer diferença entre os dois relógios, ou
+ * qualquer arredondamento do lado de lá, põe a pergunta um segundo DENTRO da
+ * janela ainda fechada, e a resposta é 656.
+ *
+ * Foi o que aconteceu: uma consulta que passou "em dia" agendou 1h exata, a
+ * hora fechou, o primeiro clique seguinte levou recusa. Cinco minutos de folga
+ * custam nada — ninguém acompanha nota de fornecedor minuto a minuto — e tiram
+ * a sincronização da beirada onde ela só depende de dois relógios concordarem.
+ */
+const MARGEM_MS = 5 * 60_000
+
 function esperaProgressiva(recusasSeguidas: number) {
   const dobrada = ESPERA_INICIAL_MS * 2 ** Math.max(0, recusasSeguidas - 1)
-  return new Date(Date.now() + Math.min(dobrada, ESPERA_MAXIMA_MS))
+  return new Date(Date.now() + Math.min(dobrada, ESPERA_MAXIMA_MS) + MARGEM_MS)
 }
 
 /**
