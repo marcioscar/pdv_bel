@@ -186,7 +186,7 @@ export default function Devolucao({ loaderData }: Route.ComponentProps) {
 
       {!temNota && !venda.cancelada ? (
         <Recado tipo="aviso">
-          Esta venda não tem NF-e autorizada, então <b>não haverá nota de devolução</b> —
+          Esta venda não tem nota autorizada, então <b>não haverá nota de devolução</b> —
           sem a chave da original não existe o que referenciar. A mercadoria volta ao
           estoque e o dinheiro ao cliente do mesmo jeito.
         </Recado>

@@ -589,12 +589,6 @@ export async function emitirDaDevolucao(
   const cliente = devolucao.clienteId
     ? await db.cliente.findUnique({ where: { id: devolucao.clienteId } })
     : null
-  if (!cliente) {
-    return {
-      ok: false,
-      erro: "A nota de devolução precisa do cliente: a venda saiu sem cadastro vinculado",
-    }
-  }
 
   /*
    * A venda original, só para saber QUAL item cada devolução está desfazendo.
@@ -661,7 +655,66 @@ export async function emitirDaDevolucao(
     }
   })
 
-  const documentoCliente = (cliente.cpfCnpj ?? "").replace(/\D/g, "")
+  /**
+   * Quem é o destinatário — e é aqui que mora o caso do balcão.
+   *
+   * O consumidor final não emite nota: ele não é contribuinte, não tem talão,
+   * não tem como documentar a saída da mercadoria da mão dele. Quem documenta a
+   * entrada é a loja, e a prática corrente é emitir a NF-e de entrada CONTRA O
+   * PRÓPRIO CNPJ — emitente e destinatário são a mesma empresa, porque não há
+   * um segundo contribuinte na operação.
+   *
+   * Com cliente cadastrado, ele vai como destinatário: o documento fica mais
+   * completo e a devolução casa com o cadastro dos dois lados.
+   *
+   * O CPF de quem devolveu, quando se sabe, vai nas informações adicionais em
+   * vez do campo de destinatário. Pôr um CPF ali exigiria endereço completo que
+   * o balcão não tem — e a Nota Legal do DF, que é de onde esse CPF costuma
+   * vir, não faz dele um destinatário de nota de entrada.
+   */
+  const contraSiMesma = cliente === null
+
+  const destinatario = contraSiMesma
+    ? {
+        nome_destinatario: loja.razaoSocial ?? loja.nome,
+        cnpj_destinatario: loja.cnpj,
+        indicador_inscricao_estadual_destinatario: indicadorDeIe(loja.inscricaoEstadual),
+        ...(loja.inscricaoEstadual
+          ? { inscricao_estadual_destinatario: loja.inscricaoEstadual }
+          : {}),
+        logradouro_destinatario: loja.endereco ?? "",
+        numero_destinatario: "S/N",
+        bairro_destinatario: loja.bairro ?? "",
+        municipio_destinatario: loja.cidade ?? "",
+        uf_destinatario: loja.uf ?? "DF",
+        cep_destinatario: loja.cep ?? "",
+        // Entre contribuintes — e aqui a loja é os dois lados — não é consumo final.
+        consumidor_final: 0,
+      }
+    : (() => {
+        const documento = (cliente!.cpfCnpj ?? "").replace(/\D/g, "")
+        return {
+          nome_destinatario: cliente!.nome,
+          ...(documento.length === 14
+            ? { cnpj_destinatario: documento }
+            : { cpf_destinatario: documento }),
+          indicador_inscricao_estadual_destinatario: indicadorDeIe(cliente!.inscricaoEstadual),
+          ...(cliente!.inscricaoEstadual && cliente!.inscricaoEstadual !== "ISENTO"
+            ? { inscricao_estadual_destinatario: cliente!.inscricaoEstadual }
+            : {}),
+          logradouro_destinatario: cliente!.endereco,
+          numero_destinatario: cliente!.numero || "S/N",
+          complemento_destinatario: cliente!.complemento || undefined,
+          bairro_destinatario: cliente!.bairro,
+          municipio_destinatario: cliente!.cidade,
+          uf_destinatario: cliente!.uf,
+          cep_destinatario: cliente!.cep,
+          consumidor_final: documento.length === 14 ? 0 : 1,
+        }
+      })()
+
+  /** O CPF que o consumidor pediu na nota original, quando pediu. */
+  const cpfDeQuemDevolveu = (vendaOriginal.cpfNaNota ?? "").replace(/\D/g, "")
 
   const payload = {
     data_emissao: dataComFuso(new Date()),
@@ -691,25 +744,18 @@ export async function emitirDaDevolucao(
     informacoes_adicionais_contribuinte: [
       ehSimples(loja.regimeTributario) ? AVISO_SIMPLES : "",
       `Devolucao referente a venda ${devolucao.vendaNumero}. Motivo: ${devolucao.motivo}`,
+      /*
+       * Sem cliente cadastrado a nota sai contra o próprio CNPJ, e aí esta
+       * frase é a única coisa no documento que diz de quem a mercadoria veio.
+       * O CPF entra quando o consumidor pediu na nota original.
+       */
+      contraSiMesma
+        ? `Devolucao de consumidor final nao contribuinte${cpfDeQuemDevolveu ? `, CPF ${cpfDeQuemDevolveu}` : " nao identificado"}.`
+        : "",
     ]
       .filter(Boolean)
       .join(" "),
-    nome_destinatario: cliente.nome,
-    ...(documentoCliente.length === 14
-      ? { cnpj_destinatario: documentoCliente }
-      : { cpf_destinatario: documentoCliente }),
-    indicador_inscricao_estadual_destinatario: indicadorDeIe(cliente.inscricaoEstadual),
-    ...(cliente.inscricaoEstadual && cliente.inscricaoEstadual !== "ISENTO"
-      ? { inscricao_estadual_destinatario: cliente.inscricaoEstadual }
-      : {}),
-    logradouro_destinatario: cliente.endereco,
-    numero_destinatario: cliente.numero || "S/N",
-    complemento_destinatario: cliente.complemento || undefined,
-    bairro_destinatario: cliente.bairro,
-    municipio_destinatario: cliente.cidade,
-    uf_destinatario: cliente.uf,
-    cep_destinatario: cliente.cep,
-    consumidor_final: documentoCliente.length === 14 ? 0 : 1,
+    ...destinatario,
     items,
   }
 
@@ -725,8 +771,12 @@ export async function emitirDaDevolucao(
       // Sem `vendaId`: a nota é da devolução, não da venda. Preencher ali faria
       // a tela de Vendas mostrar duas notas para a mesma venda, uma delas de
       // entrada — e o botão de cancelar nota pegaria a errada.
-      destinatarioNome: cliente.nome,
-      destinatarioCpfCnpj: documentoCliente || null,
+      destinatarioNome: contraSiMesma
+        ? `${loja.razaoSocial ?? loja.nome} (a própria loja)`
+        : cliente!.nome,
+      destinatarioCpfCnpj: contraSiMesma
+        ? loja.cnpj
+        : (cliente!.cpfCnpj ?? "").replace(/\D/g, "") || null,
       valorTotal: devolucao.total,
       observacao: devolucao.motivo,
       emitidaPor,
