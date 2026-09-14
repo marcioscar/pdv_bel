@@ -99,6 +99,25 @@ function daResposta(resposta: RespostaFocus) {
     typeof resposta.status === "string" ? resposta.status : "processando_autorizacao"
   const deuCerto = status === "autorizado" || status === "cancelado"
 
+  /*
+   * O campo se chama `erro` e só guarda erro.
+   *
+   * Antes a `mensagem_sefaz` entrava aqui em qualquer desfecho, e a SEFAZ manda
+   * mensagem também quando dá certo: toda nota autorizada ficava com
+   * "Autorizado o uso da NF-e" gravado no campo de erro. Não quebrava a tela —
+   * ela só mostra o texto quando o status é de recusa —, mas é uma armadilha
+   * para a próxima leitura: quem consultar o banco atrás de notas com problema
+   * encontra todas, e quem escrever a próxima tela vai acreditar no nome do
+   * campo.
+   *
+   * `null` quando deu certo, e não `undefined`: numa reemissão que passa depois
+   * de ter falhado, é o que APAGA a recusa anterior. `undefined` deixaria o
+   * texto antigo de pé numa nota que agora está autorizada.
+   */
+  const erro = deuCerto
+    ? null
+    : (mensagemDeErro ?? resposta.mensagem_sefaz ?? undefined)
+
   return {
     status,
     numero: resposta.numero ?? undefined,
@@ -108,7 +127,7 @@ function daResposta(resposta: RespostaFocus) {
     caminhoDanfe: urlDoArquivo(resposta.caminho_danfe) ?? undefined,
     caminhoXml: urlDoArquivo(resposta.caminho_xml_nota_fiscal) ?? undefined,
     qrcodeUrl: resposta.qrcode_url ?? undefined,
-    erro: mensagemDeErro ?? resposta.mensagem_sefaz ?? (deuCerto ? null : undefined),
+    erro,
   }
 }
 
