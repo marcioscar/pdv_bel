@@ -1,5 +1,6 @@
 import { db } from "~/lib/db.server"
 import { arredondar } from "~/lib/moeda"
+import { estornarCreditoDaVenda } from "~/lib/creditos.server"
 
 export type TipoMovimento =
   | "venda"
@@ -204,6 +205,13 @@ export async function cancelarVenda(
           })),
         })
       }
+
+      /*
+       * O crédito que a venda abateu volta para o cliente. Na mesma transação
+       * do cancelamento: fora dela, cancelar e falhar aqui deixaria o cliente
+       * sem a mercadoria E sem o saldo que pagou por ela.
+       */
+      await estornarCreditoDaVenda(tx, venda, operador)
 
       return { ok: true as const, numero: venda.numero, estornados: originais.length }
     })

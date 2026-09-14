@@ -32,6 +32,7 @@ import { emitirParaVenda, type CobrancaDaVenda } from "~/lib/cobranca.server"
 import { saldosPorProduto } from "~/lib/estoque.server"
 import { contaDaLoja, lojaPeloDocumento, lojasPorCnpj } from "~/lib/lojas.server"
 import { ultimoCustoPorProduto } from "~/lib/compras.server"
+import { saldosDeCredito } from "~/lib/creditos.server"
 import { modeloDaVenda } from "~/lib/fiscal"
 import { ambienteFocus, focusConfigurada } from "~/lib/focus.server"
 import { emitirDaVenda } from "~/lib/nota-fiscal.server"
@@ -52,6 +53,7 @@ import {
   type PixImediato,
 } from "~/lib/pix.server"
 import {
+  arredondar,
   interpretarValor,
   moeda,
   quantidade as formatarQuantidade,
@@ -164,6 +166,7 @@ export async function loader({ request }: Route.LoaderArgs) {
    * mesmo número que o servidor vai gravar.
    */
   const custos = await ultimoCustoPorProduto(cadastro.map((p) => p.id))
+  const creditos = await saldosDeCredito(clientes.map((c) => c.id))
   const produtos = cadastro.map((produto) => ({
     ...produto,
     estoque: saldos.get(produto.id) ?? 0,
@@ -232,6 +235,9 @@ export async function loader({ request }: Route.LoaderArgs) {
       cidade: c.cidade,
       uf: c.uf,
       lojaDaRede: lojaPorCnpj.get(c.cpfCnpj.replace(/\D/g, "")) ?? null,
+      // O saldo a favor dele. Vai junto do catálogo pela mesma razão: o caixa
+      // não pode esperar a rede para saber quanto o cliente tem de crédito.
+      credito: creditos.get(c.id) ?? 0,
     })),
     // Os dois caminhos que trazem carrinho pronto entram pela mesma porta; o que
     // muda é a origem, e é ela que decide se há liberação junto.
@@ -289,6 +295,8 @@ export async function action({ request }: Route.ActionArgs) {
         // Cadastrar a loja da rede aqui no balcão é caminho legítimo, e sem
         // isto ela voltaria como cliente comum até a próxima recarga da tela.
         lojaDaRede: (await lojaPeloDocumento(cpfCnpj))?.codigo ?? null,
+        // Cadastro que acabou de nascer não tem histórico, então não tem saldo.
+        credito: 0,
       },
     }
   }
@@ -865,6 +873,16 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
    * Ao desvincular, volta ao padrão da tela em vez de ficar com a forma
    * anterior: o carrinho passou a ser de um cliente qualquer de novo.
    */
+  /**
+   * O crédito que o cliente escolheu abater nesta venda.
+   *
+   * Zera ao trocar (ou tirar) o cliente: o saldo é de quem estava vinculado, e
+   * carregar o número adiante abateria o crédito de um na compra de outro.
+   */
+  const [creditoUsado, setCreditoUsado] = useState(0)
+
+  useEffect(() => setCreditoUsado(0), [cliente?.id])
+
   const paraARede = cliente?.lojaDaRede != null
   useEffect(() => {
     setForma((atual) => {
@@ -1097,6 +1115,9 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           desconto: totais.desconto,
           forma,
           recebido: valorRecebido,
+          // Quanto o cliente quer abater do saldo que tem a favor. O servidor
+          // confere contra o livro — aqui é só a escolha dele.
+          creditoUsado,
           clienteId: cliente?.id ?? null,
           // Vai o id da condição, não as datas: os vencimentos são calculados no
           // servidor, para o prazo gravado ser sempre um dos que a empresa pratica.
@@ -1112,8 +1133,8 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       )
     },
     [
-      autorizacaoId, cliente, cpfNaNota, emitirNota, fetcher, forma, gravando,
-      totais.desconto, venda.itens, vendedorCodigo,
+      autorizacaoId, cliente, cpfNaNota, creditoUsado, emitirNota, fetcher, forma,
+      gravando, totais.desconto, venda.itens, vendedorCodigo,
     ]
   )
 
@@ -1616,8 +1637,16 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
         setErroFinalizacao("Informe o valor recebido")
         return
       }
-      if (valor < totais.total) {
-        setErroFinalizacao(`Faltam ${moeda(totais.total - valor)}`)
+      /*
+       * Contra o que FALTA pagar, não contra o total: numa venda de R$ 6 com
+       * R$ 3 de crédito abatido, quem entrega R$ 5 está pagando a mais, não a
+       * menos. Comparar com o total aqui recusava a venda com "Faltam R$ 1,00"
+       * enquanto o diálogo, do lado, mostrava R$ 2,00 de troco — as duas contas
+       * têm que ser a mesma, e a que vale é a do servidor.
+       */
+      const aPagar = arredondar(Math.max(0, totais.total - creditoUsado))
+      if (valor < aPagar) {
+        setErroFinalizacao(`Faltam ${moeda(aPagar - valor)}`)
         return
       }
       concluir(valor)
@@ -1658,6 +1687,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   }, [
     cliente,
     concluir,
+    creditoUsado,
     fetcher,
     forma,
     gravando,
@@ -2132,6 +2162,11 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           recebido={recebidoTexto}
           onRecebidoChange={(v) => {
             setRecebidoTexto(v)
+            setErroFinalizacao(null)
+          }}
+          creditoUsado={creditoUsado}
+          onCreditoUsadoChange={(valor) => {
+            setCreditoUsado(valor)
             setErroFinalizacao(null)
           }}
           vendedorCodigo={vendedorCodigo}

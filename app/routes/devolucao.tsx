@@ -12,6 +12,7 @@ import { caixaAberto } from "~/lib/caixa.server"
 import {
   itensDevolviveis,
   registrarDevolucao,
+  type DestinoDaDevolucao,
   type LinhaDevolvivel,
 } from "~/lib/devolucoes.server"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
@@ -61,6 +62,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       total: venda.total,
       forma: venda.forma,
       clienteNome: venda.clienteNome,
+      // O crédito precisa de conta onde cair; a tela desliga o botão sem ela.
+      temCliente: Boolean(venda.clienteId),
       cancelada: Boolean(venda.canceladaEm),
     },
     linhas,
@@ -86,7 +89,7 @@ export async function action({ params, request }: Route.ActionArgs) {
     operador: eu.nome,
     operadorId: eu.id,
     dia: diaDeHoje(),
-    emEspecie: String(form.get("emEspecie")) === "sim",
+    destino: destinoValido(String(form.get("destino"))),
   })
 
   if (!resultado.ok) {
@@ -100,14 +103,22 @@ export async function action({ params, request }: Route.ActionArgs) {
   }
 }
 
+/** O que a tela mandou, recusando o que não é destino — a lista é de três. */
+function destinoValido(valor: string): DestinoDaDevolucao {
+  return valor === "credito" || valor === "fora" ? valor : "especie"
+}
+
 export default function Devolucao({ loaderData }: Route.ComponentProps) {
   const { venda, linhas, temNota, caixaAberto: aberto } = loaderData
 
   const [quantidades, setQuantidades] = useState<Record<string, string>>({})
   const [motivo, setMotivo] = useState("")
-  // Espécie é o padrão: é o que acontece no balcão. Desligar é para quando o
-  // acerto vai por fora — transferência, abatimento, crédito combinado.
-  const [emEspecie, setEmEspecie] = useState(true)
+  /*
+   * Espécie é o padrão porque é o que acontece no balcão. Crédito só aparece
+   * com cliente vinculado — sem cadastro não há a quem creditar, e um botão
+   * que erra sempre é pior que um botão que não está lá.
+   */
+  const [destino, setDestino] = useState<DestinoDaDevolucao>("especie")
 
   const fetcher = useFetcher<typeof action>()
   const gravando = fetcher.state !== "idle"
@@ -138,7 +149,7 @@ export default function Devolucao({ loaderData }: Route.ComponentProps) {
           escolhidos.map((x) => ({ produtoId: x.linha.produtoId, quantidade: x.quantidade }))
         ),
         motivo,
-        emEspecie: emEspecie ? "sim" : "nao",
+        destino,
       },
       { method: "post" }
     )
@@ -192,7 +203,7 @@ export default function Devolucao({ loaderData }: Route.ComponentProps) {
         </Recado>
       ) : null}
 
-      {emEspecie && !aberto ? (
+      {destino === "especie" && !aberto ? (
         <Recado tipo="erro">
           O caixa de {venda.loja} não foi aberto hoje — sem ele o dinheiro não pode
           sair da gaveta. Abra o caixa, ou desmarque a devolução em espécie.
@@ -283,15 +294,34 @@ export default function Devolucao({ loaderData }: Route.ComponentProps) {
           />
         </div>
 
-        <label className="flex items-center gap-2 pb-2 text-xs font-medium">
-          <input
-            type="checkbox"
-            checked={emEspecie}
-            onChange={(e) => setEmEspecie(e.target.checked)}
-            className="size-4 accent-primary"
-          />
-          Devolver o dinheiro da gaveta
-        </label>
+        <div className="pb-1">
+          <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            O valor volta como
+          </span>
+          <div className="flex flex-wrap gap-1.5">
+            {DESTINOS.map((opcao) => {
+              // Sem cliente na venda não há conta onde pôr o saldo.
+              const impedido = opcao.id === "credito" && !venda.temCliente
+              return (
+                <Button
+                  key={opcao.id}
+                  type="button"
+                  size="sm"
+                  variant={destino === opcao.id ? "default" : "outline"}
+                  disabled={impedido}
+                  title={impedido ? "Só com cliente cadastrado na venda" : opcao.ajuda}
+                  onClick={() => setDestino(opcao.id)}
+                  className="rounded-lg"
+                >
+                  {opcao.rotulo}
+                </Button>
+              )
+            })}
+          </div>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            {DESTINOS.find((d) => d.id === destino)?.ajuda}
+          </p>
+        </div>
       </div>
 
       {fetcher.data && !fetcher.data.ok ? (
@@ -322,7 +352,7 @@ export default function Devolucao({ loaderData }: Route.ComponentProps) {
             excedido ||
             !motivo.trim() ||
             venda.cancelada ||
-            (emEspecie && !aberto)
+            (destino === "especie" && !aberto)
           }
           onClick={confirmar}
           className="ml-auto rounded-lg"
@@ -334,6 +364,24 @@ export default function Devolucao({ loaderData }: Route.ComponentProps) {
     </div>
   )
 }
+
+const DESTINOS: { id: DestinoDaDevolucao; rotulo: string; ajuda: string }[] = [
+  {
+    id: "especie",
+    rotulo: "Dinheiro da gaveta",
+    ajuda: "Sai do caixa agora — exige caixa aberto e entra no fechamento do dia",
+  },
+  {
+    id: "credito",
+    rotulo: "Crédito do cliente",
+    ajuda: "Vira saldo a favor dele, para abater numa próxima compra. Nada sai da gaveta",
+  },
+  {
+    id: "fora",
+    rotulo: "Acerto por fora",
+    ajuda: "Só a mercadoria volta — o valor é resolvido por outro caminho",
+  },
+]
 
 function Recado({ tipo, children }: { tipo: "erro" | "aviso"; children: React.ReactNode }) {
   return (

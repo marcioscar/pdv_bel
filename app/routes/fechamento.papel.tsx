@@ -80,6 +80,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
           ${linha("Troco da abertura", fechamento.abertura)}
           ${linha("Vendas em dinheiro", fechamento.vendasDinheiro)}
           ${fechamento.suprimentos > 0 ? linha("Reforços", fechamento.suprimentos) : ""}
+          ${fechamento.creditoEmDinheiro > 0 ? linha("Crédito abatido", fechamento.creditoEmDinheiro, { negativo: true }) : ""}
           ${fechamento.devolucoes > 0 ? linha("Devoluções", fechamento.devolucoes, { negativo: true }) : ""}
           ${fechamento.sangrias > 0 ? linha("Sangrias", fechamento.sangrias, { negativo: true }) : ""}
           <tr class="soma">

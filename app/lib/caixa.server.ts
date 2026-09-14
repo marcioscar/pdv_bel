@@ -60,7 +60,7 @@ export async function resumoDoDia(loja: string, dia: string) {
     db.venda.groupBy({
       by: ["forma"],
       where: { AND: [periodo, NAO_CANCELADA, NAO_E_TRANSFERENCIA] },
-      _sum: { total: true },
+      _sum: { total: true, creditoUsado: true },
       _count: { _all: true },
     }),
     db.venda.count({ where: { AND: [periodo, { NOT: NAO_CANCELADA }] } }),
@@ -76,6 +76,21 @@ export async function resumoDoDia(loja: string, dia: string) {
 
   const por = (forma: string) =>
     arredondar(porForma.find((f) => f.forma === forma)?._sum.total ?? 0)
+
+  /**
+   * O crédito abatido em vendas EM DINHEIRO — e só nelas.
+   *
+   * Numa venda de R$ 50 com R$ 37 de crédito, a gaveta recebeu R$ 13. A venda
+   * vale R$ 50 (a mercadoria saiu por isso), mas o que se conta no fim do dia é
+   * o que está na gaveta.
+   *
+   * Só as em dinheiro porque só elas passam pela gaveta: crédito abatido numa
+   * venda no Pix reduz o que caiu no banco, não o que há na caixa, e descontar
+   * aqui faria o caixa acusar sobra todo dia.
+   */
+  const creditoEmDinheiro = arredondar(
+    porForma.find((f) => f.forma === "dinheiro")?._sum.creditoUsado ?? 0
+  )
 
   const soma = (tipo: TipoMovimentoDeCaixa) =>
     arredondar(valendo.filter((m) => m.tipo === tipo).reduce((acc, m) => acc + m.valor, 0))
@@ -100,8 +115,9 @@ export async function resumoDoDia(loja: string, dia: string) {
     suprimentos,
     devolucoes,
     vendasDinheiro,
+    creditoEmDinheiro,
     esperado: arredondar(
-      abertura + vendasDinheiro - sangrias + suprimentos - devolucoes
+      abertura + vendasDinheiro - creditoEmDinheiro - sangrias + suprimentos - devolucoes
     ),
     vendasPix: por("pix"),
     vendasDebito: por("debito"),
@@ -347,6 +363,7 @@ export async function fecharCaixa(entrada: {
         sangrias: resumo.sangrias,
         suprimentos: resumo.suprimentos,
         devolucoes: resumo.devolucoes,
+        creditoEmDinheiro: resumo.creditoEmDinheiro,
         vendasLink: resumo.vendasLink,
         esperado: resumo.esperado,
         contado,

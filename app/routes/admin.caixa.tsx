@@ -127,6 +127,9 @@ export default function AdminCaixa({ loaderData }: Route.ComponentProps) {
             <Linha rotulo="Troco da abertura" valor={f.abertura} />
             <Linha rotulo="Vendas em dinheiro" valor={f.vendasDinheiro} />
             {f.suprimentos > 0 ? <Linha rotulo="Reforços" valor={f.suprimentos} /> : null}
+            {f.creditoEmDinheiro > 0 ? (
+              <Linha rotulo="Crédito abatido" valor={-f.creditoEmDinheiro} />
+            ) : null}
             {f.devolucoes > 0 ? <Linha rotulo="Devoluções" valor={-f.devolucoes} /> : null}
             {f.sangrias > 0 ? <Linha rotulo="Sangrias" valor={-f.sangrias} /> : null}
 

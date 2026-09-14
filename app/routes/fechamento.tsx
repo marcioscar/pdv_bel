@@ -321,6 +321,9 @@ export default function Fechamento({ loaderData, actionData }: Route.ComponentPr
               {resumo.suprimentos > 0 ? (
                 <Linha rotulo="Reforços" valor={resumo.suprimentos} />
               ) : null}
+              {resumo.creditoEmDinheiro > 0 ? (
+                <Linha rotulo="Crédito abatido" valor={-resumo.creditoEmDinheiro} />
+              ) : null}
               {resumo.devolucoes > 0 ? (
                 <Linha rotulo="Devoluções" valor={-resumo.devolucoes} />
               ) : null}

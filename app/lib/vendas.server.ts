@@ -11,6 +11,7 @@ import { db } from "~/lib/db.server"
 import { depoisDoDia, diaAtras, diaDeHoje, inicioDoDia } from "~/lib/dia"
 import { movimentosDeVenda, saldosDosProdutos } from "~/lib/estoque.server"
 import { ultimoCustoPorProduto } from "~/lib/compras.server"
+import { gastarCredito, saldoDeCredito } from "~/lib/creditos.server"
 import { lojaPeloDocumento } from "~/lib/lojas.server"
 import {
   arredondar,
@@ -43,6 +44,14 @@ export type PedidoRecebido = {
   desconto: number
   forma: string
   recebido: number | null
+  /**
+   * Quanto do total o cliente quer abater com o crédito que tem a favor.
+   *
+   * Vem da tela porque é escolha dele — às vezes ele prefere guardar o saldo.
+   * Quanto ele TEM é conferido aqui no servidor, contra o livro: aceitar o
+   * saldo do navegador seria deixar o valor a pagar ser escolhido no console.
+   */
+  creditoUsado: number
   clienteId: string | null
   /** CPF pedido na nota, sem cadastro. Só dígitos, ou null. */
   cpfNaNota: string | null
@@ -138,6 +147,9 @@ export function lerPedido(bruto: unknown): PedidoRecebido | null {
         : NaN
   if (recebido !== null && Number.isNaN(recebido)) return null
 
+  const creditoUsado = typeof corpo.creditoUsado === "number" ? corpo.creditoUsado : 0
+  if (!Number.isFinite(creditoUsado) || creditoUsado < 0) return null
+
   const autorizacaoId =
     typeof corpo.autorizacaoId === "string" && OBJECT_ID.test(corpo.autorizacaoId)
       ? corpo.autorizacaoId
@@ -165,6 +177,7 @@ export function lerPedido(bruto: unknown): PedidoRecebido | null {
     desconto,
     forma: typeof corpo.forma === "string" ? corpo.forma : "",
     recebido,
+    creditoUsado,
     clienteId,
     cpfNaNota,
     condicao: typeof corpo.condicao === "string" ? corpo.condicao : null,
@@ -393,9 +406,48 @@ export async function registrarVenda(
    */
   if (paraARede) pedido = { ...pedido, desconto: 0, recebido: null }
 
+  /**
+   * O crédito abatido, conferido contra o LIVRO — nunca contra o que a tela diz.
+   *
+   * Não é desconto: a mercadoria saiu pelo preço cheio e o faturamento continua
+   * `total`. O que muda é quanto entra na gaveta, que passa a ser
+   * `total − creditoUsado`. É por isso que o valor recebido em dinheiro é
+   * comparado com `aPagar`, e não com o total.
+   *
+   * Transferência entre lojas não abate crédito: a loja da rede não tem conta a
+   * favor, e a nota sai pelo custo — não há o que pagar.
+   */
+  const creditoPedido = paraARede ? 0 : arredondar(pedido.creditoUsado)
+  let creditoUsado = 0
+
+  if (creditoPedido > 0) {
+    if (!cliente) {
+      return { ok: false, erro: "Crédito é do cliente — vincule o cadastro (F6) para usar" }
+    }
+    const saldo = await saldoDeCredito(cliente.id)
+    if (creditoPedido > saldo) {
+      return {
+        ok: false,
+        erro:
+          saldo <= 0
+            ? `${cliente.nome} não tem crédito a favor`
+            : `${cliente.nome} tem ${moeda(saldo)} de crédito — não dá para abater ${moeda(creditoPedido)}`,
+      }
+    }
+    if (creditoPedido > total) {
+      return {
+        ok: false,
+        erro: `O crédito abatido não pode passar do total da venda (${moeda(total)})`,
+      }
+    }
+    creditoUsado = creditoPedido
+  }
+
+  const aPagar = arredondar(total - creditoUsado)
+
   if (pedido.forma === "dinheiro") {
     if (pedido.recebido === null) return { ok: false, erro: "Informe o valor recebido" }
-    if (pedido.recebido < total) return { ok: false, erro: "Valor recebido menor que o total" }
+    if (pedido.recebido < aPagar) return { ok: false, erro: "Valor recebido menor que o total" }
   }
 
   /**
@@ -526,15 +578,17 @@ export async function registrarVenda(
     vencimento = parcelasDaCondicao(condicao, total)[0].vencimento
   }
 
+  // Sobre o que falta pagar, não sobre o total: com R$ 37 de crédito numa venda
+  // de R$ 50, quem entrega R$ 20 leva R$ 7 de troco, não teria troco nenhum.
   const troco =
-    pedido.recebido === null ? 0 : arredondar(Math.max(0, pedido.recebido - total))
+    pedido.recebido === null ? 0 : arredondar(Math.max(0, pedido.recebido - aPagar))
 
   try {
     return {
       ok: true,
       ...(await gravar(
         pedido, itens, subtotal, total, troco, cliente, vencimento, condicaoId, autorizacaoAUsar,
-        vendedor
+        vendedor, creditoUsado
       )),
       total,
       troco,
@@ -581,7 +635,8 @@ async function gravar(
   condicao: string | null,
   autorizacaoId: string | null,
   /** Null na transferência entre lojas: não há comissão a creditar. */
-  vendedor: VendedorDoBalcao | null
+  vendedor: VendedorDoBalcao | null,
+  creditoUsado: number
 ): Promise<{ numero: number; vendaId: string }> {
   for (let tentativa = 0; tentativa < 25; tentativa++) {
     // O $inc fica FORA da transação de propósito: dentro dela, o rollback de uma
@@ -599,7 +654,7 @@ async function gravar(
     try {
       return await gravarUmaVez(
         contador.valor, pedido, itens, subtotal, total, troco, cliente, vencimento, condicao,
-        autorizacaoId, vendedor
+        autorizacaoId, vendedor, creditoUsado
       )
     } catch (erro) {
       if (!ehColisaoDeNumero(erro)) throw erro
@@ -620,7 +675,8 @@ async function gravarUmaVez(
   condicao: string | null,
   autorizacaoId: string | null,
   /** Null na transferência entre lojas: não há comissão a creditar. */
-  vendedor: VendedorDoBalcao | null
+  vendedor: VendedorDoBalcao | null,
+  creditoUsado: number
 ): Promise<{ numero: number; vendaId: string }> {
   // A venda e as baixas de estoque caem juntas ou não caem: uma venda gravada
   // sem seus movimentos deixaria o saldo derivado errado para sempre.
@@ -638,6 +694,7 @@ async function gravarUmaVez(
         desconto: pedido.desconto,
         total,
         forma: pedido.forma,
+        creditoUsado,
         recebido: pedido.recebido,
         troco: pedido.recebido === null ? null : troco,
         clienteId: cliente?.id ?? null,
@@ -669,6 +726,22 @@ async function gravarUmaVez(
           venda,
           pedido.operador
         ),
+      })
+    }
+
+    /*
+     * O consumo do crédito cai com a venda, ou não cai. Fora da transação, uma
+     * falha depois de gastar deixaria o saldo do cliente menor sem venda que o
+     * explicasse — dinheiro dele que some sem contrapartida.
+     */
+    if (creditoUsado > 0 && cliente) {
+      await gastarCredito(tx, {
+        clienteId: cliente.id,
+        loja: pedido.loja,
+        valor: creditoUsado,
+        vendaId: venda.id,
+        vendaNumero: venda.numero,
+        operador: pedido.operador,
       })
     }
 

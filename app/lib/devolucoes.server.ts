@@ -89,6 +89,16 @@ export async function itensDevolviveis(vendaId: string): Promise<LinhaDevolvivel
   })
 }
 
+/**
+ * Para onde vai o valor do que voltou.
+ *
+ * Três destinos porque são três acertos diferentes no balcão, e misturá-los
+ * faria o fechamento mentir: "especie" tira da gaveta, "credito" vira saldo a
+ * favor do cliente, "fora" é combinado por outro caminho (transferência,
+ * abatimento em boleto) e o sistema só registra a mercadoria.
+ */
+export type DestinoDaDevolucao = "especie" | "credito" | "fora"
+
 export type ResultadoDevolucao =
   | { ok: true; numero: number; id: string; total: number }
   | { ok: false; erro: string }
@@ -113,14 +123,25 @@ export async function registrarDevolucao(entrada: {
   operadorId: string
   /** O dia do caixa, quando o dinheiro volta em espécie. */
   dia: string
-  /** Falso quando o acerto é por fora — a mercadoria volta, o dinheiro não. */
-  emEspecie: boolean
+  destino: DestinoDaDevolucao
 }): Promise<ResultadoDevolucao> {
   const motivo = entrada.motivo.trim()
   if (!motivo) return { ok: false, erro: "Diga por que a mercadoria voltou" }
 
   const venda = await db.venda.findUnique({ where: { id: entrada.vendaId } })
   if (!venda) return { ok: false, erro: "Venda não encontrada" }
+  /*
+   * Crédito precisa de alguém a quem creditar. Numa venda de balcão sem
+   * cadastro não há conta onde pôr o saldo, e inventar uma na hora criaria um
+   * cliente que ninguém vai reconhecer depois — o caminho é vincular o cadastro
+   * na venda, ou devolver em espécie.
+   */
+  if (entrada.destino === "credito" && !venda.clienteId) {
+    return {
+      ok: false,
+      erro: "Crédito exige cliente cadastrado na venda — sem ele não há a quem creditar",
+    }
+  }
   if (venda.canceladaEm) {
     return {
       ok: false,
@@ -209,7 +230,7 @@ export async function registrarDevolucao(entrada: {
       })),
     })
 
-    if (entrada.emEspecie) {
+    if (entrada.destino === "especie") {
       const movimento = await tx.movimentoCaixa.create({
         data: {
           loja: venda.loja,
@@ -225,6 +246,27 @@ export async function registrarDevolucao(entrada: {
       await tx.devolucao.update({
         where: { id: devolucao.id },
         data: { movimentoCaixaId: movimento.id },
+      })
+    }
+
+    if (entrada.destino === "credito") {
+      const credito = await tx.movimentoCredito.create({
+        data: {
+          clienteId: venda.clienteId!,
+          loja: venda.loja,
+          tipo: "devolucao",
+          valor: total,
+          devolucaoId: devolucao.id,
+          devolucaoNumero: devolucao.numero,
+          vendaId: venda.id,
+          vendaNumero: venda.numero,
+          operador: entrada.operador,
+          observacao: `Devolução #${devolucao.numero} da venda #${venda.numero}: ${motivo}`,
+        },
+      })
+      await tx.devolucao.update({
+        where: { id: devolucao.id },
+        data: { movimentoCreditoId: credito.id },
       })
     }
 

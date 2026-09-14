@@ -53,6 +53,9 @@ type Props = {
   onFormaChange: (forma: FormaPagamento) => void;
   recebido: string;
   onRecebidoChange: (valor: string) => void;
+  /** Quanto do saldo do cliente está sendo abatido nesta venda. */
+  creditoUsado: number;
+  onCreditoUsadoChange: (valor: number) => void;
   /** Código do vendedor digitado pelo caixa — é dele a comissão desta venda. */
   vendedorCodigo: string;
   onVendedorCodigoChange: (codigo: string) => void;
@@ -100,6 +103,8 @@ export function FinalizarDialogo({
   onFormaChange,
   recebido,
   onRecebidoChange,
+  creditoUsado,
+  onCreditoUsadoChange,
   vendedorCodigo,
   onVendedorCodigoChange,
   vendedores,
@@ -133,8 +138,21 @@ export function FinalizarDialogo({
 
   const emDinheiro = forma === "dinheiro";
   const aPrazo = forma === "prazo";
+
+  /**
+   * O crédito abate do total e o resto é que se paga.
+   *
+   * O teto é o menor entre o saldo do cliente e o total da venda: não se abate
+   * mais do que ele tem, nem mais do que ele está levando. A transferência
+   * entre lojas fica de fora — não há saldo nem o que pagar.
+   */
+  const saldo = paraARede ? 0 : (cliente?.credito ?? 0);
+  const creditoDisponivel = Math.min(saldo, total);
+  const credito = Math.min(creditoUsado, creditoDisponivel);
+  const aPagar = Math.max(0, total - credito);
+
   const valorRecebido = interpretarValor(recebido);
-  const troco = valorRecebido === null ? null : valorRecebido - total;
+  const troco = valorRecebido === null ? null : valorRecebido - aPagar;
   const faltaDinheiro =
     emDinheiro && (valorRecebido === null || troco === null || troco < 0);
   const faltaCliente = aPrazo && cliente === null;
@@ -459,6 +477,42 @@ export function FinalizarDialogo({
             {moeda(total)}
           </span>
         </div>
+
+        {/*
+          O crédito aparece só quando existe, e some quando o saldo é zero: uma
+          linha permanente dizendo "crédito R$ 0,00" ensinaria o caixa a ignorar
+          a região em que a informação às vezes aparece.
+
+          Um botão, e não um campo de digitar: o caso é abater tudo que der, e
+          quando não der tudo é porque o total é menor — aí o teto já é o total.
+          Quem quiser guardar o saldo clica de novo e volta a zero.
+        */}
+        {creditoDisponivel > 0 ? (
+          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/30 p-3">
+            <Wallet className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+            <span className="text-xs">
+              {cliente?.nome} tem{" "}
+              <b className="font-semibold">{moeda(saldo)}</b> de crédito
+            </span>
+            <Button
+              type="button"
+              tabIndex={-1}
+              size="xs"
+              variant={credito > 0 ? "default" : "outline"}
+              onClick={() => onCreditoUsadoChange(credito > 0 ? 0 : creditoDisponivel)}
+              className="ml-auto rounded-lg"
+            >
+              {credito > 0 ? "Não usar" : `Abater ${moeda(creditoDisponivel)}`}
+            </Button>
+          </div>
+        ) : null}
+
+        {credito > 0 ? (
+          <div className="mt-2 flex items-baseline justify-between text-sm">
+            <span className="text-muted-foreground">A pagar depois do crédito</span>
+            <span className="font-mono text-xl font-bold tabular-nums">{moeda(aPagar)}</span>
+          </div>
+        ) : null}
 
         <Separator className="my-4" />
 

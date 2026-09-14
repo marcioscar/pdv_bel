@@ -404,6 +404,17 @@ model Venda {
   /// Um dos ids de FORMAS_PAGAMENTO em app/lib/pdv.ts — a lista canônica vive lá
   /// para não haver duas fontes da verdade a manter em sincronia.
   forma    String
+  /// Quanto do total foi abatido com o crédito que o cliente tinha a favor.
+  ///
+  /// NÃO é desconto: o desconto reduz o que a mercadoria valeu, e isto não —
+  /// a mercadoria saiu pelo preço cheio, e parte do pagamento veio de um
+  /// dinheiro que já era do cliente. Por isso o faturamento continua sendo
+  /// `total`, e o que muda é quanto entrou na gaveta: `total − creditoUsado`.
+  ///
+  /// Campo próprio, e não uma forma de pagamento "crédito", porque quase nunca
+  /// o saldo fecha exatamente com a compra: o cliente devolve R$ 37 e leva
+  /// R$ 50. Uma forma só por venda não saberia contar essa história.
+  creditoUsado Float @default(0)
   recebido Float?
   troco    Float?
   /// Venda cancelada não é apagada: fica com a marca e os movimentos estornados.
@@ -645,6 +656,10 @@ model Devolucao {
   /// número na observação: é o que liga o documento ao dinheiro que saiu da
   /// gaveta, e o que permite ir de um ao outro.
   movimentoCaixaId String? @db.ObjectId
+  /// O crédito gerado, quando o cliente não levou o dinheiro. Excludente com o
+  /// de cima: ou o dinheiro saiu da gaveta, ou virou saldo, ou o acerto foi por
+  /// fora — nunca dois ao mesmo tempo.
+  movimentoCreditoId String? @db.ObjectId
 
   @@unique([loja, numero])
   @@index([vendaId])
@@ -663,6 +678,46 @@ type DevolucaoItem {
   preco      Float
   quantidade Float
   subtotal   Float
+}
+
+/// O crédito que o cliente tem a favor, lançamento a lançamento.
+///
+/// Livro, e não um campo `saldo` no cadastro do cliente. O saldo é a SOMA daqui,
+/// como o estoque é a soma dos movimentos — e pela mesma razão: um número
+/// guardado e um livro acabam discordando, e no dia em que discordarem ninguém
+/// vai saber qual dos dois está certo. Aqui a pergunta "por que ele tem R$ 37?"
+/// sempre tem resposta, com data e documento.
+///
+/// Nasce da devolução em que o cliente não leva o dinheiro, e some quando ele
+/// abate numa compra. Os dois lançamentos apontam para o documento que os
+/// explica — a devolução de um lado, a venda do outro.
+model MovimentoCredito {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  clienteId String   @db.ObjectId
+  /// Onde o lançamento aconteceu. O crédito em si é da REDE — quem devolveu na
+  /// QI pode gastar na SDS, como o cadastro do cliente, que é único.
+  loja      String
+  criadoEm  DateTime @default(now())
+
+  /// "devolucao" (entra) | "uso" (sai) | "estorno" (volta, venda cancelada)
+  ///
+  /// O valor é sempre POSITIVO e o tipo diz a direção — mesmo desenho do caixa,
+  /// pela mesma razão: guardar saída como negativo faz dois lançamentos que se
+  /// anulam sumirem da soma, e com eles a pergunta de por que houve dois.
+  tipo  String
+  valor Float
+
+  devolucaoId     String? @db.ObjectId
+  devolucaoNumero Int?
+  vendaId         String? @db.ObjectId
+  vendaNumero     Int?
+
+  operador   String
+  observacao String?
+
+  @@index([clienteId, criadoEm])
+  @@index([vendaId])
+  @@map("movimentos_credito")
 }
 
 /// Dinheiro que entra ou sai da gaveta sem ser venda: o troco do início do dia,
@@ -744,6 +799,10 @@ model FechamentoCaixa {
   /// fechamentos anteriores a este campo não tinham devolução nenhuma — e um
   /// documento assinado não se reescreve para caber num campo novo.
   devolucoes   Float @default(0)
+  /// O crédito abatido em vendas em dinheiro: a venda vale o total, mas essa
+  /// parte não entrou na gaveta. `@default(0)` como a devolução — fechamento
+  /// assinado não se reescreve para caber em campo novo.
+  creditoEmDinheiro Float @default(0)
   esperado     Float
   /// O que a pessoa contou na gaveta. É o único número que o sistema não sabe.
   contado      Float

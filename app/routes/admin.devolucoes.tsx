@@ -44,7 +44,13 @@ export async function loader({ request }: Route.LoaderArgs) {
       total: d.total,
       motivo: d.motivo,
       operador: d.operador,
-      emEspecie: Boolean(d.movimentoCaixaId),
+      // O destino é derivado de para onde o documento aponta — um campo a
+      // menos para discordar do lançamento que ele descreve.
+      destino: d.movimentoCaixaId
+        ? ("especie" as const)
+        : d.movimentoCreditoId
+          ? ("credito" as const)
+          : ("fora" as const),
       nota: porRef.get(`devolucao-${d.id}`) ?? null,
     })),
   }
@@ -133,7 +139,11 @@ export default function Devolucoes({ loaderData }: Route.ComponentProps) {
               </p>
               <p className="mt-0.5 text-xs text-muted-foreground">
                 {d.motivo}
-                {d.emEspecie ? " · dinheiro devolvido pela gaveta" : " · acerto por fora"}
+                {d.destino === "especie"
+                  ? " · dinheiro devolvido pela gaveta"
+                  : d.destino === "credito"
+                    ? " · virou crédito do cliente"
+                    : " · acerto por fora"}
               </p>
 
               <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-border pt-2">

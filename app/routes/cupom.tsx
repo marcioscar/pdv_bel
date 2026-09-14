@@ -163,6 +163,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   <div class="separador"></div>
   <table>
     <tr><td>Pagamento</td><td class="dir forte">${escapar(forma)}</td></tr>
+    ${venda.creditoUsado > 0 ? `<tr><td>Cr&eacute;dito abatido</td><td class="dir">- ${moeda(venda.creditoUsado)}</td></tr><tr><td>A pagar</td><td class="dir forte">${moeda(venda.total - venda.creditoUsado)}</td></tr>` : ""}
     ${venda.recebido !== null ? `<tr><td>Recebido</td><td class="dir">${moeda(venda.recebido)}</td></tr>` : ""}
     ${venda.troco !== null && venda.troco > 0 ? `<tr><td>Troco</td><td class="dir forte">${moeda(venda.troco)}</td></tr>` : ""}
     ${condicao ? `<tr><td colspan="2">Condição: ${escapar(condicao.rotulo)}</td></tr>` : ""}

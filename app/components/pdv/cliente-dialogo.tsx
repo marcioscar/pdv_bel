@@ -24,6 +24,8 @@ export type ClienteResumo = {
    * quem é a inscrição, e marca no cadastro se esquece de pôr e se põe errado.
    */
   lojaDaRede: string | null
+  /** Saldo a favor, vindo das devoluções que ele não levou em dinheiro. */
+  credito: number
 }
 
 type Props = {
