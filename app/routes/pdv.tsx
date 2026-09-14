@@ -30,7 +30,8 @@ import { enderecoDoApp } from "~/lib/env.server"
 import { criarCliente, lerCliente, listarClientes } from "~/lib/clientes.server"
 import { emitirParaVenda, type CobrancaDaVenda } from "~/lib/cobranca.server"
 import { saldosPorProduto } from "~/lib/estoque.server"
-import { contaDaLoja } from "~/lib/lojas.server"
+import { contaDaLoja, lojaPeloDocumento, lojasPorCnpj } from "~/lib/lojas.server"
+import { ultimoCustoPorProduto } from "~/lib/compras.server"
 import { modeloDaVenda } from "~/lib/fiscal"
 import { ambienteFocus, focusConfigurada } from "~/lib/focus.server"
 import { emitirDaVenda } from "~/lib/nota-fiscal.server"
@@ -69,6 +70,8 @@ import {
   condicaoCabeNoTotal,
   CONDICOES_PAGAMENTO,
   criarIndice,
+  FORMA_TRANSFERENCIA,
+  FORMAS_DE_CAIXA,
   FORMAS_PAGAMENTO,
   VALOR_MINIMO_BOLETO,
   interpretarComando,
@@ -143,7 +146,7 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   // O catálogo inteiro vai para o cliente para a busca responder sem latência
   // por tecla. Acima de ~5 mil produtos, trocar por busca no servidor.
-  const [cadastro, saldos, clientes, vendedores, loja] = await Promise.all([
+  const [cadastro, saldos, clientes, vendedores, loja, lojaPorCnpj] = await Promise.all([
     db.produto.findMany({ where: SOMENTE_ATIVOS, orderBy: { descricao: "asc" } }),
     saldosPorProduto(eu.loja),
     listarClientes(),
@@ -151,12 +154,20 @@ export async function loader({ request }: Route.LoaderArgs) {
     // caixa não pode esperar a rede para ver de quem é a comissão que digitou.
     vendedoresDaLoja(eu.loja),
     db.loja.findUnique({ where: { codigo: eu.loja }, select: { emiteNotaFiscal: true } }),
+    lojasPorCnpj(),
   ])
 
-  // O estoque não é um campo do produto: é a soma dos movimentos.
+  /*
+   * O estoque não é um campo do produto: é a soma dos movimentos. O custo
+   * também não — é a última compra conhecida —, e vem junto porque é ele que
+   * vale quando a saída é para outra loja da rede: a tela precisa mostrar o
+   * mesmo número que o servidor vai gravar.
+   */
+  const custos = await ultimoCustoPorProduto(cadastro.map((p) => p.id))
   const produtos = cadastro.map((produto) => ({
     ...produto,
     estoque: saldos.get(produto.id) ?? 0,
+    custo: custos.get(produto.id) ?? null,
   }))
 
   /**
@@ -208,12 +219,19 @@ export async function loader({ request }: Route.LoaderArgs) {
       emite: Boolean(loja?.emiteNotaFiscal) && focusConfigurada(),
       producao: ambienteFocus() === "producao",
     },
+    /*
+     * `lojaDaRede` sai daqui derivado do CNPJ, e não de um campo do cadastro:
+     * cliente cujo documento é o de uma loja da rede É aquela loja. A tela usa
+     * para trocar o painel de pagamento pelo de transferência; a regra de
+     * verdade é cobrada de novo na gravação.
+     */
     clientes: clientes.map((c) => ({
       id: c.id,
       nome: c.nome,
       cpfCnpj: c.cpfCnpj,
       cidade: c.cidade,
       uf: c.uf,
+      lojaDaRede: lojaPorCnpj.get(c.cpfCnpj.replace(/\D/g, "")) ?? null,
     })),
     // Os dois caminhos que trazem carrinho pronto entram pela mesma porta; o que
     // muda é a origem, e é ela que decide se há liberação junto.
@@ -262,7 +280,16 @@ export async function action({ request }: Route.ActionArgs) {
     return {
       ok: true as const,
       tipo: "cliente" as const,
-      cliente: { id, nome, cpfCnpj, cidade, uf },
+      cliente: {
+        id,
+        nome,
+        cpfCnpj,
+        cidade,
+        uf,
+        // Cadastrar a loja da rede aqui no balcão é caminho legítimo, e sem
+        // isto ela voltaria como cliente comum até a próxima recarga da tela.
+        lojaDaRede: (await lojaPeloDocumento(cpfCnpj))?.codigo ?? null,
+      },
     }
   }
 
@@ -828,6 +855,23 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   const [ajudaAberta, setAjudaAberta] = useState(false)
   const [aviso, setAviso] = useState<Aviso>(null)
   const [cliente, setCliente] = useState<ClienteResumo | null>(null)
+  /**
+   * Vincular uma loja da rede muda o que está acontecendo: deixa de ser venda e
+   * passa a ser a nota que acompanha uma carga. A forma acompanha sozinha —
+   * pedir ao caixa que escolha "transferência" numa grade de pagamentos seria
+   * pedir que ele classifique o que o cadastro já respondeu, e errar ali faria
+   * o servidor recusar a venda inteira com uma mensagem que ele não pediu.
+   *
+   * Ao desvincular, volta ao padrão da tela em vez de ficar com a forma
+   * anterior: o carrinho passou a ser de um cliente qualquer de novo.
+   */
+  const paraARede = cliente?.lojaDaRede != null
+  useEffect(() => {
+    setForma((atual) => {
+      if (paraARede) return FORMA_TRANSFERENCIA
+      return atual === FORMA_TRANSFERENCIA ? "pix" : atual
+    })
+  }, [paraARede])
   const [clienteAberto, setClienteAberto] = useState(false)
   // Vindo da conferência, o cadastro abre direto no formulário: a busca já foi
   // feita no combobox de lá.
@@ -914,7 +958,12 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
 
   const indice = useMemo(() => criarIndice(produtos), [produtos])
   const comando = useMemo(() => interpretarComando(entrada), [entrada])
-  const totais = useMemo(() => totaisDaVenda(venda), [venda])
+  // Ao custo quando a saída é para outra loja da rede: o total da tela tem que
+  // ser o que o servidor vai gravar, e lá `precificarAoCusto` é quem precifica.
+  const totais = useMemo(
+    () => totaisDaVenda(venda, { aoCusto: paraARede }),
+    [venda, paraARede]
+  )
 
   const resultados = useMemo(() => {
     if (modo !== "busca") return []
@@ -1792,13 +1841,14 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
         return
       }
 
-      // Shift+F<n> escolhe a forma de pagamento direto. A lista de teclas é
-      // derivada de FORMAS_PAGAMENTO para não dessincronizar ao incluir formas.
+      // Shift+F<n> escolhe a forma de pagamento direto. A lista é a das formas
+      // que o caixa ESCOLHE — a transferência entre lojas fica fora, porque não
+      // se escolhe: ela decorre de o cliente ser uma loja da rede.
       if (shiftKey && !ctrlKey && !altKey) {
-        const posicao = FORMAS_PAGAMENTO.findIndex((_, i) => key === `F${i + 1}`)
-        if (posicao >= 0) {
+        const posicao = FORMAS_DE_CAIXA.findIndex((_, i) => key === `F${i + 1}`)
+        if (posicao >= 0 && !paraARede) {
           evento.preventDefault()
-          setForma(FORMAS_PAGAMENTO[posicao].id)
+          setForma(FORMAS_DE_CAIXA[posicao].id)
           return
         }
       }
@@ -2000,6 +2050,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
             itens={venda.itens}
             indiceAtivo={venda.indiceAtivo}
             onSelecionar={(i) => despachar({ tipo: "selecionar", indice: i })}
+            aoCusto={paraARede}
           />
 
           <BarraAtalhos atalhos={atalhos} />

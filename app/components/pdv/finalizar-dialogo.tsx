@@ -9,6 +9,7 @@ import {
   Printer,
   QrCode,
   Search,
+  Truck,
   User,
   UserPlus,
   Wallet,
@@ -22,7 +23,12 @@ import { Separator } from "~/components/ui/separator";
 import { formatarCpfCnpj, mascararCpfCnpj, validarCpf } from "~/lib/documento";
 import { modeloDaVenda } from "~/lib/fiscal";
 import { interpretarValor, moeda } from "~/lib/moeda";
-import { FORMAS_PAGAMENTO, type FormaPagamento } from "~/lib/pdv";
+import {
+	ehTransferenciaEntreLojas,
+	FORMAS_DE_CAIXA,
+	FORMAS_PAGAMENTO,
+	type FormaPagamento,
+} from "~/lib/pdv";
 import type { ClienteResumo } from "~/components/pdv/cliente-dialogo";
 import { cn } from "~/lib/utils";
 
@@ -36,6 +42,7 @@ const ICONES: Record<
   pix: QrCode,
   prazo: CalendarClock,
   link: Link2,
+  transferencia: Truck,
 };
 
 type Props = {
@@ -117,6 +124,13 @@ export function FinalizarDialogo({
   const campoCliente = useRef<HTMLInputElement>(null);
   const campoVendedor = useRef<HTMLInputElement>(null);
 
+  /**
+   * A saída para outra loja da rede não se escolhe: decorre do cliente ser uma
+   * delas. Aqui a tela só obedece — quem decide, e recusa o contrário, é o
+   * servidor, que confere o CNPJ na gravação.
+   */
+  const paraARede = cliente?.lojaDaRede != null;
+
   const emDinheiro = forma === "dinheiro";
   const aPrazo = forma === "prazo";
   const valorRecebido = interpretarValor(recebido);
@@ -135,7 +149,9 @@ export function FinalizarDialogo({
    */
   const vendedor =
     vendedores.find((v) => v.codigo === vendedorCodigo.trim()) ?? null;
-  const faltaVendedor = vendedor === null;
+  // Transferência não gera comissão, então não há vendedor a exigir: pedir um
+  // creditaria a alguém uma saída que não é venda de ninguém.
+  const faltaVendedor = vendedor === null && !paraARede;
 
   /**
    * A escolha do cliente acontece AQUI DENTRO, trocando esta seção por uma busca.
@@ -242,12 +258,12 @@ export function FinalizarDialogo({
 
       // ⇧F1..F5 escolhem a forma, como no resto do sistema.
       if (shiftKey) {
-        const posicao = FORMAS_PAGAMENTO.findIndex(
-          (_, i) => key === `F${i + 1}`,
-        );
-        if (posicao >= 0) {
+        const posicao = FORMAS_DE_CAIXA.findIndex((_, i) => key === `F${i + 1}`);
+        // Com uma loja da rede vinculada não há forma a escolher: a saída é
+        // transferência, e ⇧F muda para uma forma que o servidor vai recusar.
+        if (posicao >= 0 && !paraARede) {
           evento.preventDefault();
-          onFormaChange(FORMAS_PAGAMENTO[posicao].id);
+          onFormaChange(FORMAS_DE_CAIXA[posicao].id);
         }
         return;
       }
@@ -447,10 +463,34 @@ export function FinalizarDialogo({
         <Separator className="my-4" />
 
         <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-          Pagamento
+          {paraARede ? "Saída" : "Pagamento"}
         </div>
+
+        {paraARede ? (
+          /*
+            Nenhum botão: não há o que escolher. O painel diz o que vai
+            acontecer, porque uma grade desabilitada faria o caixa procurar qual
+            forma marcar — e a resposta é "nenhuma, isto não é pagamento".
+          */
+          <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 p-3">
+            <Truck
+              className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+              aria-hidden
+            />
+            <div className="text-xs leading-relaxed">
+              <p className="font-medium">
+                Transferência para {cliente?.lojaDaRede} — não é venda
+              </p>
+              <p className="mt-0.5 text-muted-foreground">
+                A nota sai pelo custo, só para acompanhar a mercadoria. Não baixa
+                estoque (quem baixa é a transferência), não entra no caixa nem no
+                faturamento, e não gera comissão.
+              </p>
+            </div>
+          </div>
+        ) : (
         <div className="grid grid-cols-3 gap-2">
-          {FORMAS_PAGAMENTO.map((opcao, indice) => {
+          {FORMAS_DE_CAIXA.map((opcao, indice) => {
             const Icone = ICONES[opcao.id];
             const escolhida = opcao.id === forma;
             return (
@@ -478,6 +518,7 @@ export function FinalizarDialogo({
             );
           })}
         </div>
+        )}
 
         {emDinheiro ? (
           <div className="mt-3 flex items-center gap-3 rounded-lg border border-border bg-muted/30 p-3">

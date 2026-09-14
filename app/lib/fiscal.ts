@@ -217,6 +217,12 @@ export const PAGAMENTO_NA_NOTA: Record<string, string> = {
   pix: "17",
   prazo: "15",
   link: "99",
+  /*
+   * 90 é "sem pagamento" na tabela da SEFAZ, e é o que a transferência é: a
+   * mercadoria muda de estabelecimento, ninguém paga nada. Cair no 99
+   * ("outros") pelo padrão diria que houve um pagamento de tipo estranho.
+   */
+  transferencia: "90",
 }
 
 export function pagamentoNaNota(forma: string) {

@@ -148,3 +148,33 @@ export function validarInscricaoEstadual(bruto: string) {
   const ie = limparInscricaoEstadual(bruto)
   return ie === "ISENTO" || /^\d{8,14}$/.test(ie)
 }
+
+/**
+ * A raiz do CNPJ — os oito primeiros dígitos, que identificam a EMPRESA.
+ *
+ * Os quatro seguintes são a ordem do estabelecimento: 0001 é a matriz, 0002 a
+ * primeira filial. Duas inscrições com a mesma raiz são a mesma pessoa
+ * jurídica em endereços diferentes.
+ */
+export function raizDoCnpj(documento: string | null | undefined) {
+  const so = (documento ?? "").replace(/\D/g, "")
+  return so.length === 14 ? so.slice(0, 8) : null
+}
+
+/**
+ * Se dois documentos são estabelecimentos da MESMA empresa.
+ *
+ * É esta distinção, e não um campo cadastrado, que decide se a mercadoria sai
+ * como transferência ou como venda: mover mercadoria entre filiais do mesmo
+ * CNPJ raiz é transferência (CFOP 5152); mandar para outra empresa do grupo é
+ * venda, ainda que o dono seja o mesmo. Derivar da raiz em vez de marcar no
+ * cadastro tira do caminho o dia em que alguém marcar errado.
+ */
+export function mesmaEmpresa(
+  documentoA: string | null | undefined,
+  documentoB: string | null | undefined
+) {
+  const a = raizDoCnpj(documentoA)
+  const b = raizDoCnpj(documentoB)
+  return a !== null && a === b
+}

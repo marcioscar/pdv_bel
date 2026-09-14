@@ -8,6 +8,16 @@ export type ProdutoCatalogo = {
   preco: number
   precoCombo: number | null
   quantidadeCombo: number | null
+  /**
+   * O último custo de compra conhecido, ou null quando nunca se comprou este
+   * produto por aqui. Vai para a tela porque é ele que vale na saída para outra
+   * loja da rede — e a tela precisa mostrar o mesmo número que o servidor vai
+   * gravar, senão o caixa confere um valor e o documento sai com outro.
+   *
+   * Opcional porque só o caixa o carrega: as outras telas que reusam o catálogo
+   * (entrada de mercadoria, inventário) não têm o que fazer com ele.
+   */
+  custo?: number | null
   estoque: number
 }
 
@@ -20,6 +30,7 @@ export type ItemVenda = {
   preco: number
   precoCombo: number | null
   quantidadeCombo: number | null
+  custo?: number | null
   quantidade: number
   /**
    * Estoque da loja no momento em que o item entrou. É o TETO da linha: o
@@ -33,6 +44,7 @@ export type PrecoDoProduto = {
   preco: number
   precoCombo: number | null
   quantidadeCombo: number | null
+  custo?: number | null
 }
 
 /**
@@ -51,8 +63,18 @@ export type PrecoDoProduto = {
  */
 export function precoAplicado(
   produto: PrecoDoProduto,
-  quantidade: number
+  quantidade: number,
+  /**
+   * A saída para outra loja da rede sai pelo CUSTO, não pelo preço de balcão —
+   * e é a mesma regra que `precificarAoCusto` aplica no servidor. Passa por
+   * aqui pela razão de sempre: a tela tem que mostrar o número que vai ser
+   * gravado. Sem custo conhecido cai no preço de venda, e é a gravação que
+   * recusa a operação nomeando o produto — recusar na tela esconderia o motivo.
+   */
+  { aoCusto = false }: { aoCusto?: boolean } = {}
 ): { preco: number; combo: boolean } {
+  if (aoCusto) return { preco: produto.custo ?? produto.preco, combo: false }
+
   const { precoCombo, quantidadeCombo } = produto
   // Faixa incompleta não é faixa: sem os dois valores não há o que aplicar.
   if (precoCombo == null || quantidadeCombo == null || quantidadeCombo <= 0) {
@@ -129,6 +151,7 @@ export function reduzirVenda(estado: EstadoVenda, acao: AcaoVenda): EstadoVenda 
           preco: produto.preco,
           precoCombo: produto.precoCombo,
           quantidadeCombo: produto.quantidadeCombo,
+          custo: produto.custo ?? null,
           quantidade: entra,
           estoque: produto.estoque,
         },
@@ -192,15 +215,17 @@ export function reduzirVenda(estado: EstadoVenda, acao: AcaoVenda): EstadoVenda 
   }
 }
 
-export function totaisDaVenda(estado: EstadoVenda) {
+export function totaisDaVenda(estado: EstadoVenda, { aoCusto = false } = {}) {
   const subtotal = arredondar(
     estado.itens.reduce(
-      (acc, item) => acc + precoAplicado(item, item.quantidade).preco * item.quantidade,
+      (acc, item) =>
+        acc + precoAplicado(item, item.quantidade, { aoCusto }).preco * item.quantidade,
       0
     )
   )
-  // Um desconto maior que o subtotal nunca vira total negativo.
-  const desconto = Math.min(estado.desconto, subtotal)
+  // Desconto não vale na saída ao custo: não há margem sobre a qual descontar,
+  // e o servidor grava zero — mostrar outro número aqui seria mentir de novo.
+  const desconto = aoCusto ? 0 : Math.min(estado.desconto, subtotal)
   const volumes = arredondar(estado.itens.reduce((acc, item) => acc + item.quantidade, 0))
 
   return { subtotal, desconto, total: arredondar(subtotal - desconto), volumes }
@@ -319,9 +344,40 @@ export const FORMAS_PAGAMENTO = [
    * nasce paga, e por isso nada sai do estoque antes.
    */
   { id: "link", rotulo: "Link" },
+  /*
+   * A saída para outra loja da rede — QNE, NRT, SDS. Não é pagamento nenhum: o
+   * dinheiro não entra, o estoque já foi movido pela transferência e a nota sai
+   * só para acompanhar a mercadoria na estrada.
+   *
+   * Fica nesta lista, e não numa lista à parte, porque toda tela que mostra uma
+   * venda procura o rótulo aqui — cupom, consulta, relatório, caixa. Uma
+   * segunda lista faria essas telas exibirem "transferencia" cru. O que a
+   * separa das outras é `FORMAS_DE_CAIXA`, abaixo: ela não aparece entre os
+   * botões de pagamento, porque não se escolhe — decorre do cliente ser uma
+   * loja da rede.
+   */
+  { id: "transferencia", rotulo: "Transferência entre lojas" },
 ] as const
 
 export type FormaPagamento = (typeof FORMAS_PAGAMENTO)[number]["id"]
+
+/**
+ * A forma que marca a saída para a própria rede.
+ *
+ * Uma venda com ela não é venda: não baixa estoque, não entra em faturamento,
+ * não gera comissão e não passa pelo caixa. Quem garante que ela só aparece
+ * onde deve é o servidor, que a recusa sem uma loja-cliente do outro lado.
+ */
+export const FORMA_TRANSFERENCIA = "transferencia"
+
+export function ehTransferenciaEntreLojas(forma: string) {
+  return forma === FORMA_TRANSFERENCIA
+}
+
+/** As que o caixa escolhe de fato — a transferência decorre do cliente. */
+export const FORMAS_DE_CAIXA = FORMAS_PAGAMENTO.filter(
+  (f) => f.id !== FORMA_TRANSFERENCIA
+)
 
 /** Venda a prazo vira boleto: exige cliente com endereço e respeita o mínimo do Inter. */
 export const VALOR_MINIMO_BOLETO = 2.5

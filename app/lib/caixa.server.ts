@@ -11,7 +11,7 @@ import {
 import { moeda } from "~/lib/moeda"
 import { ehGerente } from "~/lib/permissoes"
 import { autenticar } from "~/lib/sessao.server"
-import { NAO_CANCELADA } from "~/lib/vendas.server"
+import { NAO_CANCELADA, NAO_E_TRANSFERENCIA } from "~/lib/vendas.server"
 
 /**
  * Lançamento que ainda vale: não foi cancelado.
@@ -51,9 +51,15 @@ export async function resumoDoDia(loja: string, dia: string) {
   }
 
   const [porForma, canceladas, movimentos, fechamento] = await Promise.all([
+    /*
+     * A transferência para outra loja da rede fica fora do fechamento inteiro.
+     * Não mexeria no esperado em espécie — nada em dinheiro entra por ela —,
+     * mas entraria no "total vendido" do dia, e quem confere o caixa leria um
+     * faturamento que não existiu.
+     */
     db.venda.groupBy({
       by: ["forma"],
-      where: { AND: [periodo, NAO_CANCELADA] },
+      where: { AND: [periodo, NAO_CANCELADA, NAO_E_TRANSFERENCIA] },
       _sum: { total: true },
       _count: { _all: true },
     }),

@@ -42,3 +42,29 @@ export async function dadosDaLoja(codigoLoja: string) {
   if (!loja) throw new Error(`Loja ${codigoLoja} não cadastrada`)
   return loja
 }
+
+/**
+ * A loja da rede que tem este documento, ou null quando é cliente de verdade.
+ *
+ * É o que identifica a "loja-cliente": QNE, NRT e SDS podem estar cadastradas
+ * em `clientes` para receber nota, e o que as distingue de um cliente qualquer
+ * não é uma marca no cadastro — é o CNPJ ser o de uma loja da própria rede.
+ * Marca se esquece de pôr e se põe por engano; o CNPJ é o que é.
+ */
+export async function lojaPeloDocumento(documento: string | null | undefined) {
+  const so = (documento ?? "").replace(/\D/g, "")
+  if (so.length !== 14) return null
+  return db.loja.findFirst({ where: { cnpj: so } })
+}
+
+/**
+ * CNPJ (só dígitos) → código da loja, para a tela marcar de uma vez quais
+ * clientes são da própria rede. Uma consulta, e não uma por cliente.
+ */
+export async function lojasPorCnpj(): Promise<Map<string, string>> {
+  const lojas = await db.loja.findMany({
+    where: { ativo: true },
+    select: { codigo: true, cnpj: true },
+  })
+  return new Map(lojas.map((l) => [l.cnpj.replace(/\D/g, ""), l.codigo]))
+}

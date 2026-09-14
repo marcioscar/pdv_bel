@@ -503,3 +503,46 @@ async function nomesDeFornecedores(ids: (string | null)[]) {
   )
   return new Map(fornecedores.map((f) => [f.id, f.nomeFantasia || f.razaoSocial]))
 }
+
+/**
+ * O último custo conhecido de cada produto, das duas fontes que o sistema tem.
+ *
+ * Mesma junção de `historicoDeCompras`, reduzida a um número por produto: o
+ * histórico importado (`Fornecimento`) responde pelos anos anteriores, e as
+ * entradas com custo daqui — NF-e conciliada e AF — pelo que veio depois. Vence
+ * a mais recente das duas, porque custo velho não é custo.
+ *
+ * Produto sem nenhuma das duas fica FORA do mapa, e não com zero: zero é um
+ * preço, e quem chama precisa poder distinguir "custa nada" de "não se sabe".
+ */
+export async function ultimoCustoPorProduto(
+  produtoIds: string[]
+): Promise<Map<string, number>> {
+  const ids = [...new Set(produtoIds)]
+  if (ids.length === 0) return new Map()
+
+  const [fornecimentos, entradas] = await Promise.all([
+    db.fornecimento.findMany({
+      where: { produtoId: { in: ids } },
+      select: { produtoId: true, ultimoCusto: true, ultimaCompra: true },
+    }),
+    db.movimentoEstoque.findMany({
+      where: { produtoId: { in: ids }, tipo: "entrada", custoUnitario: { not: null } },
+      orderBy: { criadoEm: "asc" },
+      select: { produtoId: true, custoUnitario: true, criadoEm: true },
+    }),
+  ])
+
+  const mapa = new Map<string, { custo: number; em: Date }>()
+
+  const considerar = (produtoId: string, custo: number | null, em: Date) => {
+    if (custo == null || !(custo > 0)) return
+    const atual = mapa.get(produtoId)
+    if (!atual || em > atual.em) mapa.set(produtoId, { custo, em })
+  }
+
+  for (const f of fornecimentos) considerar(f.produtoId, f.ultimoCusto, f.ultimaCompra)
+  for (const e of entradas) considerar(e.produtoId, e.custoUnitario, e.criadoEm)
+
+  return new Map([...mapa].map(([id, { custo }]) => [id, custo]))
+}

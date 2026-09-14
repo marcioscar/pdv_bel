@@ -7,9 +7,9 @@ import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
 import { db } from "~/lib/db.server"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
-import { FORMAS_PAGAMENTO } from "~/lib/pdv"
+import { FORMA_TRANSFERENCIA, FORMAS_PAGAMENTO } from "~/lib/pdv"
 import { exigirGerente } from "~/lib/sessao.server"
-import { NAO_CANCELADA } from "~/lib/vendas.server"
+import { NAO_CANCELADA, NAO_E_TRANSFERENCIA } from "~/lib/vendas.server"
 
 export function meta(_: Route.MetaArgs) {
   return [{ title: "Relatórios — BrasSaco" }]
@@ -48,9 +48,11 @@ export async function loader({ request }: Route.LoaderArgs) {
   const noPeriodo = { criadaEm: { gte: inicio }, ...filtroLoja }
 
   const [porForma, canceladas, porSituacao, maisVendidos] = await Promise.all([
+    // Faturamento é venda: a saída para outra loja da rede fica de fora daqui,
+    // do ticket médio e do ranking de produtos, como fica do fechamento.
     db.venda.groupBy({
       by: ["forma"],
-      where: { ...noPeriodo, ...NAO_CANCELADA },
+      where: { ...noPeriodo, ...NAO_CANCELADA, ...NAO_E_TRANSFERENCIA },
       _sum: { total: true },
       _count: { _all: true },
     }),
@@ -70,6 +72,7 @@ export async function loader({ request }: Route.LoaderArgs) {
           $match: {
             criadaEm: { $gte: { $date: inicio.toISOString() } },
             canceladaEm: null,
+            forma: { $ne: FORMA_TRANSFERENCIA },
             ...(rede ? { loja: { $in: eu.lojasPermitidas } } : { loja: lojaEscolhida }),
           },
         },

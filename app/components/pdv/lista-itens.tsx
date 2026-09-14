@@ -11,9 +11,15 @@ type Props = {
 	itens: ItemVenda[];
 	indiceAtivo: number;
 	onSelecionar: (indice: number) => void;
+	/**
+	 * Saída para outra loja da rede: as linhas saem pelo custo, como o total e
+	 * como a gravação. Mostrar preço de balcão aqui e gravar custo faria o caixa
+	 * conferir um documento e assinar outro.
+	 */
+	aoCusto?: boolean;
 };
 
-export function ListaItens({ itens, indiceAtivo, onSelecionar }: Props) {
+export function ListaItens({ itens, indiceAtivo, onSelecionar, aoCusto = false }: Props) {
 	const linhaAtiva = useRef<HTMLTableRowElement>(null);
 
 	// A linha ativa é movida pelo teclado, então ela precisa se manter visível.
@@ -75,7 +81,7 @@ export function ListaItens({ itens, indiceAtivo, onSelecionar }: Props) {
 					{itens.map((item, indice) => {
 						const ativo = indice === indiceAtivo;
 						const semEstoque = item.quantidade > item.estoque;
-						const { preco, combo } = precoAplicado(item, item.quantidade);
+						const { preco, combo } = precoAplicado(item, item.quantidade, { aoCusto });
 						return (
 							<tr
 								key={item.produtoId}

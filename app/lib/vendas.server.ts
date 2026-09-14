@@ -10,6 +10,8 @@ import { validarCpf } from "~/lib/documento"
 import { db } from "~/lib/db.server"
 import { depoisDoDia, diaAtras, diaDeHoje, inicioDoDia } from "~/lib/dia"
 import { movimentosDeVenda, saldosDosProdutos } from "~/lib/estoque.server"
+import { ultimoCustoPorProduto } from "~/lib/compras.server"
+import { lojaPeloDocumento } from "~/lib/lojas.server"
 import {
   arredondar,
   interpretarValor,
@@ -21,6 +23,8 @@ import {
   condicaoCabeNoTotal,
   condicaoPorId,
   dividirParcelas,
+  ehTransferenciaEntreLojas,
+  FORMA_TRANSFERENCIA,
   FORMAS_PAGAMENTO,
   parcelasDaCondicao,
   precoAplicado,
@@ -223,6 +227,64 @@ export async function precificar(
 }
 
 /**
+ * Os mesmos itens, valorados pelo CUSTO — a nota que acompanha a mercadoria a
+ * caminho de outra loja da rede.
+ *
+ * Não é venda, então não sai pelo preço de balcão: entre estabelecimentos não
+ * há margem a realizar, e uma nota de transferência pelo preço de venda
+ * declararia um lucro que não aconteceu. O custo vem da última compra conhecida
+ * — nota conciliada, AF ou o histórico importado, o que for mais recente.
+ *
+ * Produto sem custo nenhum recusa a operação inteira, e não cai no preço de
+ * venda calado: a nota é documento fiscal, e um valor inventado nela é pior que
+ * não emitir. O erro nomeia os produtos, como o que falta NCM, porque a saída é
+ * a mesma — ir ao cadastro e resolver.
+ *
+ * Não aceita desconto: desconto sobre custo em transferência não significa nada.
+ */
+export async function precificarAoCusto(
+  itensRecebidos: ItemRecebido[]
+): Promise<Precificacao> {
+  if (itensRecebidos.length === 0) return { ok: false, erro: "Nada para transferir" }
+
+  const produtos = await db.produto.findMany({
+    where: { id: { in: itensRecebidos.map((i) => i.produtoId) } },
+  })
+  const porId = new Map(produtos.map((p) => [p.id, p]))
+  const custos = await ultimoCustoPorProduto(produtos.map((p) => p.id))
+
+  const semCusto = produtos.filter((p) => !custos.has(p.id))
+  if (semCusto.length > 0) {
+    return {
+      ok: false,
+      erro:
+        `Sem custo de compra: ${semCusto.map((p) => p.codigo).join(", ")} — ` +
+        "a nota de transferência sai pelo custo, e ele nunca foi registrado",
+    }
+  }
+
+  const itens: ItemGravado[] = []
+  for (const recebido of itensRecebidos) {
+    const produto = porId.get(recebido.produtoId)
+    if (!produto) return { ok: false, erro: "Produto não encontrado no catálogo" }
+
+    const preco = arredondar(custos.get(produto.id)!)
+    itens.push({
+      produtoId: produto.id,
+      codigo: produto.codigo,
+      descricao: produto.descricao,
+      unidade: produto.unidade,
+      preco,
+      quantidade: recebido.quantidade,
+      subtotal: arredondar(preco * recebido.quantidade),
+    })
+  }
+
+  const subtotal = arredondar(itens.reduce((acc, item) => acc + item.subtotal, 0))
+  return { ok: true, itens, subtotal, total: subtotal }
+}
+
+/**
  * A recusa por estoque, ou `null` quando a loja cobre o carrinho inteiro.
  *
  * Não se vende o que não existe: o saldo da loja é o teto de cada item. A tela
@@ -264,15 +326,72 @@ export async function recusaPorFaltaDeEstoque(
  * Os preços vêm do banco, nunca do cliente: o payload só diz *o que* e *quanto*.
  * Assim um total adulterado no navegador não chega a ser gravado.
  */
-export async function registrarVenda(pedido: PedidoVenda): Promise<ResultadoVenda> {
+/** O que `avaliarVenda` devolveria para quem não pode precisar de liberação. */
+const SEM_MOTIVOS = {
+  motivos: [] as never[],
+  divida: { valor: 0, parcelas: 0, diasAtraso: 0 },
+  descontoPercentual: 0,
+}
+
+export async function registrarVenda(
+  recebidoDaTela: PedidoVenda
+): Promise<ResultadoVenda> {
+  let pedido = recebidoDaTela
   if (!FORMAS_PAGAMENTO.some((f) => f.id === pedido.forma)) {
     return { ok: false, erro: "Forma de pagamento inválida" }
   }
   if (!pedido.loja) return { ok: false, erro: "Venda sem loja" }
 
-  const preco = await precificar(pedido.itens, pedido.desconto)
+  /**
+   * A saída para outra loja da rede, decidida AQUI e pelo CNPJ.
+   *
+   * A forma sozinha não podia mandar: quem montasse o payload escolheria
+   * "transferência" para um cliente de verdade e a venda sumiria do
+   * faturamento, do estoque e da comissão de uma vez. E o cliente sozinho
+   * também não: sem exigir a forma, a mesma loja-cliente passaria como venda
+   * comum pelo caminho antigo. Por isso as duas coisas têm que concordar, e a
+   * verdade é o documento — CNPJ de loja da rede é loja da rede.
+   */
+  const cliente = pedido.clienteId
+    ? await db.cliente.findUnique({ where: { id: pedido.clienteId } })
+    : null
+  if (pedido.clienteId && !cliente) return { ok: false, erro: "Cliente não encontrado" }
+
+  const lojaCliente = await lojaPeloDocumento(cliente?.cpfCnpj)
+  const paraARede = lojaCliente !== null
+
+  if (pedido.forma === FORMA_TRANSFERENCIA && !paraARede) {
+    return {
+      ok: false,
+      erro: "Transferência entre lojas exige o cadastro da loja de destino como cliente",
+    }
+  }
+  if (paraARede && pedido.forma !== FORMA_TRANSFERENCIA) {
+    return {
+      ok: false,
+      erro: `${lojaCliente.nome} é loja da rede — a saída sai como transferência, não como venda`,
+    }
+  }
+  if (paraARede && lojaCliente.codigo === pedido.loja) {
+    return { ok: false, erro: "Origem e destino são a mesma loja" }
+  }
+
+  // O custo, e não o preço de balcão: entre estabelecimentos não há margem a
+  // realizar. O desconto não entra na conta por não significar nada aqui.
+  const preco = paraARede
+    ? await precificarAoCusto(pedido.itens)
+    : await precificar(pedido.itens, pedido.desconto)
   if (!preco.ok) return { ok: false, erro: preco.erro }
   const { itens, subtotal, total } = preco
+
+  /*
+   * Daqui para baixo a transferência segue sem desconto e sem valor recebido.
+   * `precificarAoCusto` já ignorou o desconto no cálculo; sem zerá-lo aqui
+   * também, a venda seria gravada com um desconto que não entrou em conta
+   * nenhuma, e o documento diria `subtotal − desconto ≠ total`. O recebido cai
+   * junto porque ninguém entregou dinheiro: a carga só mudou de prateleira.
+   */
+  if (paraARede) pedido = { ...pedido, desconto: 0, recebido: null }
 
   if (pedido.forma === "dinheiro") {
     if (pedido.recebido === null) return { ok: false, erro: "Informe o valor recebido" }
@@ -284,8 +403,10 @@ export async function registrarVenda(pedido: PedidoVenda): Promise<ResultadoVend
    * a tela é do outro lado da rede. Sem isto, comissão seria um campo de texto
    * que o navegador escolhe.
    */
-  const vendedor = await vendedorPorCodigo(pedido.vendedorCodigo ?? "", pedido.loja)
-  if (!vendedor) {
+  const vendedor = paraARede
+    ? null
+    : await vendedorPorCodigo(pedido.vendedorCodigo ?? "", pedido.loja)
+  if (!paraARede && !vendedor) {
     return {
       ok: false,
       erro: pedido.vendedorCodigo
@@ -313,8 +434,16 @@ export async function registrarVenda(pedido: PedidoVenda): Promise<ResultadoVend
     }
   }
 
-  const semEstoque = await recusaPorFaltaDeEstoque(itens, pedido.loja)
-  if (semEstoque) return { ok: false, erro: semEstoque }
+  /*
+   * A falta de estoque não se cobra aqui quando o destino é a rede: quem moveu
+   * a mercadoria foi a transferência, que já baixou o saldo da origem no
+   * despacho. Cobrar de novo recusaria a nota justamente por causa da baixa que
+   * a própria carga fez — e a nota é o papel que acompanha essa carga.
+   */
+  if (!paraARede) {
+    const semEstoque = await recusaPorFaltaDeEstoque(itens, pedido.loja)
+    if (semEstoque) return { ok: false, erro: semEstoque }
+  }
 
   /**
    * A trava do gerente, cobrada AQUI.
@@ -324,12 +453,19 @@ export async function registrarVenda(pedido: PedidoVenda): Promise<ResultadoVend
    * qualquer um que abrisse o console. Este é o único ponto por onde toda venda
    * passa — balcão, Pix e prazo —, então é onde a regra vale para as três.
    */
-  const avaliacao = await avaliarVenda({
-    clienteId: pedido.clienteId,
-    subtotal,
-    desconto: pedido.desconto,
-    forma: pedido.forma,
-  })
+  /*
+   * A liberação do gerente é sobre dívida do cliente e teto de desconto. A rede
+   * não deve a si mesma e não há desconto numa nota ao custo — avaliar aqui
+   * mandaria buscar o gerente para autorizar uma coisa que não existe.
+   */
+  const avaliacao = paraARede
+    ? SEM_MOTIVOS
+    : await avaliarVenda({
+        clienteId: pedido.clienteId,
+        subtotal,
+        desconto: pedido.desconto,
+        forma: pedido.forma,
+      })
 
   if (avaliacao.motivos.length > 0) {
     if (!pedido.autorizacaoId) {
@@ -364,12 +500,12 @@ export async function registrarVenda(pedido: PedidoVenda): Promise<ResultadoVend
 
   // A prazo vira boleto, e o boleto do Inter exige pagador com endereço e um
   // valor nominal mínimo. Recusar aqui evita gravar venda que não pode ser cobrada.
-  let cliente = null
+  // O cliente em si já veio buscado lá em cima, onde se decidiu se é da rede.
   let vencimento: Date | null = null
   let condicaoId: string | null = null
 
   if (pedido.forma === "prazo") {
-    if (!pedido.clienteId) {
+    if (!cliente) {
       return { ok: false, erro: "Venda a prazo exige cliente (F6 para vincular)" }
     }
 
@@ -386,15 +522,8 @@ export async function registrarVenda(pedido: PedidoVenda): Promise<ResultadoVend
       }
     }
 
-    cliente = await db.cliente.findUnique({ where: { id: pedido.clienteId } })
-    if (!cliente) return { ok: false, erro: "Cliente não encontrado" }
-
     condicaoId = condicao.id
     vencimento = parcelasDaCondicao(condicao, total)[0].vencimento
-  } else if (pedido.clienteId) {
-    // Cliente também pode ser vinculado numa venda à vista, só não é obrigatório.
-    cliente = await db.cliente.findUnique({ where: { id: pedido.clienteId } })
-    if (!cliente) return { ok: false, erro: "Cliente não encontrado" }
   }
 
   const troco =
@@ -451,7 +580,8 @@ async function gravar(
   vencimento: Date | null,
   condicao: string | null,
   autorizacaoId: string | null,
-  vendedor: VendedorDoBalcao
+  /** Null na transferência entre lojas: não há comissão a creditar. */
+  vendedor: VendedorDoBalcao | null
 ): Promise<{ numero: number; vendaId: string }> {
   for (let tentativa = 0; tentativa < 25; tentativa++) {
     // O $inc fica FORA da transação de propósito: dentro dela, o rollback de uma
@@ -489,7 +619,8 @@ async function gravarUmaVez(
   vencimento: Date | null,
   condicao: string | null,
   autorizacaoId: string | null,
-  vendedor: VendedorDoBalcao
+  /** Null na transferência entre lojas: não há comissão a creditar. */
+  vendedor: VendedorDoBalcao | null
 ): Promise<{ numero: number; vendaId: string }> {
   // A venda e as baixas de estoque caem juntas ou não caem: uma venda gravada
   // sem seus movimentos deixaria o saldo derivado errado para sempre.
@@ -500,8 +631,8 @@ async function gravarUmaVez(
         loja: pedido.loja,
         caixa: pedido.caixa,
         operador: pedido.operador,
-        vendedorId: vendedor.id,
-        vendedorNome: vendedor.nome,
+        vendedorId: vendedor?.id ?? null,
+        vendedorNome: vendedor?.nome ?? null,
         itens,
         subtotal,
         desconto: pedido.desconto,
@@ -520,13 +651,26 @@ async function gravarUmaVez(
       },
     })
 
-    await tx.movimentoEstoque.createMany({
-      data: movimentosDeVenda(
-        itens.map((item) => ({ produtoId: item.produtoId, quantidade: item.quantidade })),
-        venda,
-        pedido.operador
-      ),
-    })
+    /*
+     * A transferência entre lojas NÃO baixa estoque, e é o ponto inteiro dela.
+     *
+     * A mercadoria já saiu da prateleira quando a carga foi despachada, pelo
+     * `transferencia_saida` do documento de transferência. Baixar de novo aqui
+     * tiraria duas vezes o que saiu uma, e o saldo — que é a soma do livro —
+     * ficaria errado para sempre, sem nada apontando por quê.
+     *
+     * A leitura vale ao contrário também: se um dia a nota passar a nascer da
+     * própria transferência, é esta linha que sai, não a outra.
+     */
+    if (!ehTransferenciaEntreLojas(pedido.forma)) {
+      await tx.movimentoEstoque.createMany({
+        data: movimentosDeVenda(
+          itens.map((item) => ({ produtoId: item.produtoId, quantidade: item.quantidade })),
+          venda,
+          pedido.operador
+        ),
+      })
+    }
 
     // Dentro da MESMA transação da venda: fora dela, uma falha na gravação
     // deixaria a autorização queimada sem venda nenhuma — e, pior, a ordem
@@ -552,6 +696,28 @@ async function gravarUmaVez(
  */
 export const NAO_CANCELADA: Prisma.VendaWhereInput = {
   OR: [{ canceladaEm: null }, { canceladaEm: { isSet: false } }],
+}
+
+/**
+ * A saída para outra loja da rede não é faturamento.
+ *
+ * Anda junto de `NAO_CANCELADA` em toda soma pela mesma razão: são documentos
+ * que existem no livro e não contam como venda. A diferença é que a cancelada
+ * não conta porque o dinheiro voltou, e esta porque nunca houve dinheiro — a
+ * mercadoria só mudou de prateleira, e a nota foi acompanhá-la.
+ *
+ * Filtra pela FORMA, e não por um campo próprio na venda, porque a forma só
+ * chega a valer "transferência" depois de o servidor conferir que o cliente é
+ * mesmo uma loja da rede, pelo CNPJ. Dois campos dizendo a mesma coisa é um
+ * campo a mais para discordar.
+ */
+export const NAO_E_TRANSFERENCIA: Prisma.VendaWhereInput = {
+  forma: { not: FORMA_TRANSFERENCIA },
+}
+
+/** Venda de verdade: nem cancelada, nem saída para a própria rede. */
+export const VENDA_QUE_CONTA: Prisma.VendaWhereInput = {
+  AND: [NAO_CANCELADA, NAO_E_TRANSFERENCIA],
 }
 
 export const VENDAS_POR_PAGINA = 50
@@ -723,8 +889,14 @@ export async function consultarVendas(filtro: FiltroVendas) {
       take: VENDAS_POR_PAGINA,
     }),
     db.venda.count({ where }),
+    /*
+     * O resumo soma só o que é venda. A transferência para outra loja da rede
+     * CONTINUA na lista — quem procura "a nota que mandei para a NRT" a procura
+     * aqui —, mas fora do total e fora do faturamento por vendedor: ela não é
+     * faturamento de ninguém.
+     */
     db.venda.aggregate({
-      where: { AND: [...condicoes, NAO_CANCELADA] },
+      where: { AND: [...condicoes, NAO_CANCELADA, NAO_E_TRANSFERENCIA] },
       _sum: { total: true },
       _count: { _all: true },
     }),
@@ -739,7 +911,7 @@ export async function consultarVendas(filtro: FiltroVendas) {
      * por venda de uma loja num período — cabe na memória com folga.
      */
     db.venda.findMany({
-      where: { AND: [...condicoes, NAO_CANCELADA] },
+      where: { AND: [...condicoes, NAO_CANCELADA, NAO_E_TRANSFERENCIA] },
       select: { vendedorId: true, vendedorNome: true, total: true },
     }),
   ])

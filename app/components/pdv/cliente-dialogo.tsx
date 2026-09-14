@@ -16,6 +16,14 @@ export type ClienteResumo = {
   cpfCnpj: string
   cidade: string
   uf: string
+  /**
+   * O código da loja da rede quando este "cliente" é uma delas — QNE, NRT, SDS.
+   * Null no cliente de verdade.
+   *
+   * Derivado do CNPJ no servidor, e não cadastrado: é o documento que diz de
+   * quem é a inscrição, e marca no cadastro se esquece de pôr e se põe errado.
+   */
+  lojaDaRede: string | null
 }
 
 type Props = {
@@ -253,6 +261,17 @@ export function ClienteDialogo({
                       <span className="min-w-0 flex-1 truncate font-medium">
                         {cliente.nome}
                       </span>
+                      {/* Escolher uma loja da rede muda o que a venda é; o
+                          caixa precisa ver isso ANTES do Enter, não depois. */}
+                      {cliente.lojaDaRede ? (
+                        <Badge
+                          variant="secondary"
+                          className="shrink-0 text-[10px]"
+                          title="Loja da rede — a saída sai como transferência, não como venda"
+                        >
+                          rede · {cliente.lojaDaRede}
+                        </Badge>
+                      ) : null}
                       <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
                         {formatarCpfCnpj(cliente.cpfCnpj)}
                       </span>

@@ -1,4 +1,5 @@
 import { db } from "~/lib/db.server"
+import { mesmaEmpresa } from "~/lib/documento"
 import {
   ambienteFocus,
   cancelarNota,
@@ -179,6 +180,15 @@ export async function emitirDaVenda(
 
   const ufDestino = cliente?.uf || loja.uf || "DF"
   const interestadual = ufDestino !== (loja.uf ?? "DF")
+
+  /*
+   * Transferência é a saída para outro estabelecimento da MESMA empresa, e quem
+   * diz isso é a raiz do CNPJ — os oito primeiros dígitos. QI e QNE a
+   * compartilham, então a carga entre elas sai com CFOP 5152; NRT e SDS são
+   * outras pessoas jurídicas, e para elas a nota é de venda mesmo, com o CFOP
+   * de sempre. Não há campo a marcar: o documento do destinatário responde.
+   */
+  const transferencia = mesmaEmpresa(loja.cnpj, venda.clienteCpfCnpj)
   /*
    * Frete e observação só existem na NF-e. Na NFC-e o cliente leva a mercadoria
    * na mão, e o campo de observação da nota de consumidor não é lugar de recado
@@ -207,7 +217,7 @@ export async function emitirDaVenda(
 
   const items = venda.itens.map((item, i) => {
     const produto = porId.get(item.produtoId)!
-    const tributacao = tributacaoDoItem(produto, loja, { interestadual })
+    const tributacao = tributacaoDoItem(produto, loja, { interestadual, transferencia })
 
     return {
       numero_item: i + 1,
