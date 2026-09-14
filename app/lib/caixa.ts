@@ -19,6 +19,17 @@ export const TIPOS_DE_MOVIMENTO_DE_CAIXA = {
     ajuda: "Dinheiro retirado da gaveta — banco, pagamento, cofre",
     sinal: -1,
   },
+  /*
+   * Tipo próprio, e não sangria: sangria é dinheiro que sai da loja e continua
+   * sendo dela — vai para o banco, para o cofre, para pagar alguém. Este é
+   * faturamento que se desfaz, e quem confere a gaveta no fim do dia precisa
+   * ler a diferença em vez de descobri-la lendo a observação de uma sangria.
+   */
+  devolucao: {
+    rotulo: "Devolução",
+    ajuda: "Dinheiro devolvido ao cliente que trouxe mercadoria de volta",
+    sinal: -1,
+  },
 } as const
 
 export type TipoMovimentoDeCaixa = keyof typeof TIPOS_DE_MOVIMENTO_DE_CAIXA

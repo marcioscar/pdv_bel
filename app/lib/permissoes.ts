@@ -162,6 +162,12 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         somenteGerente: true,
       },
       {
+        para: "/admin/devolucoes",
+        rotulo: "Devoluções",
+        descricao: "Mercadoria que voltou depois da venda, e a nota de entrada de cada uma",
+        somenteGerente: true,
+      },
+      {
         para: "/admin/autorizacoes",
         rotulo: "Autorizações",
         descricao: "Liberar venda a cliente devedor e desconto acima do teto",
@@ -277,6 +283,8 @@ export function secaoAdminDoCaminho(pathname: string): SecaoAdmin | null {
  */
 export const ACOES_DE_GERENTE = {
   cancelarVenda: "Só gerente cancela venda — o cancelamento estorna o estoque",
+  devolverMercadoria:
+    "Só gerente registra devolução — volta mercadoria ao estoque e dinheiro à mão do cliente",
   inventario: "Só gerente faz inventário — o ajuste reescreve o saldo contado",
   baixaDeUso:
     "Só gerente dá baixa para uso da loja — sai do estoque sem venda e sem documento",

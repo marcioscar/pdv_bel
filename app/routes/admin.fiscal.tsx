@@ -15,6 +15,7 @@ import {
   listarGatilhos,
 } from "~/lib/focus.server"
 import {
+  CFOP_DEVOLUCAO,
   CFOP_TRANSFERENCIA,
   CFOP_VENDA_INTERESTADUAL,
   CFOP_VENDA_INTERNA,
@@ -78,6 +79,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       cfopVendaInterna: loja.cfopVendaInterna ?? "",
       cfopVendaInterestadual: loja.cfopVendaInterestadual ?? "",
       cfopTransferencia: loja.cfopTransferencia ?? "",
+      cfopDevolucao: loja.cfopDevolucao ?? "",
       csosnPadrao: loja.csosnPadrao ?? "",
       pendencias: pendenciasDoEmitente(loja),
     })),
@@ -252,6 +254,7 @@ function Emitente({
     cfopVendaInterna: loja.cfopVendaInterna,
     cfopVendaInterestadual: loja.cfopVendaInterestadual,
     cfopTransferencia: loja.cfopTransferencia,
+    cfopDevolucao: loja.cfopDevolucao,
     csosnPadrao: loja.csosnPadrao,
   })
 
@@ -410,6 +413,14 @@ function Emitente({
           className="col-span-2"
         />
         <Campo
+          nome="cfopDevolucao"
+          rotulo="CFOP devolução"
+          valor={form.cfopDevolucao}
+          onChange={(v) => alterar({ cfopDevolucao: v.replace(/\D/g, "").slice(0, 4) })}
+          placeholder={CFOP_DEVOLUCAO}
+          className="col-span-2"
+        />
+        <Campo
           nome="csosnPadrao"
           rotulo="CSOSN padrão"
           valor={form.csosnPadrao}
@@ -418,7 +429,7 @@ function Emitente({
           className="col-span-2"
         />
 
-        <div className="col-span-4 flex items-end justify-end">
+        <div className="col-span-2 flex items-end justify-end">
           <Button type="submit" size="sm" disabled={gravando} className="rounded-lg">
             <Check className="size-4" />
             {gravando ? "Salvando…" : "Salvar"}

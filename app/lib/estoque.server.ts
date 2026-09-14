@@ -19,6 +19,16 @@ export type TipoMovimento =
    * sai por aqui é custo da loja, não faturamento.
    */
   | "uso"
+  /**
+   * Mercadoria que o cliente trouxe de volta depois do prazo de cancelamento.
+   *
+   * Separado de `estorno` porque são fatos diferentes: estorno diz que a venda
+   * não aconteceu (foi cancelada, e o documento inteiro caiu junto); devolução
+   * diz que ela ACONTECEU e parte voltou depois, com a venda de pé e nota
+   * própria. Somar os dois num tipo só apagaria a pergunta que interessa ao
+   * gerente — quanto do que se vende está voltando.
+   */
+  | "devolucao"
   /** Saída da loja de origem, no momento em que a carga é despachada. */
   | "transferencia_saida"
   /**

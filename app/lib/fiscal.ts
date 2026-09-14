@@ -29,6 +29,13 @@ export const CFOP_VENDA_ST = "5405"
  */
 export const CFOP_TRANSFERENCIA = "5152"
 
+/**
+ * Devolução de venda de mercadoria adquirida de terceiros, dentro do estado.
+ * Fora dele seria 2202 — mas a devolução do balcão é quase sempre local, e
+ * quem tiver o outro caso cadastra na loja.
+ */
+export const CFOP_DEVOLUCAO = "1202"
+
 /** Simples Nacional, tributada sem permissão de crédito de ICMS. */
 export const CSOSN_PADRAO = "102"
 /** Simples Nacional, mercadoria com ICMS retido por substituição tributária. */
@@ -114,6 +121,7 @@ export type PadraoDaLoja = {
   cfopVendaInterna: string | null
   cfopVendaInterestadual: string | null
   cfopTransferencia: string | null
+  cfopDevolucao: string | null
   csosnPadrao: string | null
 }
 
@@ -147,13 +155,21 @@ export function tributacaoDoItem(
   {
     interestadual = false,
     transferencia = false,
-  }: { interestadual?: boolean; transferencia?: boolean } = {}
+    devolucao = false,
+  }: {
+    interestadual?: boolean
+    transferencia?: boolean
+    /** A nota de ENTRADA que documenta a mercadoria que o cliente trouxe. */
+    devolucao?: boolean
+  } = {}
 ): TributacaoDoItem {
   const doProduto = separarOrigemDoCsosn(produto.csosn ?? "")
   const daLoja = separarOrigemDoCsosn(loja.csosnPadrao ?? "")
   const csosn = doProduto.csosn || daLoja.csosn || CSOSN_PADRAO
 
-  const padrao = transferencia
+  const padrao = devolucao
+    ? loja.cfopDevolucao || CFOP_DEVOLUCAO
+    : transferencia
     ? loja.cfopTransferencia || CFOP_TRANSFERENCIA
     : interestadual
       ? loja.cfopVendaInterestadual || CFOP_VENDA_INTERESTADUAL
@@ -166,7 +182,9 @@ export function tributacaoDoItem(
    */
   const cfop =
     produto.cfop ||
-    (csosn === CSOSN_ST && !interestadual && !transferencia ? CFOP_VENDA_ST : padrao)
+    (csosn === CSOSN_ST && !interestadual && !transferencia && !devolucao
+      ? CFOP_VENDA_ST
+      : padrao)
 
   return {
     cfop,

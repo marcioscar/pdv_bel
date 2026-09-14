@@ -19,6 +19,7 @@ export type EmitenteEntrada = {
   cfopVendaInterna: string | null
   cfopVendaInterestadual: string | null
   cfopTransferencia: string | null
+  cfopDevolucao: string | null
   csosnPadrao: string | null
 }
 
@@ -46,6 +47,7 @@ export function lerEmitente(form: FormData): EmitenteEntrada {
     cfopVendaInterna: texto(form.get("cfopVendaInterna")).replace(/\D/g, "") || null,
     cfopVendaInterestadual: texto(form.get("cfopVendaInterestadual")).replace(/\D/g, "") || null,
     cfopTransferencia: texto(form.get("cfopTransferencia")).replace(/\D/g, "") || null,
+    cfopDevolucao: texto(form.get("cfopDevolucao")).replace(/\D/g, "") || null,
     csosnPadrao: texto(form.get("csosnPadrao")).replace(/\D/g, "") || null,
   }
 }
@@ -83,6 +85,9 @@ export async function salvarEmitente(
   if (entrada.cfopTransferencia && !validarCfop(entrada.cfopTransferencia)) {
     return { ok: false, erro: "CFOP de transferência inválido — são 4 dígitos" }
   }
+  if (entrada.cfopDevolucao && !validarCfop(entrada.cfopDevolucao)) {
+    return { ok: false, erro: "CFOP de devolução inválido — são 4 dígitos, começando em 1 ou 2" }
+  }
   if (entrada.csosnPadrao && !validarCsosn(entrada.csosnPadrao)) {
     return { ok: false, erro: "CSOSN inválido — 102, ou 0102 com a origem na frente" }
   }
@@ -117,6 +122,7 @@ export async function salvarEmitente(
       cfopVendaInterna: entrada.cfopVendaInterna,
       cfopVendaInterestadual: entrada.cfopVendaInterestadual,
       cfopTransferencia: entrada.cfopTransferencia,
+      cfopDevolucao: entrada.cfopDevolucao,
       csosnPadrao: entrada.csosnPadrao,
     },
   })

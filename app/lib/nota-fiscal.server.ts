@@ -494,3 +494,250 @@ export async function desfazerNotaDaVenda(
     }
   }
 }
+
+export type ResultadoDevolucaoFiscal =
+  | { ok: true; notaId: string; status: string }
+  | { ok: false; erro: string }
+
+/**
+ * A NF-e que documenta a mercadoria que o cliente trouxe de volta.
+ *
+ * É uma nota de ENTRADA (`tipo_documento: 0`) com finalidade de devolução
+ * (`finalidade_emissao: 4`), referenciando a chave da nota original em
+ * `notas_referenciadas`. Os três campos vêm da documentação da Focus, não de
+ * memória: errar o nome de um deles é uma rejeição que só aparece na SEFAZ.
+ *
+ * Sempre modelo 55, nunca NFC-e: a nota de consumidor não aceita finalidade de
+ * devolução nem documento de entrada. Uma devolução de venda que saiu em NFC-e
+ * também vira NF-e aqui, e é assim que tem que ser.
+ *
+ * EXIGE que a venda original tenha nota autorizada com chave. Sem a chave não
+ * há o que referenciar, e uma nota de devolução solta — sem dizer o que está
+ * devolvendo — é um documento que o contador não consegue casar com nada.
+ * Venda que saiu em cupom não fiscal não gera nota de devolução; o estoque e o
+ * dinheiro voltam do mesmo jeito, só não há papel para emitir.
+ *
+ * ATENÇÃO, e isto é decisão do contador, não do sistema: aqui o destinatário é
+ * o CLIENTE que devolveu, e o CFOP vem de `cfopDevolucao` da loja (1202 por
+ * padrão). Há escritórios que emitem a nota de entrada com a própria loja nos
+ * dois papéis. Antes da primeira emissão de verdade, confirme os dois com quem
+ * assina a apuração — o sistema repete o que estiver cadastrado.
+ */
+export async function emitirDaDevolucao(
+  devolucaoId: string,
+  { emitidaPor }: { emitidaPor: string }
+): Promise<ResultadoDevolucaoFiscal> {
+  if (!OBJECT_ID.test(devolucaoId)) return { ok: false, erro: "Devolução inválida" }
+
+  const devolucao = await db.devolucao.findUnique({ where: { id: devolucaoId } })
+  if (!devolucao) return { ok: false, erro: "Devolução não encontrada" }
+
+  const loja = await db.loja.findUnique({ where: { codigo: devolucao.loja } })
+  if (!loja) return { ok: false, erro: `Loja ${devolucao.loja} não cadastrada` }
+  if (!loja.emiteNotaFiscal) {
+    return { ok: false, erro: `${loja.nome} ainda não emite nota — ligue em Cadastros › Fiscal` }
+  }
+
+  const faltando = pendenciasDoEmitente(loja)
+  if (faltando.length > 0) {
+    return { ok: false, erro: `Cadastro fiscal de ${loja.codigo} incompleto: falta ${faltando.join(", ")}` }
+  }
+
+  /*
+   * A nota original, que é o que esta referencia. Só serve a que está
+   * autorizada e com chave: uma que deu erro, ou que ainda está processando,
+   * não existe para a SEFAZ, e referenciá-la derruba esta também.
+   */
+  const original = await db.notaFiscalEmitida.findFirst({
+    where: { vendaId: devolucao.vendaId, status: "autorizado", chave: { not: null } },
+    orderBy: { criadaEm: "desc" },
+  })
+  if (!original?.chave) {
+    return {
+      ok: false,
+      erro:
+        `A venda #${devolucao.vendaNumero} não tem nota autorizada para referenciar — ` +
+        "sem a chave da original não há devolução a emitir. O estoque e o dinheiro já voltaram.",
+    }
+  }
+
+  const ref = `devolucao-${devolucaoId}`
+  const jaEmitida = await db.notaFiscalEmitida.findUnique({ where: { ref } })
+  if (jaEmitida && jaEmitida.status !== "erro_autorizacao") {
+    return { ok: false, erro: `Esta devolução já tem nota ${jaEmitida.status}` }
+  }
+
+  const cliente = devolucao.clienteId
+    ? await db.cliente.findUnique({ where: { id: devolucao.clienteId } })
+    : null
+  if (!cliente) {
+    return {
+      ok: false,
+      erro: "A nota de devolução precisa do cliente: a venda saiu sem cadastro vinculado",
+    }
+  }
+
+  /*
+   * A venda original, só para saber QUAL item cada devolução está desfazendo.
+   *
+   * Desde 01/09/2026 (regra VC02-14 da NT 2025.002-RTC) a nota de devolução
+   * referencia a original ITEM A ITEM, e não mais só pela chave no cabeçalho —
+   * cada item carrega a chave e o número do item correspondente lá. Sem isso a
+   * SEFAZ devolve a rejeição 321, "não possui documento fiscal referenciado",
+   * mesmo com a chave no cabeçalho preenchida. Foi exatamente o que aconteceu
+   * na primeira tentativa.
+   *
+   * O número do item é a POSIÇÃO na venda: a emissão original numera
+   * `numero_item: i + 1` percorrendo `venda.itens` na ordem, e é essa ordem que
+   * ficou gravada na nota. Enquanto as duas leituras usarem o mesmo array, elas
+   * concordam.
+   */
+  const vendaOriginal = await db.venda.findUnique({ where: { id: devolucao.vendaId } })
+  if (!vendaOriginal) return { ok: false, erro: "Venda original não encontrada" }
+  const numeroDoItemNaOriginal = new Map(
+    vendaOriginal.itens.map((item, i) => [item.produtoId, String(i + 1)])
+  )
+
+  const produtos = await db.produto.findMany({
+    where: { id: { in: devolucao.itens.map((i) => i.produtoId) } },
+  })
+  const porId = new Map(produtos.map((p) => [p.id, p]))
+
+  const semNcm = devolucao.itens.filter((i) => !porId.get(i.produtoId)?.ncm)
+  if (semNcm.length > 0) {
+    return {
+      ok: false,
+      erro: `Sem NCM: ${semNcm.map((i) => i.codigo).join(", ")} — a SEFAZ recusa a nota inteira`,
+    }
+  }
+
+  const chaveLimpa = original.chave.replace(/\D/g, "")
+
+  const items = devolucao.itens.map((item, i) => {
+    const produto = porId.get(item.produtoId)!
+    const tributacao = tributacaoDoItem(produto, loja, { devolucao: true })
+
+    return {
+      numero_item: i + 1,
+      // O item da original que este está desfazendo — ver o comentário acima.
+      chave_acesso_dfe_referenciado: chaveLimpa,
+      numero_item_dfe_referenciado: numeroDoItemNaOriginal.get(item.produtoId),
+      codigo_produto: item.codigo,
+      descricao: item.descricao,
+      cfop: tributacao.cfop,
+      unidade_comercial: item.unidade,
+      quantidade_comercial: item.quantidade,
+      valor_unitario_comercial: item.preco,
+      unidade_tributavel: item.unidade,
+      quantidade_tributavel: item.quantidade,
+      valor_unitario_tributavel: item.preco,
+      valor_bruto: item.subtotal,
+      codigo_ncm: produto.ncm!,
+      icms_origem: tributacao.origem,
+      icms_situacao_tributaria: tributacao.csosn,
+      ...(tributacao.cest ? { cest: tributacao.cest } : {}),
+      pis_situacao_tributaria: PIS_COFINS_SIMPLES,
+      cofins_situacao_tributaria: PIS_COFINS_SIMPLES,
+      inclui_no_total: 1,
+    }
+  })
+
+  const documentoCliente = (cliente.cpfCnpj ?? "").replace(/\D/g, "")
+
+  const payload = {
+    data_emissao: dataComFuso(new Date()),
+    natureza_operacao: "DEVOLUCAO DE VENDA",
+    /* Entrada: a mercadoria está voltando para a loja. */
+    tipo_documento: 0,
+    /* 4 é devolução de mercadoria na tabela da SEFAZ. */
+    finalidade_emissao: 4,
+    /*
+     * SEM `notas_referenciadas` no cabeçalho, e isto é deliberado.
+     *
+     * A referência agora vai só no item (`chave_acesso_dfe_referenciado` e
+     * `numero_item_dfe_referenciado`). Mandar as duas é a rejeição 1010, "NF-e
+     * com referenciamento de documento a nível de nota e a nível de item" — a
+     * regra nova SUBSTITUI o cabeçalho, não soma a ele. Só a do cabeçalho é a
+     * rejeição 321. As duas tentativas estão no histórico desta devolução.
+     */
+    presenca_comprador: "1",
+    modalidade_frete: FRETE_SEM_TRANSPORTE,
+    local_destino: "1",
+    cnpj_emitente: loja.cnpj,
+    nome_emitente: loja.razaoSocial,
+    inscricao_estadual_emitente: loja.inscricaoEstadual,
+    serie: loja.serieNfe ?? undefined,
+    valor_produtos: devolucao.total,
+    valor_total: devolucao.total,
+    informacoes_adicionais_contribuinte: [
+      ehSimples(loja.regimeTributario) ? AVISO_SIMPLES : "",
+      `Devolucao referente a venda ${devolucao.vendaNumero}. Motivo: ${devolucao.motivo}`,
+    ]
+      .filter(Boolean)
+      .join(" "),
+    nome_destinatario: cliente.nome,
+    ...(documentoCliente.length === 14
+      ? { cnpj_destinatario: documentoCliente }
+      : { cpf_destinatario: documentoCliente }),
+    indicador_inscricao_estadual_destinatario: indicadorDeIe(cliente.inscricaoEstadual),
+    ...(cliente.inscricaoEstadual && cliente.inscricaoEstadual !== "ISENTO"
+      ? { inscricao_estadual_destinatario: cliente.inscricaoEstadual }
+      : {}),
+    logradouro_destinatario: cliente.endereco,
+    numero_destinatario: cliente.numero || "S/N",
+    complemento_destinatario: cliente.complemento || undefined,
+    bairro_destinatario: cliente.bairro,
+    municipio_destinatario: cliente.cidade,
+    uf_destinatario: cliente.uf,
+    cep_destinatario: cliente.cep,
+    consumidor_final: documentoCliente.length === 14 ? 0 : 1,
+    items,
+  }
+
+  const ambiente = ambienteFocus()
+
+  const nota = await db.notaFiscalEmitida.upsert({
+    where: { ref },
+    create: {
+      ref,
+      modelo: "nfe",
+      ambiente,
+      loja: devolucao.loja,
+      // Sem `vendaId`: a nota é da devolução, não da venda. Preencher ali faria
+      // a tela de Vendas mostrar duas notas para a mesma venda, uma delas de
+      // entrada — e o botão de cancelar nota pegaria a errada.
+      destinatarioNome: cliente.nome,
+      destinatarioCpfCnpj: documentoCliente || null,
+      valorTotal: devolucao.total,
+      observacao: devolucao.motivo,
+      emitidaPor,
+    },
+    update: {
+      status: "processando_autorizacao",
+      erro: null,
+      ambiente,
+      emitidaPor,
+      valorTotal: devolucao.total,
+    },
+  })
+
+  try {
+    const resposta = await emitirNota("nfe", ref, payload)
+    const dados = daResposta(resposta)
+    await db.notaFiscalEmitida.update({ where: { id: nota.id }, data: dados })
+    return { ok: true, notaId: nota.id, status: dados.status }
+  } catch (erro) {
+    const mensagem = erro instanceof ErroFocus ? erro.message : "Falha ao falar com a Focus NFe"
+    await db.notaFiscalEmitida.update({
+      where: { id: nota.id },
+      data: { status: "erro_autorizacao", erro: mensagem },
+    })
+    return { ok: false, erro: mensagem }
+  }
+}
+
+/** A nota de devolução já emitida, quando houve. */
+export function notaDaDevolucao(devolucaoId: string) {
+  if (!OBJECT_ID.test(devolucaoId)) return null
+  return db.notaFiscalEmitida.findUnique({ where: { ref: `devolucao-${devolucaoId}` } })
+}

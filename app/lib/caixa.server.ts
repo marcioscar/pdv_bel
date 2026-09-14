@@ -83,6 +83,13 @@ export async function resumoDoDia(loja: string, dia: string) {
   const abertura = soma("abertura")
   const sangrias = soma("sangria")
   const suprimentos = soma("suprimento")
+  /*
+   * O dinheiro que voltou para a mão do cliente. Sai da gaveta como a sangria,
+   * mas é outra coisa: sangria continua sendo dinheiro da loja, e isto é
+   * faturamento desfeito. Somado à parte para quem confere ler a diferença em
+   * vez de descobri-la na observação de uma sangria.
+   */
+  const devolucoes = soma("devolucao")
   const vendasDinheiro = por("dinheiro")
 
   return {
@@ -91,8 +98,11 @@ export async function resumoDoDia(loja: string, dia: string) {
     abertura,
     sangrias,
     suprimentos,
+    devolucoes,
     vendasDinheiro,
-    esperado: arredondar(abertura + vendasDinheiro - sangrias + suprimentos),
+    esperado: arredondar(
+      abertura + vendasDinheiro - sangrias + suprimentos - devolucoes
+    ),
     vendasPix: por("pix"),
     vendasDebito: por("debito"),
     vendasCredito: por("credito"),
@@ -336,6 +346,7 @@ export async function fecharCaixa(entrada: {
         vendasDinheiro: resumo.vendasDinheiro,
         sangrias: resumo.sangrias,
         suprimentos: resumo.suprimentos,
+        devolucoes: resumo.devolucoes,
         vendasLink: resumo.vendasLink,
         esperado: resumo.esperado,
         contado,

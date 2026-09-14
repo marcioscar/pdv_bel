@@ -81,6 +81,11 @@ model Loja {
   /// CNPJs diferentes, então a carga entre elas precisa de nota — e a nota
   /// precisa dizer que é transferência, não venda ao consumidor.
   cfopTransferencia      String?
+  /// O CFOP da nota de ENTRADA que documenta a mercadoria que o cliente trouxe
+  /// de volta. 1202 é devolução de venda de mercadoria adquirida de terceiros,
+  /// dentro do estado; 2202 para fora. Cadastrável como os outros porque a
+  /// escolha é do contador — o sistema só repete o que estiver aqui.
+  cfopDevolucao          String?
   /// CSOSN padrão do Simples: 102 (tributada sem permissão de crédito).
   csosnPadrao       String?
 
@@ -249,7 +254,7 @@ model MovimentoEstoque {
   /// somaria num número que não corresponde a prateleira nenhuma.
   loja       String
   criadoEm   DateTime @default(now())
-  /// "venda" | "entrada" | "ajuste" | "estorno"
+  /// "venda" | "entrada" | "ajuste" | "estorno" | "uso" | "devolucao"
   /// | "transferencia_saida" | "transferencia_entrada"
   tipo       String
   quantidade Float
@@ -280,6 +285,10 @@ model MovimentoEstoque {
   /// porque é o que o fornecedor escreveu no papel — há AF com letra e traço.
   autorizacaoFaturamentoId     String? @db.ObjectId
   autorizacaoFaturamentoNumero String?
+  /// A devolução que trouxe esta mercadoria de volta. Mesmo padrão dos outros
+  /// documentos: poder navegar do movimento até o papel que o explica.
+  devolucaoId     String? @db.ObjectId
+  devolucaoNumero Int?
   /// O custo unitário real desta entrada — produto mais impostos que somam por
   /// fora (IPI, ICMS-ST) mais o rateio de frete e outras despesas da nota,
   /// calculado na conciliação; na AF, o que o gerente digitou do papel. Não
@@ -292,6 +301,7 @@ model MovimentoEstoque {
   @@index([pedidoDeCompraId])
   @@index([notaFiscalRecebidaId])
   @@index([autorizacaoFaturamentoId])
+  @@index([devolucaoId])
   @@index([loja, criadoEm])
   @@index([vendaId])
   @@map("movimentos_estoque")
@@ -591,6 +601,70 @@ type TransferenciaItem {
   recebida  Float?
 }
 
+/// Mercadoria que o cliente trouxe de volta depois que a venda virou fato.
+///
+/// Não é o mesmo que cancelar a venda, e a diferença é o prazo. Cancelamento
+/// diz "a venda não aconteceu", e a SEFAZ só aceita isso por minutos na NFC-e e
+/// 24 horas na NF-e. Passado o prazo, a nota é fato consumado: a venda
+/// aconteceu, e o que se registra é o retorno de parte dela — com nota própria,
+/// de entrada, referenciando a original.
+///
+/// PARCIAL de propósito: o cliente leva cinco coisas e traz uma. Quanto já
+/// voltou de cada venda é derivado desta coleção (soma dos itens por produto),
+/// e não um campo na venda — dois números para a mesma verdade acabam
+/// discordando, e aqui o que eles guardariam é permissão para devolver de novo
+/// o que já voltou.
+model Devolucao {
+  id     String @id @default(auto()) @map("_id") @db.ObjectId
+  /// Sequência por loja, como a venda: quem confere o caixa confere de uma loja.
+  numero Int
+  loja   String
+
+  /// A venda de onde a mercadoria saiu. Obrigatória: devolução sem venda é
+  /// entrada de mercadoria, e para isso existe a tela de estoque.
+  vendaId     String @db.ObjectId
+  vendaNumero Int
+
+  /// Retrato do cliente no dia, como na venda — o cadastro pode mudar depois.
+  clienteId      String? @db.ObjectId
+  clienteNome    String?
+  clienteCpfCnpj String?
+
+  itens DevolucaoItem[]
+  total Float
+
+  /// Por que voltou. Obrigatório pela mesma razão do uso da loja: é a única
+  /// explicação que o lançamento carrega, e "voltaram 3" sem motivo é
+  /// indistinguível de erro de digitação seis meses depois.
+  motivo String
+
+  criadaEm  DateTime @default(now())
+  operador  String
+
+  /// A saída de caixa que devolveu o dinheiro, quando houve. Campo, e não só o
+  /// número na observação: é o que liga o documento ao dinheiro que saiu da
+  /// gaveta, e o que permite ir de um ao outro.
+  movimentoCaixaId String? @db.ObjectId
+
+  @@unique([loja, numero])
+  @@index([vendaId])
+  @@index([loja, criadaEm])
+  @@map("devolucoes")
+}
+
+/// O preço é o PRATICADO NA VENDA, copiado do item dela — não o do catálogo de
+/// hoje. Devolver pelo preço de hoje devolveria dinheiro que o cliente não
+/// pagou, para mais ou para menos.
+type DevolucaoItem {
+  produtoId  String @db.ObjectId
+  codigo     String
+  descricao  String
+  unidade    String
+  preco      Float
+  quantidade Float
+  subtotal   Float
+}
+
 /// Dinheiro que entra ou sai da gaveta sem ser venda: o troco do início do dia,
 /// a sangria para o banco, o reforço de troco no meio da tarde.
 ///
@@ -610,12 +684,18 @@ model MovimentoCaixa {
   dia      String
   criadoEm DateTime @default(now())
 
-  /// "abertura" | "sangria" | "suprimento"
+  /// "abertura" | "sangria" | "suprimento" | "devolucao"
   ///
   /// O valor é sempre POSITIVO e o tipo diz a direção. Guardar sangria como
   /// negativo pareceria elegante e faria a soma esconder o que aconteceu: dois
   /// lançamentos que se anulam somem, e some com eles a pergunta de por que
   /// houve dois.
+  ///
+  /// "devolucao" é dinheiro que sai da gaveta para a mão do cliente que trouxe
+  /// mercadoria de volta. Tipo próprio, e não sangria: sangria é dinheiro que
+  /// sai da loja para o banco ou para o cofre, e continua sendo da loja. Este
+  /// é faturamento que se desfaz — e quem confere o caixa precisa ler a
+  /// diferença, não descobri-la lendo observação.
   tipo     String
   valor    Float
   operador String
@@ -660,6 +740,10 @@ model FechamentoCaixa {
   vendasDinheiro Float
   sangrias     Float
   suprimentos  Float
+  /// O que voltou para a mão do cliente em espécie. `@default(0)` porque os
+  /// fechamentos anteriores a este campo não tinham devolução nenhuma — e um
+  /// documento assinado não se reescreve para caber num campo novo.
+  devolucoes   Float @default(0)
   esperado     Float
   /// O que a pessoa contou na gaveta. É o único número que o sistema não sabe.
   contado      Float

@@ -11,6 +11,7 @@ import {
   diferencaRelevante,
   retiradaDaGaveta,
   rotuloDoMovimento,
+  sinalDoMovimento,
   SANGRIA_SEM_AUTORIZACAO,
   tipoDeCaixaValido,
   TIPOS_DE_MOVIMENTO_DE_CAIXA,
@@ -320,6 +321,9 @@ export default function Fechamento({ loaderData, actionData }: Route.ComponentPr
               {resumo.suprimentos > 0 ? (
                 <Linha rotulo="Reforços" valor={resumo.suprimentos} />
               ) : null}
+              {resumo.devolucoes > 0 ? (
+                <Linha rotulo="Devoluções" valor={-resumo.devolucoes} />
+              ) : null}
               {resumo.sangrias > 0 ? (
                 <Linha rotulo="Sangrias" valor={-resumo.sangrias} />
               ) : null}
@@ -595,14 +599,23 @@ export default function Fechamento({ loaderData, actionData }: Route.ComponentPr
                         {m.autorizadaPor ? ` · liberada por ${m.autorizadaPor}` : ""}
                       </span>
                     </span>
+                    {/*
+                      O sinal sai de `sinalDoMovimento`, e não de uma comparação
+                      com "sangria" escrita aqui. O valor é sempre positivo e é
+                      o TIPO que diz a direção — perguntar pelo tipo específico
+                      dava certo enquanto só a sangria saía da gaveta, e a
+                      devolução ao cliente apareceu com "+" no dia em que
+                      nasceu. Um tipo novo que sai não pode depender de alguém
+                      lembrar de vir consertar esta linha.
+                    */}
                     <span
                       className={cn(
                         "shrink-0 font-mono tabular-nums",
-                        m.tipo === "sangria" && !m.canceladoEm && "text-destructive",
+                        sinalDoMovimento(m.tipo) < 0 && !m.canceladoEm && "text-destructive",
                         m.canceladoEm && "line-through"
                       )}
                     >
-                      {m.tipo === "sangria" ? "−" : "+"}
+                      {sinalDoMovimento(m.tipo) < 0 ? "−" : "+"}
                       {moeda(m.valor)}
                     </span>
                     {/* O comprovante que acompanha o dinheiro. Vale para a

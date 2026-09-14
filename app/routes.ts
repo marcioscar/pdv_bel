@@ -21,6 +21,10 @@ export default [
   route("vendas/:vendaId/boleto.pdf", "routes/boleto.tsx"),
   route("pedidos-de-compra/:pedidoId/impressao", "routes/pedido-compra.impressao.tsx"),
   route("vendas/:vendaId/cupom", "routes/cupom.tsx"),
+  // A devolução nasce na venda — é dela que vêm os itens, o preço praticado e a
+  // chave da nota a referenciar. Fica no turno porque acontece com o cliente na
+  // frente; a guarda de gerente é cobrada na própria rota.
+  route("vendas/:vendaId/devolucao", "routes/devolucao.tsx"),
   // O DANFE servido daqui: o caixa imprime buscando do próprio sistema, e o
   // navegador não tem como buscar direto na Focus.
   route("notas/:notaId/danfe", "routes/nota.danfe.tsx"),
@@ -55,6 +59,9 @@ export default [
       route("afs/nova", "routes/admin.afs.nova.tsx"),
       route("afs/:afId", "routes/admin.afs.$afId.tsx"),
       route("vendas", "routes/admin.vendas.tsx"),
+      // A lista mora aqui, e não no turno: registrar a devolução é com o
+      // cliente na frente, conferi-las e emitir a nota é trabalho sentado.
+      route("devolucoes", "routes/admin.devolucoes.tsx"),
       route("caixas", "routes/admin.caixas.tsx"),
       route("caixas/:fechamentoId", "routes/admin.caixa.tsx"),
       route("contas-a-receber", "routes/admin.contas-a-receber.tsx"),

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { data, useFetcher, useRevalidator, useSearchParams } from "react-router"
-import { FileText, Loader2, Printer, Receipt } from "lucide-react"
+import { data, useFetcher, useNavigate, useRevalidator, useSearchParams } from "react-router"
+import { FileText, Loader2, Printer, Receipt, Repeat, Undo2 } from "lucide-react"
 
 import type { Route } from "./+types/vendas"
 import { Topo } from "~/components/pdv/topo"
@@ -264,6 +264,13 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
   const { eu, filtro, vendedores, vendas, total, foraDoPeriodo, paginas, resumo, notas, podeEmitirNota } =
     loaderData
   const podeCancelar = ehGerente(eu.papel)
+  const navigate = useNavigate()
+  /*
+   * Quando o cancelamento em curso é uma TROCA: ao terminar, o carrinho daquela
+   * venda volta para o caixa. Guardado à parte do `confirmando` porque as duas
+   * coisas passam pelo mesmo diálogo — o que muda é para onde se vai depois.
+   */
+  const [trocando, setTrocando] = useState<string | null>(null)
 
   const [params, setParams] = useSearchParams()
 
@@ -376,7 +383,20 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
       resposta.ok ? resposta.mensagem : resposta.erro,
       resposta.ok ? "sucesso" : "erro"
     )
-  }, [fetcher.state, fetcher.data, avisar])
+
+    /*
+     * A troca só continua se o cancelamento passou. Quando a SEFAZ recusa —
+     * quase sempre prazo vencido —, a venda fica de pé e mandar o operador para
+     * o caixa com o carrinho pronto seria convidá-lo a vender de novo uma coisa
+     * que não foi desfeita. O aviso da recusa já está na tela; daqui o caminho
+     * é o botão Devolver.
+     */
+    const paraTrocar = trocando
+    setTrocando(null)
+    if (paraTrocar && resposta.ok && resposta.tipo !== "nota") {
+      navigate(`/?repetir=${paraTrocar}`)
+    }
+  }, [fetcher.state, fetcher.data, avisar, trocando, navigate])
 
   /**
    * Emite a nota da venda selecionada.
@@ -429,6 +449,33 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
     })
     fetcher.submit({ vendaId: ativa.id, acao: "cobranca" }, { method: "post" })
   }, [ativa, avisar, cancelando, fetcher])
+
+  /**
+   * A troca: cancela a venda e devolve o carrinho ao caixa.
+   *
+   * Não é operação nova — é o cancelamento de sempre seguido do `?repetir=`,
+   * que já existia para "manda o de sempre". Aqui ele serve a outra pergunta e
+   * é a mesma mecânica: o carrinho volta, o operador tira o que o cliente
+   * trouxe e põe o que ele vai levar, e a diferença se acerta no fechamento
+   * como em qualquer venda.
+   *
+   * Vale enquanto a SEFAZ aceitar cancelar. Passado o prazo, quem serve é a
+   * devolução — e é o cancelamento que recusa, com a mensagem da SEFAZ, em vez
+   * de este botão fingir que sabe o prazo de cor.
+   */
+  const trocar = useCallback(
+    (vendaId: string) => {
+      if (cancelando) return
+      setTrocando(vendaId)
+      setConfirmando(vendaId)
+    },
+    [cancelando]
+  )
+
+  const devolver = useCallback(
+    (vendaId: string) => navigate(`/vendas/${vendaId}/devolucao`),
+    [navigate]
+  )
 
   const pedirCancelamento = useCallback(() => {
     if (!ativa || cancelando) return
@@ -892,8 +939,48 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                     ? `Ver ${ativa.cobrancas.length} boletos`
                     : "Ver boleto"}
               </Button>
-              {/* Operador não vê o botão de cancelar: o que ele não pode fazer não
-                  precisa ocupar espaço no balcão. O F9 explica o motivo. */}
+              {/*
+                Devolver e trocar são as duas saídas para "o cliente voltou com a
+                mercadoria", e a diferença é o prazo.
+
+                TROCAR cancela a venda e devolve o carrinho ao caixa, para o
+                operador tirar o que voltou e pôr o que vai. Só serve enquanto a
+                SEFAZ ainda aceita cancelar — minutos na NFC-e, 24 horas na NF-e.
+
+                DEVOLVER é para depois disso: a venda fica de pé, volta só o que
+                o cliente trouxe, e sai nota de entrada referenciando a original.
+
+                Os dois ficam ao lado do cancelar porque é a mesma pergunta que
+                traz alguém a esta tela — achar a venda e desfazer parte dela.
+              */}
+              {podeCancelar ? (
+                <>
+                  <Button
+                    type="button"
+                    tabIndex={-1}
+                    variant="outline"
+                    size="sm"
+                    disabled={!ativa || Boolean(ativa?.canceladaEm) || cancelando}
+                    title="Cancela esta venda e devolve os itens ao caixa, para refazer com o que o cliente leva"
+                    onClick={() => ativa && trocar(ativa.id)}
+                    className="rounded-lg"
+                  >
+                    <Repeat className="size-4" /> Trocar
+                  </Button>
+                  <Button
+                    type="button"
+                    tabIndex={-1}
+                    variant="outline"
+                    size="sm"
+                    disabled={!ativa || Boolean(ativa?.canceladaEm) || cancelando}
+                    title="Registra a volta de parte da venda, com a venda de pé e nota de devolução"
+                    onClick={() => ativa && devolver(ativa.id)}
+                    className="rounded-lg"
+                  >
+                    <Undo2 className="size-4" /> Devolver
+                  </Button>
+                </>
+              ) : null}
               {podeCancelar ? (
                 <Button
                   type="button"
@@ -969,7 +1056,9 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
         >
           <div className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-xl">
             <h2 className="text-base font-semibold">
-              Cancelar a venda #{vendaConfirmando.numero}?
+              {trocando
+                ? `Trocar a venda #${vendaConfirmando.numero}?`
+                : `Cancelar a venda #${vendaConfirmando.numero}?`}
             </h2>
             <p className="mt-2 text-sm text-muted-foreground">
               {moeda(vendaConfirmando.total)} em{" "}
@@ -989,6 +1078,16 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                       : `Os ${vendaConfirmando.itens.length} itens voltam`
                   } para o estoque.`}{" "}
               A venda não é apagada — fica marcada como cancelada.
+              {trocando ? (
+                <>
+                  {" "}
+                  <b className="font-semibold text-foreground">
+                    Os itens voltam para o caixa
+                  </b>{" "}
+                  — tire o que o cliente trouxe, ponha o que ele leva e feche a venda
+                  nova.
+                </>
+              ) : null}
               {vendaConfirmando.cobrancas.length > 0 ? (
                 <>
                   {" "}
