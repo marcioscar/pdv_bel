@@ -9,6 +9,7 @@ export const TIPOS_DE_MOVIMENTO: Record<string, { rotulo: string; ajuda: string 
   venda: { rotulo: "Venda", ajuda: "Saída pelo caixa" },
   entrada: { rotulo: "Entrada", ajuda: "Mercadoria recebida do fornecedor" },
   ajuste: { rotulo: "Inventário", ajuda: "Diferença lançada até o saldo contado" },
+  uso: { rotulo: "Uso da loja", ajuda: "Consumido pela própria loja — o motivo vai na observação" },
   estorno: { rotulo: "Estorno", ajuda: "Devolução de uma saída — venda cancelada ou carga que voltou" },
   transferencia_saida: { rotulo: "Transf. saída", ajuda: "Despachada para outra loja" },
   transferencia_entrada: { rotulo: "Transf. entrada", ajuda: "Conferida na chegada" },

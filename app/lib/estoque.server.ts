@@ -6,6 +6,19 @@ export type TipoMovimento =
   | "entrada"
   | "ajuste"
   | "estorno"
+  /**
+   * Saída do que a própria loja consumiu: a sacola do balcão, o papel da
+   * limpeza, a amostra que foi para o cliente.
+   *
+   * Tipo próprio, e não um ajuste de inventário com observação: inventário é
+   * "contei e havia menos", uma diferença sem explicação. Isto é o contrário —
+   * saída conhecida, com destino declarado. Enfiar as duas no mesmo tipo faria
+   * a falta de verdade se esconder atrás de "deve ter sido uso da loja".
+   *
+   * E não é venda: não tem preço nem cliente, e o dinheiro não entrou. O que
+   * sai por aqui é custo da loja, não faturamento.
+   */
+  | "uso"
   /** Saída da loja de origem, no momento em que a carga é despachada. */
   | "transferencia_saida"
   /**
@@ -257,6 +270,61 @@ export async function registrarAjuste(
  * de trás para frente daria o saldo de cada instante ao contrário — o número
  * certo no lugar errado, que é o pior tipo de erro numa ficha.
  */
+export type ResultadoUso =
+  | { ok: true; saldo: number }
+  | { ok: false; erro: string }
+
+/**
+ * A baixa do que a loja consumiu dela mesma.
+ *
+ * O motivo é obrigatório porque é a única prova que este lançamento deixa: não
+ * há nota, não há cliente, não há documento nenhum atrás dele. "Saíram 5" sem
+ * o para quê é indistinguível de mercadoria que sumiu — e seis meses depois
+ * ninguém reconstrói de cabeça.
+ *
+ * Recusa tirar mais do que há na prateleira, pelo mesmo motivo que o caixa
+ * recusa vender sem saldo: saldo negativo estraga a conta da compra, que passa
+ * a pedir reposição de um buraco que não existe. Quando o saldo é que está
+ * errado, o caminho é o inventário — que existe para isso.
+ */
+export async function registrarUso(
+  produtoId: string,
+  loja: string,
+  quantidade: number,
+  operador: string,
+  motivo: string
+): Promise<ResultadoUso> {
+  const limpo = motivo.trim()
+  if (!limpo) return { ok: false, erro: "Diga para que é a saída" }
+
+  const saida = arredondar(quantidade)
+  if (!(saida > 0)) return { ok: false, erro: "A quantidade deve ser positiva" }
+
+  const saldo = await saldoDoProduto(produtoId, loja)
+  if (saida > saldo) {
+    return {
+      ok: false,
+      erro:
+        saldo <= 0
+          ? "Não há saldo desse produto nesta loja"
+          : `Há só ${saldo} em estoque nesta loja`,
+    }
+  }
+
+  await db.movimentoEstoque.create({
+    data: {
+      produtoId,
+      loja,
+      tipo: "uso" satisfies TipoMovimento,
+      quantidade: -saida,
+      operador,
+      observacao: `Uso da loja: ${limpo}`,
+    },
+  })
+
+  return { ok: true, saldo: arredondar(saldo - saida) }
+}
+
 export async function fichaDoProduto(produtoId: string, lojas: string[]) {
   const movimentos = await db.movimentoEstoque.findMany({
     where: { produtoId, loja: { in: lojas } },

@@ -7,7 +7,13 @@ import { cn } from "~/lib/utils";
 import { moeda, quantidade } from "~/lib/moeda";
 import { precoAplicado, type ProdutoCatalogo } from "~/lib/pdv";
 
-export type ModoComando = "busca" | "quantidade" | "desconto" | "recebido";
+export type ModoComando =
+	| "busca"
+	| "quantidade"
+	| "desconto"
+	| "recebido"
+	/** Texto, não número: o para quê da baixa de uso da loja. */
+	| "motivo";
 
 const PROMPTS: Record<ModoComando, { rotulo: string | null; dica: string }> = {
 	busca: {
@@ -20,6 +26,10 @@ const PROMPTS: Record<ModoComando, { rotulo: string | null; dica: string }> = {
 		dica: "Valor de desconto sobre o subtotal",
 	},
 	recebido: { rotulo: "Recebido R$", dica: "Valor entregue pelo cliente" },
+	motivo: {
+		rotulo: "Para quê",
+		dica: "Onde vai ser usado — balcão, limpeza, amostra…",
+	},
 };
 
 type Props = {
@@ -56,14 +66,14 @@ export function BarraComando({
 	previa = null,
 }: Props) {
 	const prompt = PROMPTS[modo];
-	const numerico = modo !== "busca";
+	const numerico = modo !== "busca" && modo !== "motivo";
 
 	return (
 		<div className='relative'>
 			<div
 				className={cn(
 					"flex items-center gap-3 border-b border-border px-5 py-3 transition-colors",
-					numerico ? "bg-primary/5" : "bg-muted/40",
+					modo === "busca" ? "bg-muted/40" : "bg-primary/5",
 				)}>
 				{prompt.rotulo ? (
 					<span className='shrink-0 text-sm font-semibold text-primary'>

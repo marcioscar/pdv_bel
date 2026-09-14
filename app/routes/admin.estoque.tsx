@@ -12,6 +12,7 @@ import {
   movimentosRecentes,
   registrarAjuste,
   registrarEntrada,
+  registrarUso,
   saldosPorProduto,
 } from "~/lib/estoque.server"
 import { SOMENTE_ATIVOS } from "~/lib/produtos.server"
@@ -60,11 +61,14 @@ export async function action({ request }: Route.ActionArgs) {
 
   // Entrada tem nota por trás e é trabalho de quem recebe mercadoria. Inventário
   // reescreve o saldo para o número que a pessoa diz ter contado — é por onde uma
-  // falta desaparece sem deixar rastro, então fica com o gerente.
+  // falta desaparece sem deixar rastro, então fica com o gerente. A baixa de uso
+  // tira do saldo sem venda e sem documento, e fica com ele pela mesma razão.
   const eu =
     modo === "ajuste"
       ? await exigirGerente(request, "inventario")
-      : await exigirUsuario(request)
+      : modo === "uso"
+        ? await exigirGerente(request, "baixaDeUso")
+        : await exigirUsuario(request)
 
   if (!OBJECT_ID.test(produtoId)) {
     return data({ ok: false as const, erro: "Produto inválido" }, { status: 400 })
@@ -72,7 +76,7 @@ export async function action({ request }: Route.ActionArgs) {
   if (!Number.isFinite(valor)) {
     return data({ ok: false as const, erro: "Quantidade inválida" }, { status: 400 })
   }
-  if (modo !== "entrada" && modo !== "ajuste") {
+  if (modo !== "entrada" && modo !== "ajuste" && modo !== "uso") {
     return data({ ok: false as const, erro: "Operação inválida" }, { status: 400 })
   }
 
@@ -92,6 +96,18 @@ export async function action({ request }: Route.ActionArgs) {
     }
   }
 
+  if (modo === "uso") {
+    const motivo = String(form.get("motivo") ?? "")
+    const resultado = await registrarUso(produtoId, eu.loja, valor, eu.nome, motivo)
+    if (!resultado.ok) {
+      return data({ ok: false as const, erro: resultado.erro }, { status: 400 })
+    }
+    return {
+      ok: true as const,
+      mensagem: `Uso da loja: ${valor} ${produto.unidade} · ${produto.descricao} · restam ${resultado.saldo}`,
+    }
+  }
+
   if (valor < 0) {
     return data({ ok: false as const, erro: "O saldo contado não pode ser negativo" }, { status: 400 })
   }
@@ -106,7 +122,16 @@ export async function action({ request }: Route.ActionArgs) {
   }
 }
 
-type Modo = "entrada" | "ajuste"
+type Modo = "entrada" | "ajuste" | "uso"
+
+/** A ordem que o F4 percorre. Entrada primeiro: é o que se faz todo dia. */
+const MODOS_DO_GERENTE: Modo[] = ["entrada", "ajuste", "uso"]
+
+const ROTULO_DO_MODO: Record<Modo, string> = {
+  entrada: "Entrada de",
+  ajuste: "Saldo contado de",
+  uso: "Uso da loja —",
+}
 
 export default function Estoque({ loaderData }: Route.ComponentProps) {
   const { eu, produtos, movimentos } = loaderData
@@ -116,6 +141,9 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
   const [indiceResultado, setIndiceResultado] = useState(0)
   const [selecionado, setSelecionado] = useState<ProdutoCatalogo | null>(null)
   const [modo, setModo] = useState<Modo>("entrada")
+  // A quantidade já informada na baixa de uso, enquanto se digita o motivo. É o
+  // que separa os dois passos: com ela preenchida, a barra pede o para quê.
+  const [quantidadeUso, setQuantidadeUso] = useState<number | null>(null)
   const [aviso, setAviso] = useState<{ texto: string; tipo: "erro" | "sucesso" } | null>(null)
 
   const campo = useRef<HTMLInputElement>(null)
@@ -137,6 +165,10 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
   }, [selecionado, comando, indice, produtos])
 
   useEffect(() => setIndiceResultado(0), [entrada])
+
+  // Trocar de modo ou de produto recomeça a baixa: a quantidade digitada era
+  // daquele produto naquele modo, e carregá-la adiante lançaria outra coisa.
+  useEffect(() => setQuantidadeUso(null), [modo, selecionado])
 
   const focar = useCallback(() => campo.current?.focus(), [])
   useEffect(() => focar(), [focar, selecionado])
@@ -160,6 +192,7 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
       avisar(fetcher.data.mensagem, "sucesso")
       setSelecionado(null)
       setEntrada("")
+      setQuantidadeUso(null)
     } else {
       avisar(fetcher.data.erro, "erro")
     }
@@ -197,9 +230,49 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
       return
     }
 
+    // Terceiro passo, só na baixa de uso: o para quê. Vem depois da quantidade
+    // porque é o campo que se pode esquecer, e esquecê-lo aqui trava o envio em
+    // vez de gravar uma saída sem explicação.
+    if (modo === "uso" && quantidadeUso !== null) {
+      const motivo = entrada.trim()
+      if (!motivo) {
+        avisar("Diga para que é a saída — balcão, limpeza, amostra…", "erro")
+        return
+      }
+      fetcher.submit(
+        {
+          produtoId: selecionado.id,
+          modo,
+          valor: String(quantidadeUso),
+          motivo,
+        },
+        { method: "post" }
+      )
+      return
+    }
+
     const valor = interpretarValor(entrada)
     if (valor === null) {
       avisar("Quantidade inválida", "erro")
+      return
+    }
+
+    if (modo === "uso") {
+      if (valor <= 0) {
+        avisar("A quantidade deve ser positiva", "erro")
+        return
+      }
+      if (valor > selecionado.estoque) {
+        avisar(
+          selecionado.estoque <= 0
+            ? "Não há saldo desse produto nesta loja"
+            : `Há só ${formatarQuantidade(selecionado.estoque)} ${selecionado.unidade} nesta loja`,
+          "erro"
+        )
+        return
+      }
+      setQuantidadeUso(valor)
+      setEntrada("")
       return
     }
 
@@ -216,6 +289,7 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
     indiceResultado,
     modo,
     produtos,
+    quantidadeUso,
     resultados,
     selecionado,
   ])
@@ -235,6 +309,13 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
           return
         case "Escape":
           evento.preventDefault()
+          // Um passo de cada vez: no meio da baixa de uso, Esc volta para a
+          // quantidade em vez de jogar fora o produto já escolhido.
+          if (quantidadeUso !== null) {
+            setQuantidadeUso(null)
+            setEntrada("")
+            return
+          }
           if (selecionado) setSelecionado(null)
           setEntrada("")
           return
@@ -249,7 +330,11 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
             avisar(ACOES_DE_GERENTE.inventario, "erro")
             return
           }
-          setModo((atual) => (atual === "entrada" ? "ajuste" : "entrada"))
+          setModo((atual) => {
+            const i = MODOS_DO_GERENTE.indexOf(atual)
+            return MODOS_DO_GERENTE[(i + 1) % MODOS_DO_GERENTE.length]
+          })
+          setEntrada("")
           return
       }
 
@@ -266,7 +351,7 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
 
     window.addEventListener("keydown", aoTeclar)
     return () => window.removeEventListener("keydown", aoTeclar)
-  }, [avisar, confirmar, podeInventariar, resultados.length, selecionado])
+  }, [avisar, confirmar, podeInventariar, quantidadeUso, resultados.length, selecionado])
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -283,7 +368,7 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
           {selecionado ? (
             <div className="flex items-center gap-3 border-b border-border bg-primary/5 px-5 py-3">
               <span className="shrink-0 text-sm font-semibold text-primary">
-                {modo === "entrada" ? "Entrada de" : "Saldo contado de"}
+                {ROTULO_DO_MODO[modo]}
               </span>
               <span className="min-w-0 flex-1 truncate text-sm font-medium">
                 {selecionado.descricao}
@@ -291,6 +376,11 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
               <Badge variant="outline" className="shrink-0 font-mono text-[10px]">
                 {selecionado.unidade}
               </Badge>
+              {quantidadeUso !== null ? (
+                <Badge variant="secondary" className="shrink-0 font-mono text-[10px]">
+                  −{formatarQuantidade(quantidadeUso)}
+                </Badge>
+              ) : null}
               <span className="shrink-0 font-mono text-xs text-muted-foreground">
                 saldo atual {formatarQuantidade(selecionado.estoque)}
               </span>
@@ -299,7 +389,13 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
 
           <BarraComando
             ref={campo}
-            modo={selecionado ? "quantidade" : "busca"}
+            modo={
+              !selecionado
+                ? "busca"
+                : quantidadeUso !== null
+                  ? "motivo"
+                  : "quantidade"
+            }
             valor={entrada}
             onValorChange={setEntrada}
             onBlur={() => requestAnimationFrame(focar)}
@@ -402,16 +498,28 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
                 Entrada
               </Button>
               {podeInventariar ? (
-                <Button
-                  type="button"
-                  tabIndex={-1}
-                  variant={modo === "ajuste" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setModo("ajuste")}
-                  className="rounded-lg"
-                >
-                  Inventário
-                </Button>
+                <>
+                  <Button
+                    type="button"
+                    tabIndex={-1}
+                    variant={modo === "ajuste" ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => setModo("ajuste")}
+                    className="rounded-lg"
+                  >
+                    Inventário
+                  </Button>
+                  <Button
+                    type="button"
+                    tabIndex={-1}
+                    variant={modo === "uso" ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => setModo("uso")}
+                    className="rounded-lg"
+                  >
+                    Uso da loja
+                  </Button>
+                </>
               ) : null}
               <span className="ml-1 text-xs text-muted-foreground">
                 {podeInventariar ? (
@@ -419,7 +527,9 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
                     <Kbd>F4</Kbd> alterna ·{" "}
                     {modo === "entrada"
                       ? "soma ao saldo"
-                      : "grava a diferença até o saldo contado"}
+                      : modo === "ajuste"
+                        ? "grava a diferença até o saldo contado"
+                        : "sai do saldo sem venda — a sacola do balcão, o papel da limpeza"}
                   </>
                 ) : (
                   "a entrada soma ao saldo · inventário é do gerente"
@@ -439,7 +549,11 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
               </span>
             ) : (
               <span className="text-xs text-muted-foreground">
-                {gravando ? "gravando…" : "Busque o produto, Enter, quantidade, Enter"}
+                {gravando
+                  ? "gravando…"
+                  : modo === "uso"
+                    ? "Busque o produto, Enter, quantidade, Enter, o para quê, Enter"
+                    : "Busque o produto, Enter, quantidade, Enter"}
               </span>
             )}
           </div>
