@@ -275,27 +275,33 @@ function Emitente({
     setForm((atual) => ({ ...atual, ...campos }))
   }
 
-  function salvar() {
-    if (gravando) return
-    fetcher.submit(
-      {
-        ...form,
-        codigo: loja.codigo,
-        emiteNotaFiscal: form.emiteNotaFiscal ? "sim" : "nao",
-      },
-      { method: "post" }
-    )
-  }
-
   const impedimentos = loja.pendencias
 
   return (
-    <section
+    /*
+     * Formulário de verdade, e não um punhado de campos com um botão que chama
+     * `fetcher.submit`. Esta tela mexe em dado fiscal — IE, CFOP, CSOSN — e o
+     * botão antigo era `type="button"` fora de qualquer `<form>`: dependia
+     * inteiramente do React estar de pé. Num dia em que o JavaScript não subiu,
+     * clicar em Salvar não fazia nada E a tela não tinha como reclamar, porque
+     * quem mostraria o erro também é o React. O gerente sai achando que salvou.
+     *
+     * Com `<fetcher.Form>` o comportamento com JavaScript é o mesmo de antes —
+     * envia sem sair da página —, e sem ele o navegador faz o POST sozinho e a
+     * rota responde. Os campos seguem controlados porque a máscara (só dígitos,
+     * quatro casas no CFOP) e o destaque da loja que emite acontecem enquanto se
+     * digita; o que muda é que o valor agora também está no `name`, que é de
+     * onde `lerEmitente` lê.
+     */
+    <fetcher.Form
+      method="post"
       className={cn(
         "rounded-xl border border-border bg-card",
         form.emiteNotaFiscal && "border-primary/40"
       )}
     >
+      <input type="hidden" name="codigo" value={loja.codigo} />
+
       <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3">
         <h2 className="text-sm font-semibold">{loja.nome}</h2>
         <Badge variant="outline" className="font-mono text-[10px]">
@@ -308,8 +314,12 @@ function Emitente({
           {loja.razaoSocial ?? "sem razão social"}
         </span>
         <label className="ml-auto flex shrink-0 cursor-pointer items-center gap-2 text-xs font-medium">
+          {/* `value="sim"` porque é isso que `lerEmitente` compara; desmarcado
+              o campo nem é enviado, o que dá o mesmo "não". */}
           <input
             type="checkbox"
+            name="emiteNotaFiscal"
+            value="sim"
             checked={form.emiteNotaFiscal}
             onChange={(e) => alterar({ emiteNotaFiscal: e.target.checked })}
             className="size-4 accent-primary"
@@ -338,6 +348,7 @@ function Emitente({
 
       <div className="grid grid-cols-12 gap-3 px-4 py-3">
         <Campo
+          nome="inscricaoEstadual"
           rotulo="Inscrição estadual"
           valor={form.inscricaoEstadual}
           onChange={(v) => alterar({ inscricaoEstadual: v.replace(/\D/g, "") })}
@@ -346,6 +357,7 @@ function Emitente({
         <div className="col-span-4">
           <Rotulo>Regime tributário</Rotulo>
           <select
+            name="regimeTributario"
             value={form.regimeTributario}
             onChange={(e) => alterar({ regimeTributario: e.target.value })}
             className="h-9 w-full rounded-lg border border-border bg-background px-2 text-sm"
@@ -359,12 +371,14 @@ function Emitente({
           </select>
         </div>
         <Campo
+          nome="serieNfce"
           rotulo="Série NFC-e"
           valor={form.serieNfce}
           onChange={(v) => alterar({ serieNfce: v.replace(/\D/g, "") })}
           className="col-span-2"
         />
         <Campo
+          nome="serieNfe"
           rotulo="Série NF-e"
           valor={form.serieNfe}
           onChange={(v) => alterar({ serieNfe: v.replace(/\D/g, "") })}
@@ -372,6 +386,7 @@ function Emitente({
         />
 
         <Campo
+          nome="cfopVendaInterna"
           rotulo="CFOP no DF"
           valor={form.cfopVendaInterna}
           onChange={(v) => alterar({ cfopVendaInterna: v.replace(/\D/g, "").slice(0, 4) })}
@@ -379,6 +394,7 @@ function Emitente({
           className="col-span-2"
         />
         <Campo
+          nome="cfopVendaInterestadual"
           rotulo="CFOP fora do DF"
           valor={form.cfopVendaInterestadual}
           onChange={(v) => alterar({ cfopVendaInterestadual: v.replace(/\D/g, "").slice(0, 4) })}
@@ -386,6 +402,7 @@ function Emitente({
           className="col-span-2"
         />
         <Campo
+          nome="cfopTransferencia"
           rotulo="CFOP transferência"
           valor={form.cfopTransferencia}
           onChange={(v) => alterar({ cfopTransferencia: v.replace(/\D/g, "").slice(0, 4) })}
@@ -393,6 +410,7 @@ function Emitente({
           className="col-span-2"
         />
         <Campo
+          nome="csosnPadrao"
           rotulo="CSOSN padrão"
           valor={form.csosnPadrao}
           onChange={(v) => alterar({ csosnPadrao: v.replace(/\D/g, "").slice(0, 4) })}
@@ -401,13 +419,13 @@ function Emitente({
         />
 
         <div className="col-span-4 flex items-end justify-end">
-          <Button type="button" size="sm" disabled={gravando} onClick={salvar} className="rounded-lg">
+          <Button type="submit" size="sm" disabled={gravando} className="rounded-lg">
             <Check className="size-4" />
             {gravando ? "Salvando…" : "Salvar"}
           </Button>
         </div>
       </div>
-    </section>
+    </fetcher.Form>
   )
 }
 
@@ -509,26 +527,27 @@ function Avisos({
           )}
         </div>
 
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={enviando || !podeCadastrar || !focus.configurada || focus.jaAvisa}
-          title={
-            podeCadastrar
-              ? "Cadastra o aviso para NF-e e NFC-e"
-              : "Cadastre a partir do sistema no ar: o segredo é o do servidor que cadastra"
-          }
-          onClick={() =>
-            fetcher.submit(
-              { acao: "avisos", url: focus.urlDoAviso, cnpj: cnpjPadrao },
-              { method: "post" }
-            )
-          }
-          className="rounded-lg"
-        >
-          {enviando ? "Cadastrando…" : focus.jaAvisa ? "Aviso cadastrado" : "Cadastrar aviso"}
-        </Button>
+        {/* Mesmo motivo do bloco da loja: o que vai para a Focus sai de um
+            formulário, não de um payload montado no clique. */}
+        <fetcher.Form method="post" className="shrink-0">
+          <input type="hidden" name="acao" value="avisos" />
+          <input type="hidden" name="url" value={focus.urlDoAviso} />
+          <input type="hidden" name="cnpj" value={cnpjPadrao} />
+          <Button
+            type="submit"
+            size="sm"
+            variant="outline"
+            disabled={enviando || !podeCadastrar || !focus.configurada || focus.jaAvisa}
+            title={
+              podeCadastrar
+                ? "Cadastra o aviso para NF-e e NFC-e"
+                : "Cadastre a partir do sistema no ar: o segredo é o do servidor que cadastra"
+            }
+            className="rounded-lg"
+          >
+            {enviando ? "Cadastrando…" : focus.jaAvisa ? "Aviso cadastrado" : "Cadastrar aviso"}
+          </Button>
+        </fetcher.Form>
       </div>
     </section>
   )
@@ -543,12 +562,15 @@ function Rotulo({ children }: { children: React.ReactNode }) {
 }
 
 function Campo({
+  nome,
   rotulo,
   valor,
   onChange,
   placeholder,
   className,
 }: {
+  /** O nome do campo no formulário — é por ele que `lerEmitente` acha o valor. */
+  nome: string
   rotulo: string
   valor: string
   onChange: (valor: string) => void
@@ -559,6 +581,7 @@ function Campo({
     <div className={className}>
       <Rotulo>{rotulo}</Rotulo>
       <Input
+        name={nome}
         value={valor}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
