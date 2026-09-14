@@ -34,7 +34,7 @@ import { diaAtras, diaDeHoje, PRIMEIRO_DIA } from "~/lib/dia"
 import { Input } from "~/components/ui/input"
 import { interpretarValor, moeda } from "~/lib/moeda"
 import { ACOES_DE_GERENTE, ehGerente } from "~/lib/permissoes"
-import { FORMAS_PAGAMENTO } from "~/lib/pdv"
+import { ehTransferenciaEntreLojas, FORMAS_PAGAMENTO } from "~/lib/pdv"
 import { useAtalhosDeSecao } from "~/lib/navegacao"
 import { useRelogio, useTema } from "~/lib/tema"
 import { cn } from "~/lib/utils"
@@ -910,7 +910,7 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
               <span className="ml-1 text-xs text-muted-foreground">
                 <Kbd>↑</Kbd> <Kbd>↓</Kbd> escolhe a venda ·{" "}
                 {podeCancelar
-                  ? "o cancelamento estorna o estoque"
+                  ? "o cancelamento estorna o estoque (menos a transferência, que não baixou nada)"
                   : "cancelamento é do gerente"}{" "}
                 {atualizadoEm ? (
                   <span className="ml-2 font-mono text-[11px] tabular-nums">
@@ -974,10 +974,21 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
             <p className="mt-2 text-sm text-muted-foreground">
               {moeda(vendaConfirmando.total)} em{" "}
               {FORMAS_PAGAMENTO.find((f) => f.id === vendaConfirmando.forma)?.rotulo}.{" "}
-              {vendaConfirmando.itens.length === 1
-                ? "O item volta"
-                : `Os ${vendaConfirmando.itens.length} itens voltam`}{" "}
-              para o estoque. A venda não é apagada — fica marcada como cancelada.
+              {/*
+                Nada volta para o estoque quando nada saiu. A transferência
+                entre lojas não baixou saldo — quem baixou foi o documento de
+                transferência —, e prometer a devolução aqui faria o gerente
+                cancelar esperando um estorno que não vem, e conferir a
+                prateleira atrás de mercadoria que nunca se moveu por esta via.
+              */}
+              {ehTransferenciaEntreLojas(vendaConfirmando.forma)
+                ? "Nada volta para o estoque: esta saída não baixou saldo — quem move a mercadoria é a transferência."
+                : `${
+                    vendaConfirmando.itens.length === 1
+                      ? "O item volta"
+                      : `Os ${vendaConfirmando.itens.length} itens voltam`
+                  } para o estoque.`}{" "}
+              A venda não é apagada — fica marcada como cancelada.
               {vendaConfirmando.cobrancas.length > 0 ? (
                 <>
                   {" "}
