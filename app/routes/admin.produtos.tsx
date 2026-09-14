@@ -5,11 +5,16 @@ import { Check, Package, PackageSearch, Plus, X } from "lucide-react"
 import type { Route } from "./+types/admin.produtos"
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
+import { Dialog } from "~/components/ui/dialog"
 import { Input } from "~/components/ui/input"
 import { Kbd } from "~/components/ui/kbd"
 import { db } from "~/lib/db.server"
 import { saldosPorProduto } from "~/lib/estoque.server"
 import { BuscaNcm } from "~/components/pdv/busca-ncm"
+import {
+  ComprasDoProduto,
+  type ProdutoDoHistorico,
+} from "~/components/pdv/compras-do-produto"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { buscarProdutos, criarIndice } from "~/lib/pdv"
 import {
@@ -112,6 +117,9 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
   const [busca, setBusca] = useState("")
   const [mostrarInativos, setMostrarInativos] = useState(false)
   const [edicao, setEdicao] = useState<EmEdicao | null>(null)
+  // Qual produto teve o histórico de compra aberto. Só o que o diálogo precisa,
+  // e não a linha inteira: quem abre de outra tela manda o mesmo punhado.
+  const [compras, setCompras] = useState<ProdutoDoHistorico | null>(null)
   const [aviso, setAviso] = useState<{ texto: string; tipo: "erro" | "sucesso" } | null>(null)
 
   const campoBusca = useRef<HTMLInputElement>(null)
@@ -343,6 +351,10 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
         </div>
       ) : null}
 
+      <Dialog open={compras !== null} onOpenChange={(aberto) => !aberto && setCompras(null)}>
+        {compras ? <ComprasDoProduto produto={compras} /> : null}
+      </Dialog>
+
       <div className="min-h-0 flex-1 overflow-y-auto">
         <table className="w-full text-sm">
           <thead className="sticky top-0 z-10 bg-card">
@@ -405,7 +417,30 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
                       </Badge>
                     ) : null}
                   </td>
-                  <td className="max-w-md px-2 py-2">{produto.descricao}</td>
+                  <td className="max-w-md px-2 py-2">
+                    {/*
+                      A descrição é o botão: é nela que se clica quando a
+                      pergunta é sobre o produto em si — "de quem eu compro
+                      isto, e por quanto". Editar e desativar continuam nos
+                      botões do fim da linha, onde ações destrutivas devem
+                      ficar longe do clique de consulta.
+                    */}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setCompras({
+                          id: produto.id,
+                          codigo: produto.codigo,
+                          descricao: produto.descricao,
+                          unidade: produto.unidade,
+                        })
+                      }
+                      title="Ver de quem já se comprou, por quanto e quando"
+                      className="text-left underline decoration-dotted decoration-muted-foreground/40 underline-offset-4 hover:decoration-foreground"
+                    >
+                      {produto.descricao}
+                    </button>
+                  </td>
                   <td className="px-2 py-2">
                     <Badge variant="outline" className="font-mono text-[10px]">
                       {produto.unidade}
@@ -491,9 +526,10 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
 
       <div className="flex items-center justify-between border-t border-border px-5 py-2.5 text-xs">
         <span className="text-muted-foreground">
-          Mostrando {encontrados.length} · <Kbd>Esc</Kbd> cancela a edição · alterar o
-          preço aqui não muda venda já registrada · produto não é apagado, é
-          desativado — o histórico depende dele
+          Mostrando {encontrados.length} · <Kbd>Esc</Kbd> cancela a edição · clique na
+          descrição para ver de quem se compra e por quanto · alterar o preço aqui
+          não muda venda já registrada · produto não é apagado, é desativado — o
+          histórico depende dele
         </span>
         {aviso ? (
           <span

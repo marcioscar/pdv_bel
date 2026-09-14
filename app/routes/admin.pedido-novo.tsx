@@ -5,7 +5,12 @@ import { ArrowLeft, Printer, Search, Send, ShoppingBag, Truck } from "lucide-rea
 import type { Route } from "./+types/admin.pedido-novo"
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
+import { Dialog } from "~/components/ui/dialog"
 import { Input } from "~/components/ui/input"
+import {
+  ComprasDoProduto,
+  type ProdutoDoHistorico,
+} from "~/components/pdv/compras-do-produto"
 import { db } from "~/lib/db.server"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { cn } from "~/lib/utils"
@@ -215,6 +220,10 @@ function MontarPedido({
     return inicial
   })
   const [entregaPrometida, setEntregaPrometida] = useState("")
+  // O produto cujo histórico de compra está aberto. Diálogo, e não navegação:
+  // o pedido em montagem só existe na memória desta tela — sair para conferir
+  // quanto se pagou da última vez perderia tudo que já foi marcado.
+  const [compras, setCompras] = useState<ProdutoDoHistorico | null>(null)
 
   const fetcher = useFetcher<typeof action>()
   const gerando = fetcher.state !== "idle"
@@ -265,6 +274,10 @@ function MontarPedido({
 
   return (
     <div className="p-4 pb-24 sm:p-6">
+      <Dialog open={compras !== null} onOpenChange={(aberto) => !aberto && setCompras(null)}>
+        {compras ? <ComprasDoProduto produto={compras} /> : null}
+      </Dialog>
+
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <Link
           to="/admin/pedido-novo"
@@ -313,6 +326,7 @@ function MontarPedido({
             quantidades={quantidades}
             onAlternar={alternar}
             onQuantidade={(id, v) => setQuantidades((q) => ({ ...q, [id]: v }))}
+            onHistorico={setCompras}
           />
         </>
       )}
@@ -366,6 +380,7 @@ function Tabela({
   quantidades,
   onAlternar,
   onQuantidade,
+  onHistorico,
 }: {
   itens: ItemDoFornecedor[]
   lojas: string[]
@@ -373,6 +388,7 @@ function Tabela({
   quantidades: Record<string, number>
   onAlternar: (produtoId: string) => void
   onQuantidade: (produtoId: string, valor: number) => void
+  onHistorico: (produto: ProdutoDoHistorico) => void
 }) {
   return (
     <>
@@ -387,6 +403,7 @@ function Tabela({
             quantidade={quantidades[item.produtoId] ?? item.sugestao}
             onAlternar={() => onAlternar(item.produtoId)}
             onQuantidade={(v) => onQuantidade(item.produtoId, v)}
+            onHistorico={() => onHistorico(doHistorico(item))}
           />
         ))}
       </ul>
@@ -427,8 +444,22 @@ function Tabela({
                     />
                   </td>
                   <td className="py-2 pr-3">
-                    <span className="font-mono text-xs text-muted-foreground">{item.codigo}</span>{" "}
-                    {item.descricao}
+                    {/*
+                      Clicar no nome abre o histórico de compra do produto —
+                      de quem mais se compra isto e por quanto. É a pergunta
+                      que aparece na hora de decidir a quantidade, e o
+                      checkbox e a caixa de quantidade continuam intactos
+                      porque o clique fica só no texto.
+                    */}
+                    <button
+                      type="button"
+                      onClick={() => onHistorico(doHistorico(item))}
+                      title="Ver de quem já se comprou, por quanto e quando"
+                      className="text-left underline decoration-dotted decoration-muted-foreground/40 underline-offset-4 hover:decoration-foreground"
+                    >
+                      <span className="font-mono text-xs text-muted-foreground">{item.codigo}</span>{" "}
+                      {item.descricao}
+                    </button>
                     {item.urgencia && item.urgencia !== "ok" ? (
                       <Badge
                         variant="outline"
@@ -510,6 +541,7 @@ function ItemCartao({
   quantidade,
   onAlternar,
   onQuantidade,
+  onHistorico,
 }: {
   item: ItemDoFornecedor
   lojas: string[]
@@ -517,6 +549,7 @@ function ItemCartao({
   quantidade: number
   onAlternar: () => void
   onQuantidade: (valor: number) => void
+  onHistorico: () => void
 }) {
   return (
     <li className={cn("rounded-xl border border-border p-3", selecionado && "bg-primary/5")}>
@@ -530,10 +563,15 @@ function ItemCartao({
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
-            <p className="text-sm leading-snug">
+            <button
+              type="button"
+              onClick={onHistorico}
+              title="Ver de quem já se comprou, por quanto e quando"
+              className="text-left text-sm leading-snug underline decoration-dotted decoration-muted-foreground/40 underline-offset-4"
+            >
               <span className="font-mono text-xs text-muted-foreground">{item.codigo}</span>{" "}
               {item.descricao}
-            </p>
+            </button>
             {item.urgencia && item.urgencia !== "ok" ? (
               <Badge
                 variant="outline"
@@ -630,6 +668,16 @@ function UltimoPedido({ item }: { item: ItemDoFornecedor }) {
       ) : null}
     </a>
   )
+}
+
+/** O punhado que o diálogo de histórico precisa, do item do catálogo. */
+function doHistorico(item: ItemDoFornecedor): ProdutoDoHistorico {
+  return {
+    id: item.produtoId,
+    codigo: item.codigo,
+    descricao: item.descricao,
+    unidade: item.unidade,
+  }
 }
 
 function Duracao({ dias }: { dias: number | null }) {
