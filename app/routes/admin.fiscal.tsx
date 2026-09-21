@@ -44,8 +44,17 @@ export async function loader({ request }: Route.LoaderArgs) {
   /*
    * Os gatilhos vêm da Focus, não do nosso banco: cadastrar é lá, e uma cópia
    * daqui divergiria calada no dia em que alguém mexesse pelo painel.
+   *
+   * Perguntados com o token de UMA loja, porque é assim que a Focus autentica:
+   * token por empresa. A escolhida é a que emite — é dela a nota que precisa do
+   * aviso. Enquanto só a matriz emitir, é a resposta dela que importa.
    */
-  const gatilhos = focusConfigurada() ? await listarGatilhos().catch(() => null) : null
+  const lojaDosAvisos =
+    lojas.find((l) => l.emiteNotaFiscal)?.codigo ?? lojas[0]?.codigo ?? ""
+  const gatilhos =
+    lojaDosAvisos && focusConfigurada(lojaDosAvisos)
+      ? await listarGatilhos(lojaDosAvisos).catch(() => null)
+      : null
   const publico = enderecoDoApp(request)
   const urlDoAviso = `${publico}/webhooks/focus/nota`
 
@@ -56,12 +65,22 @@ export async function loader({ request }: Route.LoaderArgs) {
     focus: {
       configurada: focusConfigurada(),
       ambiente: focusConfigurada() ? ambienteFocus() : null,
+      lojaDosAvisos,
       urlDoAviso,
       // null = não deu para perguntar; lista vazia = perguntou e não há nenhum.
       gatilhos:
         gatilhos?.map((g) => ({ id: g.id ?? null, url: g.url ?? "", event: g.event ?? "" })) ??
         null,
-      jaAvisa: Boolean(gatilhos?.some((g) => g.url === urlDoAviso)),
+      /*
+       * Só está pronto com os DOIS eventos. Com `some`, um gatilho de NF-e
+       * bastava para o botão dizer "aviso cadastrado" e ficar desabilitado —
+       * e a NFC-e, que é a nota do balcão e a mais frequente de todas, ficava
+       * sem callback para sempre. A nota saía autorizada na SEFAZ e continuava
+       * "processando" aqui até alguém consultar na mão.
+       */
+      jaAvisa: ["nfe", "nfce"].every((evento) =>
+        gatilhos?.some((g) => g.url === urlDoAviso && g.event === evento)
+      ),
       daquiMesmo,
     },
     lojas: lojas.map((loja) => ({
@@ -117,6 +136,9 @@ export async function action({ request }: Route.ActionArgs) {
   if (String(form.get("acao")) === "avisos") {
     const url = String(form.get("url") ?? "")
     const cnpj = String(form.get("cnpj") ?? "")
+    // O token que autentica é o da loja dona do CNPJ — vem junto do formulário
+    // pelo mesmo motivo que o CNPJ vem: os dois descrevem a mesma empresa.
+    const lojaDoAviso = String(form.get("lojaDoAviso") ?? "")
     const segredo = process.env.FOCUS_NFE_WEBHOOK_SEGREDO?.trim()
 
     if (!mesmoServidor(request, enderecoDoApp(request)) || url.includes("localhost")) {
@@ -144,7 +166,7 @@ export async function action({ request }: Route.ActionArgs) {
 
     for (const evento of ["nfe", "nfce"] as const) {
       try {
-        await criarGatilho({ evento, url, cnpj, segredo })
+        await criarGatilho({ loja: lojaDoAviso, evento, url, cnpj, segredo })
         feitos.push(evento.toUpperCase())
       } catch (erro) {
         const mensagem = erro instanceof Error ? erro.message : "falha"
@@ -201,7 +223,11 @@ export default function AdminFiscal({ loaderData }: Route.ComponentProps) {
           ))}
         </div>
 
-        <Avisos focus={focus} cnpjPadrao={lojas.find((l) => l.emiteNotaFiscal)?.cnpj ?? lojas[0]?.cnpj ?? ""} aoSalvar={setAviso} />
+        <Avisos
+          focus={focus}
+          cnpjPadrao={lojas.find((l) => l.emiteNotaFiscal)?.cnpj ?? lojas[0]?.cnpj ?? ""}
+          aoSalvar={setAviso}
+        />
 
         <div className="mt-6 rounded-lg border border-border bg-muted/30 px-4 py-3 text-xs text-muted-foreground">
           <p className="font-medium text-foreground">Como está o catálogo</p>
@@ -463,6 +489,7 @@ function Avisos({
     urlDoAviso: string
     gatilhos: Array<{ id: number | null; url: string; event: string }> | null
     jaAvisa: boolean
+    lojaDosAvisos: string
     daquiMesmo: boolean
   }
   cnpjPadrao: string
@@ -509,7 +536,7 @@ function Avisos({
             ? focus.ambiente === "producao"
               ? "As notas emitidas daqui têm valor fiscal."
               : "Ambiente de testes: as notas não têm valor fiscal."
-            : "Configure FOCUS_NFE_TOKEN_HOMOLOGACAO no .env."}
+            : "Nenhum token da Focus configurado no ambiente."}
         </span>
       </div>
 
@@ -531,8 +558,21 @@ function Avisos({
             </p>
           ) : (
             <p className="mt-1 text-xs text-muted-foreground">
-              Ainda não cadastrado. Sem ele, a nota só se atualiza quando alguém abre
-              a tela de Vendas.
+              {/* Qual evento falta, e não só "falta algo": com NF-e cadastrada e
+                  NFC-e não, quem lê "ainda não cadastrado" vai procurar o que
+                  já está lá. A do balcão é a NFC-e. */}
+              {(() => {
+                const faltando = (["nfe", "nfce"] as const).filter(
+                  (evento) =>
+                    !focus.gatilhos?.some(
+                      (g) => g.url === focus.urlDoAviso && g.event === evento
+                    )
+                )
+                return faltando.length === 2
+                  ? "Ainda não cadastrado."
+                  : `Falta o de ${faltando.map((e) => e.toUpperCase()).join(" e ")} — o outro já está.`
+              })()}{" "}
+              Sem ele, a nota só se atualiza quando alguém abre a tela de Vendas.
               {podeCadastrar ? "" : " Cadastre pelo sistema no ar, não daqui."}
             </p>
           )}
@@ -544,6 +584,7 @@ function Avisos({
           <input type="hidden" name="acao" value="avisos" />
           <input type="hidden" name="url" value={focus.urlDoAviso} />
           <input type="hidden" name="cnpj" value={cnpjPadrao} />
+          <input type="hidden" name="lojaDoAviso" value={focus.lojaDosAvisos} />
           <Button
             type="submit"
             size="sm"

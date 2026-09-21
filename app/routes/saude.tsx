@@ -5,7 +5,7 @@ import {
   chavePixConfigurada,
   interConfigurado,
 } from "~/lib/inter.server"
-import { ambienteFocus, focusConfigurada } from "~/lib/focus.server"
+import { ambienteFocus, focusConfigurada, origemDoToken, variavelDoToken } from "~/lib/focus.server"
 import { certificadoSefazDaLoja, sefazConfigurado } from "~/lib/sefaz.server"
 import { diagnosticoSessao } from "~/lib/sessao.server"
 import { diagnosticoTelegram } from "~/lib/telegram.server"
@@ -105,10 +105,34 @@ export async function loader(_: Route.LoaderArgs) {
       return falta
     }
 
+    const ambiente = ambienteFocus()
+
     fiscal = {
       // "homologacao" = nota de teste, sem valor. "producao" = nota de verdade.
-      ambiente: ambienteFocus(),
-      tokenConfigurado: focusConfigurada(),
+      ambiente,
+      /*
+       * O token da Focus é POR EMPRESA, então "está configurado" é uma pergunta
+       * por loja. Uma linha só diria "sim" com o token da matriz e esconderia
+       * que as outras três não emitem — e isso só apareceria no balcão.
+       *
+       * Vai o NOME da variável que falta, não o valor de nenhuma: é o que
+       * transforma "está faltando algo" em uma linha para colar no painel.
+       */
+      tokens: Object.fromEntries(
+        lojas.map((l) => {
+          const origem = origemDoToken(l.codigo, ambiente)
+          return [
+            l.codigo,
+            origem === "propria"
+              ? "ok"
+              : origem === "reserva"
+                ? // Vai emitir com o token de outra empresa: funciona enquanto
+                  // houver uma empresa só na conta, e recusa quando não houver.
+                  `sem token próprio — usando o geral; cadastre ${variavelDoToken(l.codigo, ambiente)}`
+                : `FALTA ${variavelDoToken(l.codigo, ambiente)}`,
+          ]
+        })
+      ),
       // Sem ele a Focus não consegue avisar quando a SEFAZ responde, e a nota
       // fica "processando" até alguém consultar na mão.
       avisoDaFocus: Boolean(process.env.FOCUS_NFE_WEBHOOK_SEGREDO),

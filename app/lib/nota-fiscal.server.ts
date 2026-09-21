@@ -391,7 +391,7 @@ export async function emitirDaVenda(
   })
 
   try {
-    const resposta = await emitirNota(modelo, ref, payload)
+    const resposta = await emitirNota(loja.codigo, modelo, ref, payload)
     const dados = daResposta(resposta)
 
     await db.notaFiscalEmitida.update({ where: { id: nota.id }, data: dados })
@@ -432,7 +432,7 @@ export async function atualizarStatusDaNota(notaId: string) {
   if (!nota) return
 
   try {
-    const resposta = await consultarNota(nota.modelo as ModeloNota, nota.ref)
+    const resposta = await consultarNota(nota.loja, nota.modelo as ModeloNota, nota.ref)
     await db.notaFiscalEmitida.update({ where: { id: notaId }, data: daResposta(resposta) })
   } catch (erro) {
     // Focus fora do ar não é motivo para marcar a nota como recusada: o status
@@ -499,7 +499,7 @@ export async function desfazerNotaDaVenda(
   const motivo = justificativa.trim().padEnd(15, ".")
 
   try {
-    const resposta = await cancelarNota(nota.modelo as ModeloNota, nota.ref, motivo)
+    const resposta = await cancelarNota(nota.loja, nota.modelo as ModeloNota, nota.ref, motivo)
     await db.notaFiscalEmitida.update({
       where: { id: nota.id },
       data: { ...daResposta(resposta), status: "cancelado" },
@@ -791,7 +791,7 @@ export async function emitirDaDevolucao(
   })
 
   try {
-    const resposta = await emitirNota("nfe", ref, payload)
+    const resposta = await emitirNota(loja.codigo, "nfe", ref, payload)
     const dados = daResposta(resposta)
     await db.notaFiscalEmitida.update({ where: { id: nota.id }, data: dados })
     return { ok: true, notaId: nota.id, status: dados.status }
