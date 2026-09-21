@@ -164,7 +164,7 @@ export default function AdminInicio({ loaderData }: Route.ComponentProps) {
           <Cartao
             className="mt-4"
             titulo="Curva ABC — os 10 maiores por valor"
-            apoio={`${abc.faixas.A} produtos fazem 80% do valor · ${abc.produtos} no total`}
+            apoio={`${abc.faixas.A.produtos} produtos fazem 80% do valor · ${abc.produtos} no total`}
             acao={
               <Button
                 type="button"

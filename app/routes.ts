@@ -68,6 +68,9 @@ export default [
       route("contas-a-receber", "routes/admin.contas-a-receber.tsx"),
       route("autorizacoes", "routes/admin.autorizacoes.tsx"),
       route("relatorios", "routes/admin.relatorios.tsx"),
+      // Rota irmã, não filha: o relatório de faturamento não é um layout, e
+      // aninhar faria a ABC aparecer dentro dele.
+      route("relatorios/abc", "routes/admin.relatorios.abc.tsx"),
       route("usuarios", "routes/admin.usuarios.tsx"),
       route("certificados", "routes/admin.certificados.tsx"),
     ]),

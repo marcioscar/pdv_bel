@@ -142,6 +142,20 @@ export type LinhaAbc = {
  * carrega o significado.
  */
 /**
+ * O valor da ponta da barra, curto o bastante para caber ao lado dela.
+ *
+ * Tem três faixas porque um "k" arredondado só serve nos milhares grandes: na
+ * faixa C toda linha vale entre mil e dois mil, e `Math.round(v / 1000)`
+ * escrevia "1k" em todas as dez — dez barras de tamanhos visivelmente
+ * diferentes com o mesmo número ao lado.
+ */
+function emMilhares(valor: number) {
+  if (valor >= 10_000) return `${Math.round(valor / 1000)}k`
+  if (valor >= 1_000) return `${(valor / 1000).toFixed(1).replace(".", ",")}k`
+  return String(Math.round(valor))
+}
+
+/**
  * O rótulo de cada barra da ABC: descrição em cima, código embaixo.
  *
  * Duas linhas porque é o código que se digita no caixa e se procura no
@@ -249,7 +263,7 @@ export function GraficoAbc({ linhas }: { linhas: LinhaAbc[] }) {
             position="right"
             offset={6}
             className="fill-muted-foreground text-[10px] tabular-nums"
-            formatter={(v) => `${Math.round(Number(v) / 1000)}k`}
+            formatter={(v) => emMilhares(Number(v))}
           />
         </Bar>
       </BarChart>

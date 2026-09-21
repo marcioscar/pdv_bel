@@ -195,12 +195,6 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         descricao: "Liberar venda a cliente devedor e desconto acima do teto",
         somenteGerente: true,
       },
-      {
-        para: "/admin/relatorios",
-        rotulo: "Relatórios",
-        descricao: "Faturamento, formas de pagamento e a receber",
-        somenteGerente: true,
-      },
     ],
   },
   {
@@ -217,6 +211,28 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         para: "/admin/contas-a-receber",
         rotulo: "Contas a receber",
         descricao: "Boletos por vencimento: em aberto, vencidos e recebidos",
+        somenteGerente: true,
+      },
+    ],
+  },
+  {
+    // Relatório é leitura, não operação: ninguém vem aqui para fazer, vem para
+    // entender. Por isso saiu de dentro de "Vendas", onde só o de faturamento
+    // cabia — a ABC é de compra tanto quanto de venda, e o próximo relatório
+    // provavelmente não será de nenhum dos dois.
+    id: "relatorios",
+    rotulo: "Relatórios",
+    secoes: [
+      {
+        para: "/admin/relatorios/abc",
+        rotulo: "Curva ABC",
+        descricao: "Onde está o dinheiro: os produtos que sustentam a operação, por faixa",
+        somenteGerente: true,
+      },
+      {
+        para: "/admin/relatorios",
+        rotulo: "Faturamento",
+        descricao: "Faturamento, formas de pagamento e a receber",
         somenteGerente: true,
       },
     ],
