@@ -236,9 +236,9 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         somenteGerente: true,
       },
       {
-        para: "/admin/relatorios",
-        rotulo: "Faturamento",
-        descricao: "Faturamento, formas de pagamento e a receber",
+        para: "/admin/relatorios/comissao",
+        rotulo: "Comissão",
+        descricao: "Quanto cada vendedor tem a receber, por período e por loja",
         somenteGerente: true,
       },
     ],

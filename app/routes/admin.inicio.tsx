@@ -259,10 +259,10 @@ export default function AdminInicio({ loaderData }: Route.ComponentProps) {
           rede alimenta — são os números do negócio inteiro. Vendedor e clientes vêm das
           vendas registradas <b>neste PDV</b>, que entrou em produção há pouco: enchem
           conforme ele chega às lojas.{" "}
-          <Link to="/admin/relatorios" className="underline underline-offset-2">
-            Relatórios
+          <Link to="/admin/relatorios/comissao" className="underline underline-offset-2">
+            Comissão
           </Link>{" "}
-          tem o detalhe por forma de pagamento.
+          fecha o que cada um tem a receber.
         </p>
       </div>
     </div>

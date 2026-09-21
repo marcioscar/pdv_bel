@@ -67,10 +67,9 @@ export default [
       route("caixas/:fechamentoId", "routes/admin.caixa.tsx"),
       route("contas-a-receber", "routes/admin.contas-a-receber.tsx"),
       route("autorizacoes", "routes/admin.autorizacoes.tsx"),
-      route("relatorios", "routes/admin.relatorios.tsx"),
-      // Rota irmã, não filha: o relatório de faturamento não é um layout, e
-      // aninhar faria a ABC aparecer dentro dele.
+      // Cada relatório é uma rota irmã: nenhum deles é layout do outro.
       route("relatorios/abc", "routes/admin.relatorios.abc.tsx"),
+      route("relatorios/comissao", "routes/admin.relatorios.comissao.tsx"),
       route("relatorios/inventario", "routes/admin.relatorios.inventario.tsx"),
       route("usuarios", "routes/admin.usuarios.tsx"),
       route("certificados", "routes/admin.certificados.tsx"),

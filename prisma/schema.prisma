@@ -183,6 +183,36 @@ model GrupoDeProduto {
   @@map("grupos_de_produtos")
 }
 
+/// O percentual de comissão da rede, e desde quando vale.
+///
+/// Uma taxa só para todo mundo — 1,5% — porque é assim que a rede paga hoje.
+/// Um campo por vendedor seria mais flexível e teria de ser preenchido quatro
+/// vezes com o mesmo número.
+///
+/// **É histórico, e não um campo que se sobrescreve.** Se a taxa virar 2% em
+/// outubro, a comissão de agosto continua tendo sido de 1,5% — e um relatório
+/// de agosto rodado em novembro precisa dizer o mesmo que dizia em setembro.
+/// Cada mudança entra como uma linha nova; a que vale numa data é a mais
+/// recente com `vigenteDesde` até ali.
+model TaxaDeComissao {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+
+  /// Em pontos percentuais: 1.5 é 1,5%.
+  percentual Float
+
+  /// A partir de quando vale. Separado de `criadoEm` de propósito: dá para
+  /// registrar hoje uma taxa que passou a valer no dia primeiro.
+  vigenteDesde DateTime
+
+  /// Quem decidiu. Comissão é dinheiro de gente, e a mudança tem dono.
+  definidaPor   String
+  definidaPorId String @db.ObjectId
+  criadoEm      DateTime @default(now())
+
+  @@index([vigenteDesde])
+  @@map("taxas_de_comissao")
+}
+
 /// A tabela NCM oficial, copiada para cá.
 ///
 /// A fonte é federal (Portal Único Siscomex), não da SEFAZ: a SEFAZ recebe o
