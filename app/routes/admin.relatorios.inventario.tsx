@@ -7,6 +7,7 @@ import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { inventarioValorizado } from "~/lib/inventario.server"
+import { fimDoMes, mesesFechados, rotuloDoMes } from "~/lib/meses"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { exigirGerente } from "~/lib/sessao.server"
 import { cn } from "~/lib/utils"
@@ -26,20 +27,35 @@ export function meta(_: Route.MetaArgs) {
 export async function loader({ request }: Route.LoaderArgs) {
   const eu = await exigirGerente(request, "verRelatorios")
 
+  const url = new URL(request.url)
+
+  /*
+   * `?mes=2026-08` é a foto do último instante daquele mês. Sem ele, o saldo de
+   * agora. Mês inválido cai em "agora" em silêncio: URL torta não pode virar
+   * tela de erro num relatório.
+   */
+  const mesPedido = url.searchParams.get("mes")
+  const ate = mesPedido ? fimDoMes(mesPedido) : null
+
   // Uma loja por padrão, como no relatório de faturamento. `?loja=rede`
   // consolida, e só quem tem mais de uma pode pedir.
-  const pedido = new URL(request.url).searchParams.get("loja")
+  const pedido = url.searchParams.get("loja")
   const rede = pedido === "rede" && eu.lojasPermitidas.length > 1
   const escolhida =
     pedido && pedido !== "rede" && eu.lojasPermitidas.includes(pedido) ? pedido : eu.loja
 
   const lojas = rede ? eu.lojasPermitidas : [escolhida]
+  const inventario = await inventarioValorizado(lojas, ate)
 
   return {
-    inventario: await inventarioValorizado(lojas),
+    inventario,
     rede,
     escolhida,
     lojasPermitidas: eu.lojasPermitidas,
+    mes: ate ? mesPedido : null,
+    meses: mesesFechados(
+      inventario.comecoDoLivro ? new Date(inventario.comecoDoLivro) : null
+    ),
   }
 }
 
@@ -51,7 +67,7 @@ function normalizar(texto: string) {
 }
 
 export default function RelatorioInventario({ loaderData }: Route.ComponentProps) {
-  const { inventario, rede, escolhida, lojasPermitidas } = loaderData
+  const { inventario, rede, escolhida, lojasPermitidas, mes, meses } = loaderData
   const { linhas, lojas, totais } = inventario
 
   const [, setParams] = useSearchParams()
@@ -163,10 +179,11 @@ export default function RelatorioInventario({ loaderData }: Route.ComponentProps
   /** Há recorte na tela? É o que decide se os cartões precisam se explicar. */
   const filtrando = filtradas.length !== linhas.length
 
-  function trocarLoja(valor: string) {
+  function trocar(chave: string, valor: string | null) {
     setParams((atuais) => {
       const novos = new URLSearchParams(atuais)
-      novos.set("loja", valor)
+      if (valor === null) novos.delete(chave)
+      else novos.set(chave, valor)
       return novos
     })
   }
@@ -184,7 +201,7 @@ export default function RelatorioInventario({ loaderData }: Route.ComponentProps
               type="button"
               size="xs"
               variant={!rede && escolhida === l ? "secondary" : "ghost"}
-              onClick={() => trocarLoja(l)}
+              onClick={() => trocar("loja", l)}
               className="rounded-lg font-mono"
             >
               {l}
@@ -195,14 +212,61 @@ export default function RelatorioInventario({ loaderData }: Route.ComponentProps
               type="button"
               size="xs"
               variant={rede ? "secondary" : "ghost"}
-              onClick={() => trocarLoja("rede")}
+              onClick={() => trocar("loja", "rede")}
               className="rounded-lg"
             >
               Rede
             </Button>
           ) : null}
         </div>
+
+        {/* A data da foto. Fica no cabeçalho, junto da loja, porque é a outra
+            metade da pergunta: o quê, e de quando. */}
+        <div className="ml-auto flex items-center gap-2">
+          <label
+            htmlFor="inventario-mes"
+            className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
+          >
+            Posição em
+          </label>
+          <select
+            id="inventario-mes"
+            value={mes ?? "hoje"}
+            onChange={(e) => trocar("mes", e.target.value === "hoje" ? null : e.target.value)}
+            className="h-9 rounded-lg border border-border bg-background px-2 text-sm"
+          >
+            <option value="hoje">Hoje</option>
+            {meses.map((m) => (
+              <option key={m.valor} value={m.valor}>
+                Fim de {m.rotulo}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
+
+      {/*
+        Uma foto do passado não é o saldo de agora, e a tela que não diz isso
+        deixa alguém conferir a prateleira contra o número errado.
+      */}
+      {mes ? (
+        <p className="flex flex-wrap items-center gap-x-2 border-b border-amber-500/40 bg-amber-500/5 px-4 py-2 text-xs sm:px-5">
+          <span className="font-medium">
+            Fotografia do fim de {rotuloDoMes(mes)} — não é o saldo de hoje.
+          </span>
+          <span className="text-muted-foreground">
+            Saldo, custo e preço são os daquela data: o livro de movimentos cortado ali, o
+            custo da última compra até ali, e o preço que vigorava então.
+          </span>
+          <button
+            type="button"
+            onClick={() => trocar("mes", null)}
+            className="underline underline-offset-4 hover:no-underline"
+          >
+            Voltar para hoje
+          </button>
+        </p>
+      ) : null}
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {/* ---- Os números grandes ---- */}
@@ -493,6 +557,15 @@ export default function RelatorioInventario({ loaderData }: Route.ComponentProps
               {totais.semCusto === 1 ? " foi comprado" : " foram comprados"} por aqui e
               {totais.semCusto === 1 ? " fica" : " ficam"} fora do valor de custo — entrar
               como zero somaria como se a mercadoria fosse de graça.
+            </>
+          ) : null}{" "}
+          {inventario.comecoDoLivro ? (
+            <>
+              {" "}
+              O livro de movimentos começa em{" "}
+              {new Date(inventario.comecoDoLivro).toLocaleDateString("pt-BR")}, quando os
+              saldos do sistema antigo entraram: não há posição anterior a essa data para
+              consultar, e a do primeiro mês é praticamente o próprio saldo importado.
             </>
           ) : null}{" "}
           {totais.zerados.toLocaleString("pt-BR")} produto

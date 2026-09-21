@@ -516,18 +516,31 @@ async function nomesDeFornecedores(ids: (string | null)[]) {
  * preço, e quem chama precisa poder distinguir "custa nada" de "não se sabe".
  */
 export async function ultimoCustoPorProduto(
-  produtoIds: string[]
+  produtoIds: string[],
+  /**
+   * Custo conhecido ATÉ esta data — para valorizar um inventário do passado
+   * pelo que a mercadoria custava então, e não pela nota que chegou depois.
+   */
+  ate?: Date | null
 ): Promise<Map<string, number>> {
   const ids = [...new Set(produtoIds)]
   if (ids.length === 0) return new Map()
 
   const [fornecimentos, entradas] = await Promise.all([
     db.fornecimento.findMany({
-      where: { produtoId: { in: ids } },
+      where: {
+        produtoId: { in: ids },
+        ...(ate ? { ultimaCompra: { lte: ate } } : {}),
+      },
       select: { produtoId: true, ultimoCusto: true, ultimaCompra: true },
     }),
     db.movimentoEstoque.findMany({
-      where: { produtoId: { in: ids }, tipo: "entrada", custoUnitario: { not: null } },
+      where: {
+        produtoId: { in: ids },
+        tipo: "entrada",
+        custoUnitario: { not: null },
+        ...(ate ? { criadoEm: { lte: ate } } : {}),
+      },
       orderBy: { criadoEm: "asc" },
       select: { produtoId: true, custoUnitario: true, criadoEm: true },
     }),

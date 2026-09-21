@@ -68,10 +68,17 @@ export async function saldosPorProduto(loja: string): Promise<Map<string, number
  * É a base da consulta consolidada: `Map<produtoId, Map<loja, saldo>>`. Um banco
  * único é o que torna isto uma agregação em vez de quatro conexões e uma junção
  * na aplicação.
+ *
+ * `ate` responde "quanto havia naquele dia". Só é possível porque o saldo é
+ * somado do livro e não guardado em campo nenhum: cortar o livro numa data dá
+ * a foto daquele momento, sem precisar de fechamento mensal de estoque.
  */
-export async function saldosPorProdutoELoja(): Promise<Map<string, Map<string, number>>> {
+export async function saldosPorProdutoELoja(
+  ate?: Date | null
+): Promise<Map<string, Map<string, number>>> {
   const grupos = await db.movimentoEstoque.groupBy({
     by: ["produtoId", "loja"],
+    where: ate ? { criadoEm: { lte: ate } } : undefined,
     _sum: { quantidade: true },
   })
 
@@ -389,6 +396,12 @@ export async function fichaDoProduto(produtoId: string, lojas: string[]) {
 export type FichaDeEstoque = Awaited<ReturnType<typeof fichaDoProduto>>
 
 /** Últimos lançamentos, para a tela de estoque mostrar o que acabou de entrar. */
+/** Quando começa o livro. Antes disto não há história para consultar. */
+export async function primeiroMovimento(): Promise<Date | null> {
+  const primeiro = await db.movimentoEstoque.aggregate({ _min: { criadoEm: true } })
+  return primeiro._min.criadoEm ?? null
+}
+
 export async function movimentosRecentes(loja: string, limite = 40) {
   const movimentos = await db.movimentoEstoque.findMany({
     where: { loja },

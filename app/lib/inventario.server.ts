@@ -1,6 +1,6 @@
 import { ultimoCustoPorProduto } from "~/lib/compras.server"
 import { db } from "~/lib/db.server"
-import { saldosPorProdutoELoja } from "~/lib/estoque.server"
+import { primeiroMovimento, saldosPorProdutoELoja } from "~/lib/estoque.server"
 import { arredondar } from "~/lib/moeda"
 
 export type LinhaInventario = {
@@ -15,6 +15,7 @@ export type LinhaInventario = {
   quantidade: number
   /** Último custo de compra. Nulo quando nunca se comprou o produto por aqui. */
   custo: number | null
+  /** Preço de venda vigente na data pedida — hoje, quando não se pede data. */
   preco: number
   /** Quantidade × custo. Nulo quando não há custo — não vale zero. */
   valorCusto: number | null
@@ -24,6 +25,14 @@ export type LinhaInventario = {
 export type Inventario = {
   linhas: LinhaInventario[]
   lojas: string[]
+  /** A data da foto, ou null quando é o saldo de agora. */
+  ate: string | null
+  /**
+   * Quando começa o livro de movimentos. Uma foto anterior a isto não é um
+   * estoque vazio — é uma pergunta que o sistema não tem como responder, e a
+   * tela precisa dizer a diferença.
+   */
+  comecoDoLivro: string | null
   totais: {
     itens: number
     unidades: number
@@ -58,8 +67,19 @@ export type Inventario = {
  * antes da entrada, transferência recebida que ninguém conferiu — e esconder a
  * linha esconderia justamente o que precisa de conserto.
  */
-export async function inventarioValorizado(lojas: string[]): Promise<Inventario> {
-  const [produtos, porProdutoELoja, grupos] = await Promise.all([
+export async function inventarioValorizado(
+  lojas: string[],
+  /**
+   * A foto de um instante. `null` é agora.
+   *
+   * Vale para os três números, não só para o saldo: o custo é o conhecido até
+   * a data, e o preço é o que vigorava então, reconstruído do log de alteração
+   * de preço. Valorizar estoque de agosto com a tabela de hoje seria misturar
+   * duas épocas e chamar o resultado de histórico.
+   */
+  ate: Date | null = null
+): Promise<Inventario> {
+  const [produtos, porProdutoELoja, grupos, comecoDoLivro, alteracoes] = await Promise.all([
     db.produto.findMany({
       select: {
         id: true,
@@ -71,12 +91,34 @@ export async function inventarioValorizado(lojas: string[]): Promise<Inventario>
         ativo: true,
       },
     }),
-    saldosPorProdutoELoja(),
+    saldosPorProdutoELoja(ate),
     db.grupoDeProduto.findMany({ select: { id: true, nome: true } }),
+    primeiroMovimento(),
+    /*
+     * As alterações de preço POSTERIORES à data. A primeira delas guarda, em
+     * `de`, o preço que valia na data pedida — é para isso que a alteração
+     * grava os dois lados em vez de só o novo valor.
+     */
+    ate
+      ? db.alteracaoDePreco.findMany({
+          where: { criadoEm: { gt: ate } },
+          orderBy: { criadoEm: "asc" },
+          select: { produtoId: true, de: true },
+        })
+      : Promise.resolve([]),
   ])
 
   const nomeDoGrupo = new Map(grupos.map((g) => [g.id, g.nome]))
-  const custos = await ultimoCustoPorProduto(produtos.map((p) => p.id))
+  const custos = await ultimoCustoPorProduto(
+    produtos.map((p) => p.id),
+    ate
+  )
+
+  /** produtoId → preço que vigorava na data. Só quem mudou de preço depois. */
+  const precoNaData = new Map<string, number>()
+  for (const a of alteracoes) {
+    if (!precoNaData.has(a.produtoId)) precoNaData.set(a.produtoId, a.de)
+  }
 
   let zerados = 0
   const linhas: LinhaInventario[] = []
@@ -105,6 +147,7 @@ export async function inventarioValorizado(lojas: string[]): Promise<Inventario>
     }
 
     const custo = custos.get(produto.id) ?? null
+    const preco = precoNaData.get(produto.id) ?? produto.preco
 
     linhas.push({
       produtoId: produto.id,
@@ -116,9 +159,9 @@ export async function inventarioValorizado(lojas: string[]): Promise<Inventario>
       porLoja,
       quantidade,
       custo,
-      preco: produto.preco,
+      preco,
       valorCusto: custo === null ? null : arredondar(quantidade * custo),
-      valorVenda: arredondar(quantidade * produto.preco),
+      valorVenda: arredondar(quantidade * preco),
     })
   }
 
@@ -132,6 +175,8 @@ export async function inventarioValorizado(lojas: string[]): Promise<Inventario>
   return {
     linhas,
     lojas,
+    ate: ate?.toISOString() ?? null,
+    comecoDoLivro: comecoDoLivro?.toISOString() ?? null,
     totais: {
       itens: linhas.length,
       unidades: arredondar(linhas.reduce((s, l) => s + l.quantidade, 0)),
