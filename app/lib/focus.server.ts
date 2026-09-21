@@ -268,6 +268,23 @@ export async function listarGatilhos(
 }
 
 /**
+ * Os eventos de aviso que a Focus aceita para nota autorizada.
+ *
+ * É UM só, e não dois. Tentar `nfce` volta com "O valor informado para o
+ * parâmetro 'event' é inválido" — o enum da API tem `nfe`, `nfce_contingencia`
+ * e `nfce_consulta_automatica`, e nenhum dos dois últimos é "avise quando
+ * autorizar": um é contingência, o outro é consulta automática.
+ *
+ * A documentação não diz, em nenhuma frase, que `nfe` cobre também o modelo 65.
+ * Mas é o único evento de autorização que existe, então ou ele cobre os dois ou
+ * a NFC-e não tem aviso nenhum — e isso se descobre emitindo uma e vendo se ela
+ * se atualiza sozinha. Até lá, cadastrar o que existe é o melhor disponível.
+ */
+export const EVENTOS_DO_AVISO = ["nfe"] as const
+
+export type EventoDeAviso = (typeof EVENTOS_DO_AVISO)[number]
+
+/**
  * Cadastra o gatilho que avisa esta instalação quando a SEFAZ responde.
  *
  * `authorization` vira um cabeçalho que a Focus manda de volta — é o segredo
@@ -277,7 +294,7 @@ export async function listarGatilhos(
 export function criarGatilho(entrada: {
   /** A loja cujo token autentica — o gatilho é da empresa dela. */
   loja: string
-  evento: "nfe" | "nfce"
+  evento: EventoDeAviso
   url: string
   cnpj: string
   segredo?: string

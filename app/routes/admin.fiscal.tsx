@@ -11,6 +11,7 @@ import { enderecoDoApp } from "~/lib/env.server"
 import {
   ambienteFocus,
   criarGatilho,
+  EVENTOS_DO_AVISO,
   focusConfigurada,
   listarGatilhos,
 } from "~/lib/focus.server"
@@ -62,7 +63,12 @@ export async function loader({ request }: Route.LoaderArgs) {
   const avisos = await Promise.all(
     queEmitem.map(async (loja) => {
       if (!focusConfigurada(loja.codigo)) {
-        return { loja: loja.codigo, cnpj: loja.cnpj, eventos: null, faltando: ["nfe", "nfce"] }
+        return {
+          loja: loja.codigo,
+          cnpj: loja.cnpj,
+          eventos: null,
+          faltando: [...EVENTOS_DO_AVISO] as string[],
+        }
       }
       const gatilhos = await listarGatilhos(loja.codigo).catch(() => null)
       if (!gatilhos) {
@@ -78,7 +84,7 @@ export async function loader({ request }: Route.LoaderArgs) {
         loja: loja.codigo,
         cnpj: loja.cnpj,
         eventos,
-        faltando: ["nfe", "nfce"].filter((e) => !eventos.includes(e)),
+        faltando: EVENTOS_DO_AVISO.filter((e) => !eventos.includes(e)) as string[],
       }
     })
   )
@@ -182,7 +188,7 @@ export async function action({ request }: Route.ActionArgs) {
     const falhas: string[] = []
 
     for (const loja of emitentes) {
-      for (const evento of ["nfe", "nfce"] as const) {
+      for (const evento of EVENTOS_DO_AVISO) {
         const nome = `${loja.codigo}/${evento.toUpperCase()}`
         try {
           await criarGatilho({ loja: loja.codigo, evento, url, cnpj: loja.cnpj, segredo })
@@ -571,9 +577,9 @@ function Avisos({
             </p>
           ) : focus.jaAvisa ? (
             <p className="mt-1 text-xs text-muted-foreground">
-              Cadastrado para NF-e e NFC-e em{" "}
-              {focus.avisos.map((a) => a.loja).join(", ")} — a nota se atualiza sozinha
-              quando a SEFAZ responde.
+              Cadastrado em {focus.avisos.map((a) => a.loja).join(", ")} — a nota se
+              atualiza sozinha quando a SEFAZ responde. A Focus tem um evento só de
+              autorização, então é ele que vale para NF-e e NFC-e.
             </p>
           ) : (
             <div className="mt-1 space-y-0.5 text-xs text-muted-foreground">
@@ -585,10 +591,8 @@ function Avisos({
                   {a.eventos === null
                     ? "não deu para perguntar à Focus"
                     : a.faltando.length === 0
-                      ? "NF-e e NFC-e cadastrados"
-                      : a.faltando.length === 2
-                        ? "sem aviso nenhum"
-                        : `falta o de ${a.faltando.map((e) => e.toUpperCase()).join(" e ")}`}
+                      ? "aviso cadastrado"
+                      : `falta ${a.faltando.map((e) => e.toUpperCase()).join(" e ")}`}
                 </p>
               ))}
               <p>
