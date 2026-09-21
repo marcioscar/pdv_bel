@@ -18,6 +18,7 @@ import { criarFornecedor, lerFornecedor, proximoCodigoDeFornecedor } from "~/lib
 import { resumoDoProcNFe } from "~/lib/sefaz.server"
 import { exigirGerente } from "~/lib/sessao.server"
 import { EntradaDeNota, type RespostaEntrada } from "~/components/pdv/entrada-de-nota"
+import { percentuaisDaOperacao } from "~/lib/precificacao.server"
 import {
   itensComCustoDaNota,
   pedidosAbertosDoFornecedor,
@@ -71,13 +72,22 @@ export async function loader({ request, params }: Route.LoaderArgs) {
         db.produto.findMany({
           where: SOMENTE_ATIVOS,
           orderBy: { descricao: "asc" },
-          select: { id: true, codigo: true, descricao: true, unidade: true },
+          // O preço vem junto para a sugestão poder mostrar, ao lado dela, o
+          // que o produto custa hoje — sugestão sozinha não diz o que fazer.
+          select: { id: true, codigo: true, descricao: true, unidade: true, preco: true },
         }),
         pedidoEscolhido ? recebidoPorProduto(pedidoEscolhido.id) : new Map<string, number>(),
       ])
     : [[], [], new Map<string, number>()]
 
   const itensComCusto = temItens ? itensComCustoDaNota(nota.xml!) : []
+
+  /*
+   * Quanto a operação custa, em percentual do faturamento — é o que transforma
+   * o custo da nota em preço de venda sugerido. Só quando há itens: sem nota
+   * completa não há custo para precificar, e a consulta seria à toa.
+   */
+  const percentuais = temItens ? await percentuaisDaOperacao() : null
 
   const podeGerarDespesas = Boolean(nota.xml && nota.situacaoXml === "completa")
   const duplicatas = podeGerarDespesas ? duplicatasDaNota(nota.xml!) : null
@@ -118,6 +128,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     pedidoEscolhidoId: pedidoEscolhido?.id ?? "",
     itensComCusto,
     catalogo,
+    percentuais,
     lojas: lojas.map((l) => l.codigo),
     recebidoAntes: Object.fromEntries(recebidoAntes),
   }
@@ -213,6 +224,7 @@ export default function DetalheNotaDeEntrada({ loaderData }: Route.ComponentProp
     pedidoEscolhidoId,
     itensComCusto,
     catalogo,
+    percentuais,
     lojas,
     recebidoAntes,
   } = loaderData
@@ -318,6 +330,7 @@ export default function DetalheNotaDeEntrada({ loaderData }: Route.ComponentProp
               pedidoEscolhido={pedidoEscolhido}
               onEscolherPedido={escolherPedido}
               catalogo={catalogo}
+              percentuais={percentuais}
               lojas={lojas}
               recebidoAntes={recebidoAntes}
               jaRecebida={nota.situacao === "recebida"}

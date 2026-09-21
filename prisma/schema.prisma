@@ -1343,6 +1343,24 @@ model Despesa {
   @@map("despesas")
 }
 
+/// As receitas da rede, lançadas no mesmo sistema de contas que alimenta as
+/// despesas — e, como elas, uma coleção que não nasceu com este projeto.
+///
+/// Só LEMOS daqui. Serve a uma pergunta: quanto a operação custa em relação ao
+/// que ela fatura. É desse par (receita × despesa) que sai o percentual de
+/// custos fixos e variáveis usado para sugerir preço de venda na entrada de
+/// mercadoria — ver `app/lib/precificacao.server.ts`.
+model Receita {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  conta     String
+  valor     Float
+  descricao String
+  data      DateTime
+  loja      String?
+
+  @@map("receitas")
+}
+
 /// As categorias de despesa que o sistema de contas a pagar já oferece —
 /// `conta` é o valor gravado, `etiqueta` é como aparece pro usuário lá.
 /// Fonte da verdade em vez de uma lista inventada aqui que divergiria da de lá.

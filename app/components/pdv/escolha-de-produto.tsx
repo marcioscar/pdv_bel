@@ -4,7 +4,14 @@ import { Search } from "lucide-react"
 import { buscarProdutos, type EntradaIndice } from "~/lib/pdv"
 import { cn } from "~/lib/utils"
 
-export type ProdutoDoCatalogo = { id: string; codigo: string; descricao: string; unidade: string }
+export type ProdutoDoCatalogo = {
+  id: string
+  codigo: string
+  descricao: string
+  unidade: string
+  /** O preço de venda de hoje. Opcional: nem toda tela que escolhe produto o carrega. */
+  preco?: number
+}
 
 /**
  * Escolhe o produto do catálogo digitando, em vez de rolar mil opções.

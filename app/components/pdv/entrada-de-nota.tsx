@@ -13,6 +13,12 @@ import {
 import { ReceberPedido } from "~/components/pdv/pedido-compra"
 import type { ItemDaNotaParaConciliar, ItemReconciliado } from "~/lib/conciliacao.server"
 import { interpretarValor, moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
+import {
+  calcularPrecoVenda,
+  conferirPrecoVenda,
+  LUCRO_PADRAO,
+} from "~/lib/precificacao"
+import type { PercentuaisDaOperacao } from "~/lib/precificacao.server"
 import { buscarProdutos, criarIndice, type EntradaIndice } from "~/lib/pdv"
 import { cn } from "~/lib/utils"
 
@@ -59,6 +65,7 @@ export function EntradaDeNota({
   pedidoEscolhido,
   onEscolherPedido,
   catalogo,
+  percentuais,
   lojas,
   recebidoAntes,
   jaRecebida,
@@ -71,6 +78,8 @@ export function EntradaDeNota({
   pedidoEscolhido: PedidoCandidato | null
   onEscolherPedido: (pedidoId: string) => void
   catalogo: ProdutoDoCatalogo[]
+  /** Null quando a nota não tem itens — sem custo não há o que precificar. */
+  percentuais: PercentuaisDaOperacao | null
   lojas: string[]
   recebidoAntes: Record<string, number>
   jaRecebida: boolean
@@ -104,6 +113,15 @@ export function EntradaDeNota({
   const [quantidades, setQuantidades] = useState<Record<number, string>>(() =>
     Object.fromEntries(itensDaNota.map((item, i) => [i, formatarQuantidade(item.quantidade)]))
   )
+
+  /*
+   * O lucro é escolha de quem confere a nota, não constante do sistema: muda
+   * por linha de produto, por concorrência, por o que a mercadoria custou desta
+   * vez. Começa em 10% porque é preciso começar em algum lugar, e é onde a
+   * calculadora da rede começa.
+   */
+  const [lucroTexto, setLucroTexto] = useState(String(LUCRO_PADRAO))
+  const pctLucro = interpretarValor(lucroTexto) ?? 0
 
   const catalogoPorId = useMemo(() => new Map(catalogo.map((p) => [p.id, p])), [catalogo])
   /*
@@ -327,7 +345,40 @@ export function EntradaDeNota({
         </table>
       </div>
 
-      <h4 className="mt-5 text-sm font-medium">O que entra no estoque</h4>
+      <div className="mt-5 flex flex-wrap items-end justify-between gap-3">
+        <h4 className="text-sm font-medium">O que entra no estoque</h4>
+
+        {/*
+          A régua do preço, ao lado da tabela que ela precifica. Fica aqui, e
+          não numa tela de configuração, porque é decisão desta nota: o gerente
+          vê o custo que chegou e escolhe a margem olhando para ele.
+        */}
+        {percentuais?.temDados ? (
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <label className="flex items-center gap-1.5">
+              <span className="text-muted-foreground">Lucro</span>
+              <Input
+                value={lucroTexto}
+                onChange={(e) => setLucroTexto(e.target.value)}
+                inputMode="decimal"
+                className="h-7 w-16 text-right font-mono text-xs"
+              />
+              <span className="text-muted-foreground">%</span>
+            </label>
+            <span
+              className="text-muted-foreground"
+              title={
+                `Receita de ${moeda(percentuais.receitas)} no período · ` +
+                `fixas ${moeda(percentuais.fixas)} · variáveis ${moeda(percentuais.variaveis)}`
+              }
+            >
+              + {percentuais.pctFixas.toFixed(1)}% fixas e{" "}
+              {percentuais.pctVariaveis.toFixed(1)}% variáveis, medidos de{" "}
+              {percentuais.de} a {percentuais.ate}
+            </span>
+          </div>
+        ) : null}
+      </div>
       <div className="mt-2 overflow-x-auto rounded-lg border">
         <table className="w-full text-xs">
           <thead>
@@ -339,12 +390,18 @@ export function EntradaDeNota({
               <th className="px-2 py-1.5 text-right">Custo esperado</th>
               <th className="px-2 py-1.5 text-right">Custo real</th>
               <th className="px-2 py-1.5 text-right">Diferença</th>
+              {percentuais?.temDados ? (
+                <th className="px-2 py-1.5 text-right">Preço sugerido</th>
+              ) : null}
             </tr>
           </thead>
           <tbody>
             {linhasDaComparacao.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-2 py-4 text-center text-muted-foreground">
+                <td
+                  colSpan={percentuais?.temDados ? 8 : 7}
+                  className="px-2 py-4 text-center text-muted-foreground"
+                >
                   Pareie os itens da nota acima para ver o que vai entrar.
                 </td>
               </tr>
@@ -361,6 +418,9 @@ export function EntradaDeNota({
                     formatarQuantidade(gruposPorProduto.get(linha.produtoId)?.quantidade ?? 0)
                   }
                   custoUnitario={custoUnitarioDe(linha.produtoId)}
+                  percentuais={percentuais}
+                  pctLucro={pctLucro}
+                  precoAtual={catalogoPorId.get(linha.produtoId)?.preco ?? null}
                   quantidade={quantidadeAReceber(linha.produtoId)}
                   onMudarQuantidade={(texto) =>
                     setQuantidadeRecebida((atual) => ({ ...atual, [linha.produtoId]: texto }))
@@ -610,6 +670,9 @@ function LinhaResumoProduto({
   quantidadeTexto,
   quantidade,
   custoUnitario,
+  percentuais,
+  pctLucro,
+  precoAtual,
   onMudarQuantidade,
 }: {
   linha: LinhaDaComparacao
@@ -619,6 +682,10 @@ function LinhaResumoProduto({
   quantidadeTexto: string
   quantidade: number
   custoUnitario: number
+  percentuais: PercentuaisDaOperacao | null
+  pctLucro: number
+  /** Null quando o produto acabou de ser cadastrado e ainda não tem preço. */
+  precoAtual: number | null
   onMudarQuantidade: (texto: string) => void
 }) {
   const custoEsperadoTotal = linha.quantidadeEsperada * linha.custoEsperado
@@ -632,6 +699,32 @@ function LinhaResumoProduto({
   // Depois desta entrada, ainda falta algo? É o que decide se o pedido fica
   // parcial — mostrado por linha para o gerente ver de onde vem a pendência.
   const faltaDepois = linha.quantidadeEsperada - jaRecebido - quantidade
+
+  /*
+   * A sugestão sai do custo REAL desta nota — produto mais impostos por fora
+   * mais o rateio do frete —, e não do custo esperado do pedido. É o número que
+   * a mercadoria custou de verdade ao entrar, e é sobre ele que a margem tem
+   * que ser tirada.
+   */
+  const preco =
+    percentuais?.temDados && custoUnitario > 0
+      ? calcularPrecoVenda({
+          custo: custoUnitario,
+          pctFixos: percentuais.pctFixas,
+          pctVariaveis: percentuais.pctVariaveis,
+          pctLucro,
+        })
+      : null
+
+  const hoje =
+    percentuais?.temDados && precoAtual != null && precoAtual > 0 && custoUnitario > 0
+      ? conferirPrecoVenda({
+          custo: custoUnitario,
+          preco: precoAtual,
+          pctFixos: percentuais.pctFixas,
+          pctVariaveis: percentuais.pctVariaveis,
+        })
+      : null
 
   return (
     <tr className="border-b last:border-0">
@@ -702,6 +795,74 @@ function LinhaResumoProduto({
           </Badge>
         )}
       </td>
+
+      {/*
+        A sugestão e o preço de hoje lado a lado. Um número sozinho —
+        "sugerido R$ 16,67" — não diz o que fazer; com o preço atual embaixo,
+        a linha responde se está barato, caro ou já certo.
+      */}
+      {percentuais?.temDados ? (
+        <td className="px-2 py-1.5 text-right">
+          {preco ? (
+            <>
+              {/*
+                A unidade fica escrita junto. O custo vem da nota, que fatura na
+                embalagem do FORNECEDOR (quilo, rolo, fardo), e o preço é do
+                catálogo, que vende na sua. Enquanto a "Qtd no catálogo" não for
+                convertida lá em cima, este número está na unidade da nota — e
+                dizer "por PC" é o que deixa a divergência visível em vez de
+                virar um preço plausível e errado.
+              */}
+              <div className="font-medium">
+                {moeda(preco.precoSugerido)}
+                <span className="ml-0.5 text-[10px] font-normal text-muted-foreground">
+                  /{linha.unidade}
+                </span>
+              </div>
+              <div className="text-[11px] text-muted-foreground">
+                {precoAtual != null && precoAtual > 0 ? (
+                  <>
+                    hoje {moeda(precoAtual)}
+                    {hoje ? (
+                      <span
+                        className={cn(
+                          "ml-1",
+                          hoje.status === "prejuizo" && "font-medium text-destructive",
+                          hoje.status === "empate" && "text-amber-600 dark:text-amber-500"
+                        )}
+                        title={
+                          `Neste preço sobra ${moeda(hoje.sobraReal)} por unidade depois de ` +
+                          `cobrir custo, fixas e variáveis. Mínimo para empatar: ` +
+                          `${preco.precoMinimo != null ? moeda(preco.precoMinimo) : "—"}`
+                        }
+                      >
+                        {hoje.status === "prejuizo"
+                          ? "· dá prejuízo"
+                          : hoje.status === "empate"
+                            ? "· empata"
+                            : `· ${hoje.margemBruta.toFixed(0)}% bruto`}
+                      </span>
+                    ) : null}
+                  </>
+                ) : (
+                  "sem preço no catálogo"
+                )}
+              </div>
+            </>
+          ) : (
+            <span
+              className="text-muted-foreground"
+              title={
+                custoUnitario > 0
+                  ? "Fixas + variáveis + lucro passam de 100% — nesse ponto não existe preço que feche"
+                  : "Sem custo nesta linha"
+              }
+            >
+              —
+            </span>
+          )}
+        </td>
+      ) : null}
     </tr>
   )
 }
