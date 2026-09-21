@@ -230,6 +230,12 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         somenteGerente: true,
       },
       {
+        para: "/admin/relatorios/inventario",
+        rotulo: "Inventário de estoque",
+        descricao: "O que existe na prateleira, a custo e a preço de venda",
+        somenteGerente: true,
+      },
+      {
         para: "/admin/relatorios",
         rotulo: "Faturamento",
         descricao: "Faturamento, formas de pagamento e a receber",
