@@ -293,6 +293,7 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
     if (proximo.numero) novos.set("numero", proximo.numero)
     if (proximo.valor) novos.set("valor", proximo.valor)
     if (proximo.forma) novos.set("forma", proximo.forma)
+    if (proximo.nota) novos.set("nota", proximo.nota)
     setParams(novos, { preventScrollReset: true })
   }
 
@@ -685,6 +686,24 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                 {f.rotulo}
               </option>
             ))}
+          </select>
+        </Campo>
+
+        {/*
+          "Sem nota" é a pergunta de quem vai atrás do que ficou pendente: o
+          cliente fechou com cupom e voltou pedindo a nota, ou a SEFAZ recusou e
+          ninguém reemitiu. Sem este filtro dava para achar olhando as linhas
+          sem selo — serve para o dia, não para varrer um mês.
+        */}
+        <Campo rotulo="Nota">
+          <select
+            value={campos.nota}
+            onChange={(e) => aplicar({ nota: e.target.value as FiltroVendas["nota"] })}
+            className={cn(ESTILO_CAMPO, "w-28")}
+          >
+            <option value="">Todas</option>
+            <option value="sem">Sem nota</option>
+            <option value="com">Com nota</option>
           </select>
         </Campo>
 

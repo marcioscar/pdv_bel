@@ -84,6 +84,7 @@ export default function AdminVendas({ loaderData }: Route.ComponentProps) {
     if (proximo.cliente) novos.set("cliente", proximo.cliente)
     if (proximo.forma) novos.set("forma", proximo.forma)
     if (proximo.situacao !== "todas") novos.set("situacao", proximo.situacao)
+    if (proximo.nota) novos.set("nota", proximo.nota)
     // Filtrar sempre volta para a primeira página: a terceira página do filtro
     // anterior quase nunca existe no novo, e a tela viria vazia sem dizer por quê.
     setParams(novos)
@@ -215,6 +216,20 @@ export default function AdminVendas({ loaderData }: Route.ComponentProps) {
                 {situacao.rotulo}
               </option>
             ))}
+          </select>
+        </Campo>
+
+        {/* Nota é outra dimensão que "situação": uma venda válida pode estar
+            sem documento, e uma cancelada pode ter tido nota. Dois seletores. */}
+        <Campo rotulo="Nota fiscal">
+          <select
+            value={campos.nota}
+            onChange={(e) => aplicar({ nota: e.target.value as FiltroVendas["nota"] })}
+            className={cn(ESTILO_CAMPO, "w-36")}
+          >
+            <option value="">Todas</option>
+            <option value="sem">Sem nota</option>
+            <option value="com">Com nota</option>
           </select>
         </Campo>
 

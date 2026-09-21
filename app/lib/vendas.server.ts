@@ -797,6 +797,11 @@ export const VENDAS_POR_PAGINA = 50
 
 export type SituacaoFiltrada = "todas" | "validas" | "canceladas"
 
+export type FiltroDeNota = "" | "sem" | "com"
+
+/** Os status que contam como "esta venda tem documento fiscal". */
+const NOTA_VALE: string[] = ["autorizado", "processando_autorizacao"]
+
 /**
  * O filtro da consulta de vendas, do jeito que a tela o mostra.
  *
@@ -824,6 +829,15 @@ export type FiltroVendas = {
    * uma faixa devolveria dezenas de vendas parecidas e não responderia nada.
    */
   valor: string
+  /**
+   * "sem" = vendas que não têm nota válida; "com" = as que têm; vazio = todas.
+   *
+   * "Válida" é autorizada ou ainda processando. Nota RECUSADA conta como sem
+   * nota, e é o ponto do filtro: a venda saiu, a SEFAZ negou, e o documento
+   * continua faltando — esconder essas atrás de "tem nota" deixaria de fora
+   * justamente as que precisam de alguém.
+   */
+  nota: FiltroDeNota
   situacao: SituacaoFiltrada
   pagina: number
 }
@@ -867,6 +881,7 @@ export function lerFiltroVendas(url: URL, lojasPermitidas: string[]): FiltroVend
     // ObjectId malformado faria o Prisma lançar; aqui vira "todos".
     vendedor: OBJECT_ID.test(texto("vendedor")) ? texto("vendedor") : "",
     valor: texto("valor").slice(0, 15),
+    nota: texto("nota") === "sem" || texto("nota") === "com" ? (texto("nota") as FiltroDeNota) : "",
     situacao:
       situacao === "validas" || situacao === "canceladas" ? situacao : "todas",
     pagina: Math.max(1, Math.trunc(Number(params.get("pagina"))) || 1),
@@ -941,6 +956,24 @@ export async function consultarVendas(filtro: FiltroVendas) {
         ...(digitos.length >= 3 ? [{ clienteCpfCnpj: { contains: digitos } }] : []),
       ],
     })
+  }
+
+  /*
+   * "Tem nota?" é uma pergunta de OUTRA coleção, e o Mongo não junta as duas
+   * numa consulta só. A volta é buscar de quem HÁ nota válida e usar a lista
+   * como filtro — para incluir ou para excluir, conforme o que se pediu.
+   *
+   * Sem recorte de data de propósito: a nota pode ter sido emitida meses depois
+   * da venda, que é exatamente o caso que este filtro existe para achar. O
+   * recorte é por LOJA, que é o que limita o tamanho da lista.
+   */
+  if (filtro.nota) {
+    const comNota = await db.notaFiscalEmitida.findMany({
+      where: { loja: { in: filtro.lojas }, status: { in: NOTA_VALE }, vendaId: { not: null } },
+      select: { vendaId: true },
+    })
+    const ids = [...new Set(comNota.map((n) => n.vendaId!))]
+    conteudo.push(filtro.nota === "com" ? { id: { in: ids } } : { id: { notIn: ids } })
   }
 
   if (filtro.situacao === "validas") conteudo.push(NAO_CANCELADA)
