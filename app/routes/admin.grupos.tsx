@@ -7,14 +7,13 @@ import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { Kbd } from "~/components/ui/kbd"
+import { ajudaDoTipo, rotuloDoTipo, TIPOS, type TipoDeGrupo } from "~/lib/grupos"
 import {
   alternarGrupo,
   lerGrupo,
   listarGrupos,
   produtosPorGrupo,
   salvarGrupo,
-  TIPOS,
-  type TipoDeGrupo,
 } from "~/lib/grupos.server"
 import { exigirGerente } from "~/lib/sessao.server"
 import { cn } from "~/lib/utils"
@@ -300,9 +299,9 @@ export default function AdminGrupos({ loaderData }: Route.ComponentProps) {
                     <Badge
                       variant={g.tipo === "padrao" ? "outline" : "secondary"}
                       className="text-[10px]"
-                      title={TIPOS.find((t) => t.valor === g.tipo)?.ajuda}
+                      title={ajudaDoTipo(g.tipo)}
                     >
-                      {TIPOS.find((t) => t.valor === g.tipo)?.rotulo ?? g.tipo}
+                      {rotuloDoTipo(g.tipo)}
                     </Badge>
                   </td>
                   <td className="px-2 py-2 text-right font-mono text-xs tabular-nums text-muted-foreground">

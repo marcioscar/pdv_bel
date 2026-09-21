@@ -1,4 +1,5 @@
 import { db } from "~/lib/db.server"
+import { ehTipoValido, type TipoDeGrupo } from "~/lib/grupos"
 
 /**
  * O grupo do produto — a gaveta do catálogo, e o filtro das análises.
@@ -8,25 +9,6 @@ import { db } from "~/lib/db.server"
  * encomenda é item feito sob medida para um cliente e não volta a vender. Ver
  * a nota do modelo `GrupoDeProduto` no schema.
  */
-
-export const TIPOS = [
-  { valor: "padrao", rotulo: "Padrão", ajuda: "Mercadoria de prateleira. Entra na curva ABC." },
-  {
-    valor: "encomenda",
-    rotulo: "Encomenda",
-    ajuda: "Feito sob medida para um cliente. Fica fora da ABC e do giro.",
-  },
-] as const
-
-export type TipoDeGrupo = (typeof TIPOS)[number]["valor"]
-
-export function ehTipoValido(valor: string): valor is TipoDeGrupo {
-  return TIPOS.some((t) => t.valor === valor)
-}
-
-export function rotuloDoTipo(tipo: string) {
-  return TIPOS.find((t) => t.valor === tipo)?.rotulo ?? tipo
-}
 
 const OBJECT_ID = /^[0-9a-fA-F]{24}$/
 
