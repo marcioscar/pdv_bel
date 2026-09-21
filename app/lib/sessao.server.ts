@@ -286,7 +286,10 @@ export async function contarGerentesAtivos() {
 }
 
 export type ResultadoLogin =
-  | { ok: true; usuarioId: string }
+  // O papel vem junto porque é ele que decide onde a pessoa cai depois de
+  // entrar — ver `destinoAoEntrar`. Sem isto, quem chama teria que buscar o
+  // usuário de novo só para saber se é gerente.
+  | { ok: true; usuarioId: string; papel: Papel }
   | { ok: false; erro: string }
 
 /**
@@ -314,5 +317,9 @@ export async function autenticar(email: string, senha: string): Promise<Resultad
     data: { ultimoAcessoEm: new Date() },
   })
 
-  return { ok: true, usuarioId: usuario.id }
+  return {
+    ok: true,
+    usuarioId: usuario.id,
+    papel: papelValido(usuario.papel) ? usuario.papel : PAPEL_PADRAO,
+  }
 }

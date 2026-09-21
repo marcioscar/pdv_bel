@@ -13,6 +13,7 @@ import {
   validarSenha,
 } from "~/lib/senha.server"
 import { lojaDaMaquina } from "~/lib/maquina.server"
+import { destinoAoEntrar } from "~/lib/permissoes"
 import {
   autenticar,
   contarUsuarios,
@@ -34,7 +35,13 @@ function destinoSeguro(bruto: string | null) {
 export async function loader({ request }: Route.LoaderArgs) {
   const usuario = await usuarioDaSessao(request)
   const destino = destinoSeguro(new URL(request.url).searchParams.get("destino"))
-  if (usuario) throw new Response(null, { status: 302, headers: { location: destino } })
+  // Já logado: vai para onde pediu, ou para onde o papel dele começa.
+  if (usuario) {
+    throw new Response(null, {
+      status: 302,
+      headers: { location: destinoAoEntrar(usuario.papel, destino) },
+    })
+  }
 
   // Sem nenhum usuário cadastrado, a tela cria o primeiro — senão o sistema
   // ficaria inacessível para sempre.
@@ -72,7 +79,7 @@ export async function action({ request }: Route.ActionArgs) {
     return criarSessao({
       usuarioId: usuario.id,
       loja: await lojaParaEntrar(usuario.id, await lojaDaMaquina(request)),
-      destino,
+      destino: destinoAoEntrar(usuario.papel, destino),
     })
   }
 
@@ -84,7 +91,7 @@ export async function action({ request }: Route.ActionArgs) {
   return criarSessao({
     usuarioId: resultado.usuarioId,
     loja: await lojaParaEntrar(resultado.usuarioId, await lojaDaMaquina(request)),
-    destino,
+    destino: destinoAoEntrar(resultado.papel, destino),
   })
 }
 

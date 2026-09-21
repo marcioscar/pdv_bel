@@ -39,6 +39,22 @@ export function rotuloDoPapel(papel: string) {
 }
 
 /**
+ * Onde cada papel começa depois de entrar.
+ *
+ * O operador cai no caixa, que é o trabalho dele com cliente na frente. O
+ * gerente cai no painel: quem entra para gerenciar quer saber como vai o
+ * negócio, e chegava no caixa tendo que clicar em Adm toda manhã.
+ *
+ * Um destino PEDIDO ganha dos dois. Quem clicou no link de uma venda e caiu no
+ * login quer voltar para aquela venda; mandá-lo para o painel perderia o
+ * caminho que ele já tinha escolhido.
+ */
+export function destinoAoEntrar(papel: string, pedido: string) {
+  if (pedido && pedido !== "/") return pedido
+  return ehGerente(papel) ? "/admin" : "/"
+}
+
+/**
  * A barra de navegação é só o **turno**: o que se usa com cliente na frente,
  * cada um com tecla de função. Ela não cresce — tela nova vai para a sidebar da
  * administração, senão o balcão vira menu.
