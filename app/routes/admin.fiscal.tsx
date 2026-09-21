@@ -41,46 +41,60 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   const [lojas, excecoes] = await Promise.all([listarEmitentes(), contarExcecoesFiscais()])
 
+  const publico = enderecoDoApp(request)
+  const urlDoAviso = `${publico}/webhooks/focus/nota`
+  const daquiMesmo = mesmoServidor(request, publico)
+
   /*
    * Os gatilhos vêm da Focus, não do nosso banco: cadastrar é lá, e uma cópia
    * daqui divergiria calada no dia em que alguém mexesse pelo painel.
    *
-   * Perguntados com o token de UMA loja, porque é assim que a Focus autentica:
-   * token por empresa. A escolhida é a que emite — é dela a nota que precisa do
-   * aviso. Enquanto só a matriz emitir, é a resposta dela que importa.
+   * Uma consulta POR LOJA, porque o gatilho é da empresa, como o token. Com uma
+   * pergunta só — a da matriz — a tela diria "cadastrado" com as outras três
+   * sem aviso nenhum, e a nota delas ficaria "processando" para sempre.
+   *
+   * E são os DOIS eventos: NF-e e NFC-e são gatilhos separados na Focus. A
+   * NFC-e é a do balcão, a mais frequente de todas — faltar justo ela é o
+   * silêncio mais caro.
    */
-  const lojaDosAvisos =
-    lojas.find((l) => l.emiteNotaFiscal)?.codigo ?? lojas[0]?.codigo ?? ""
-  const gatilhos =
-    lojaDosAvisos && focusConfigurada(lojaDosAvisos)
-      ? await listarGatilhos(lojaDosAvisos).catch(() => null)
-      : null
-  const publico = enderecoDoApp(request)
-  const urlDoAviso = `${publico}/webhooks/focus/nota`
+  const queEmitem = lojas.filter((l) => l.emiteNotaFiscal)
 
-  const daquiMesmo = mesmoServidor(request, publico)
+  const avisos = await Promise.all(
+    queEmitem.map(async (loja) => {
+      if (!focusConfigurada(loja.codigo)) {
+        return { loja: loja.codigo, cnpj: loja.cnpj, eventos: null, faltando: ["nfe", "nfce"] }
+      }
+      const gatilhos = await listarGatilhos(loja.codigo).catch(() => null)
+      if (!gatilhos) {
+        // null = não deu para perguntar. Diferente de "perguntei e não há":
+        // dizer que falta o que não se conseguiu ver mandaria cadastrar de novo
+        // o que já existe.
+        return { loja: loja.codigo, cnpj: loja.cnpj, eventos: null, faltando: [] }
+      }
+      const eventos = gatilhos
+        .filter((g) => g.url === urlDoAviso)
+        .map((g) => g.event ?? "")
+      return {
+        loja: loja.codigo,
+        cnpj: loja.cnpj,
+        eventos,
+        faltando: ["nfe", "nfce"].filter((e) => !eventos.includes(e)),
+      }
+    })
+  )
 
   return {
     excecoes,
     focus: {
       configurada: focusConfigurada(),
       ambiente: focusConfigurada() ? ambienteFocus() : null,
-      lojaDosAvisos,
       urlDoAviso,
-      // null = não deu para perguntar; lista vazia = perguntou e não há nenhum.
-      gatilhos:
-        gatilhos?.map((g) => ({ id: g.id ?? null, url: g.url ?? "", event: g.event ?? "" })) ??
-        null,
-      /*
-       * Só está pronto com os DOIS eventos. Com `some`, um gatilho de NF-e
-       * bastava para o botão dizer "aviso cadastrado" e ficar desabilitado —
-       * e a NFC-e, que é a nota do balcão e a mais frequente de todas, ficava
-       * sem callback para sempre. A nota saía autorizada na SEFAZ e continuava
-       * "processando" aqui até alguém consultar na mão.
-       */
-      jaAvisa: ["nfe", "nfce"].every((evento) =>
-        gatilhos?.some((g) => g.url === urlDoAviso && g.event === evento)
-      ),
+      avisos,
+      /** Pronto só quando TODA loja que emite tem os dois eventos. */
+      jaAvisa:
+        avisos.length > 0 && avisos.every((a) => a.eventos !== null && a.faltando.length === 0),
+      /** Alguma consulta falhou: a tela não pode afirmar nem que falta nem que está. */
+      incerto: avisos.some((a) => a.eventos === null && a.faltando.length === 0),
       daquiMesmo,
     },
     lojas: lojas.map((loja) => ({
@@ -135,10 +149,6 @@ export async function action({ request }: Route.ActionArgs) {
 
   if (String(form.get("acao")) === "avisos") {
     const url = String(form.get("url") ?? "")
-    const cnpj = String(form.get("cnpj") ?? "")
-    // O token que autentica é o da loja dona do CNPJ — vem junto do formulário
-    // pelo mesmo motivo que o CNPJ vem: os dois descrevem a mesma empresa.
-    const lojaDoAviso = String(form.get("lojaDoAviso") ?? "")
     const segredo = process.env.FOCUS_NFE_WEBHOOK_SEGREDO?.trim()
 
     if (!mesmoServidor(request, enderecoDoApp(request)) || url.includes("localhost")) {
@@ -153,35 +163,49 @@ export async function action({ request }: Route.ActionArgs) {
     }
 
     /*
-     * Um gatilho por modelo: a Focus separa os eventos, e sem os dois só um dos
-     * documentos avisaria. Cada um é tentado por conta própria — parar no
-     * primeiro deixava o segundo por cadastrar justamente quando o primeiro já
-     * existia, que é o caso mais comum de todos.
+     * Todas as lojas que emitem, e os dois modelos de cada uma.
      *
-     * "Já existe" não é falha: é o estado desejado, alcançado antes.
+     * O gatilho é da EMPRESA, como o token: cadastrar só pela matriz deixaria
+     * as outras três sem aviso, e a nota delas ficaria "processando" para
+     * sempre. E são dois eventos porque a Focus os separa — faltar o de NFC-e,
+     * que é a nota do balcão, é o silêncio mais caro dos dois.
+     *
+     * Cada par é tentado por conta própria. Parar no primeiro erro deixava o
+     * resto por cadastrar justamente quando o primeiro já existia, que é o caso
+     * mais comum de todos — e "já existe" não é falha, é o estado desejado
+     * alcançado antes.
      */
+    const emitentes = (await listarEmitentes()).filter((l) => l.emiteNotaFiscal)
+
     const feitos: string[] = []
     const jaHavia: string[] = []
     const falhas: string[] = []
 
-    for (const evento of ["nfe", "nfce"] as const) {
-      try {
-        await criarGatilho({ loja: lojaDoAviso, evento, url, cnpj, segredo })
-        feitos.push(evento.toUpperCase())
-      } catch (erro) {
-        const mensagem = erro instanceof Error ? erro.message : "falha"
-        if (/já existe|ja existe|already exists/i.test(mensagem)) jaHavia.push(evento.toUpperCase())
-        else falhas.push(`${evento.toUpperCase()}: ${mensagem}`)
+    for (const loja of emitentes) {
+      for (const evento of ["nfe", "nfce"] as const) {
+        const nome = `${loja.codigo}/${evento.toUpperCase()}`
+        try {
+          await criarGatilho({ loja: loja.codigo, evento, url, cnpj: loja.cnpj, segredo })
+          feitos.push(nome)
+        } catch (erro) {
+          const mensagem = erro instanceof Error ? erro.message : "falha"
+          if (/já existe|ja existe|already exists/i.test(mensagem)) jaHavia.push(nome)
+          else falhas.push(`${nome}: ${mensagem}`)
+        }
       }
     }
 
+    // Falha parcial não apaga o que deu certo: sem isto, cadastrar três de
+    // quatro e errar a última pareceria que nada foi feito, e a próxima
+    // tentativa começaria do zero achando que precisava.
     if (falhas.length > 0) {
-      return data({ ok: false as const, erro: falhas.join(" · ") }, { status: 400 })
+      const feito = feitos.length > 0 ? ` (cadastrados: ${feitos.join(", ")})` : ""
+      return data({ ok: false as const, erro: `${falhas.join(" · ")}${feito}` }, { status: 400 })
     }
 
     const partes = []
-    if (feitos.length > 0) partes.push(`aviso cadastrado para ${feitos.join(" e ")}`)
-    if (jaHavia.length > 0) partes.push(`${jaHavia.join(" e ")} já tinha`)
+    if (feitos.length > 0) partes.push(`cadastrado: ${feitos.join(", ")}`)
+    if (jaHavia.length > 0) partes.push(`já existia: ${jaHavia.join(", ")}`)
 
     return { ok: true as const, mensagem: `${partes.join(" · ")} — a nota se atualiza sozinha` }
   }
@@ -225,7 +249,6 @@ export default function AdminFiscal({ loaderData }: Route.ComponentProps) {
 
         <Avisos
           focus={focus}
-          cnpjPadrao={lojas.find((l) => l.emiteNotaFiscal)?.cnpj ?? lojas[0]?.cnpj ?? ""}
           aoSalvar={setAviso}
         />
 
@@ -480,19 +503,17 @@ function Emitente({
  */
 function Avisos({
   focus,
-  cnpjPadrao,
   aoSalvar,
 }: {
   focus: {
     configurada: boolean
     ambiente: string | null
     urlDoAviso: string
-    gatilhos: Array<{ id: number | null; url: string; event: string }> | null
+    avisos: Array<{ loja: string; cnpj: string; eventos: string[] | null; faltando: string[] }>
     jaAvisa: boolean
-    lojaDosAvisos: string
+    incerto: boolean
     daquiMesmo: boolean
   }
-  cnpjPadrao: string
   aoSalvar: (aviso: { texto: string; tipo: "erro" | "sucesso" }) => void
 }) {
   const fetcher = useFetcher<typeof action>()
@@ -544,37 +565,37 @@ function Avisos({
         <div className="min-w-0 flex-1">
           <Rotulo>Aviso da SEFAZ chega em</Rotulo>
           <p className="truncate font-mono text-xs text-muted-foreground">{focus.urlDoAviso}</p>
-          {focus.gatilhos === null ? (
+          {focus.avisos.length === 0 ? (
             <p className="mt-1 text-xs text-muted-foreground">
-              Não deu para perguntar à Focus quais avisos estão cadastrados.
+              Nenhuma loja emite nota — não há aviso a cadastrar.
             </p>
           ) : focus.jaAvisa ? (
             <p className="mt-1 text-xs text-muted-foreground">
-              Cadastrado para {focus.gatilhos
-                .filter((g) => g.url === focus.urlDoAviso)
-                .map((g) => g.event.toUpperCase())
-                .join(" e ")}{" "}
-              — a nota se atualiza sozinha quando a SEFAZ responde.
+              Cadastrado para NF-e e NFC-e em{" "}
+              {focus.avisos.map((a) => a.loja).join(", ")} — a nota se atualiza sozinha
+              quando a SEFAZ responde.
             </p>
           ) : (
-            <p className="mt-1 text-xs text-muted-foreground">
-              {/* Qual evento falta, e não só "falta algo": com NF-e cadastrada e
-                  NFC-e não, quem lê "ainda não cadastrado" vai procurar o que
-                  já está lá. A do balcão é a NFC-e. */}
-              {(() => {
-                const faltando = (["nfe", "nfce"] as const).filter(
-                  (evento) =>
-                    !focus.gatilhos?.some(
-                      (g) => g.url === focus.urlDoAviso && g.event === evento
-                    )
-                )
-                return faltando.length === 2
-                  ? "Ainda não cadastrado."
-                  : `Falta o de ${faltando.map((e) => e.toUpperCase()).join(" e ")} — o outro já está.`
-              })()}{" "}
-              Sem ele, a nota só se atualiza quando alguém abre a tela de Vendas.
-              {podeCadastrar ? "" : " Cadastre pelo sistema no ar, não daqui."}
-            </p>
+            <div className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+              {/* Uma linha por loja: o gatilho é da empresa, e "falta o aviso"
+                  sem dizer de quem manda procurar nas quatro. */}
+              {focus.avisos.map((a) => (
+                <p key={a.loja}>
+                  <span className="font-mono">{a.loja}</span>{" "}
+                  {a.eventos === null
+                    ? "não deu para perguntar à Focus"
+                    : a.faltando.length === 0
+                      ? "NF-e e NFC-e cadastrados"
+                      : a.faltando.length === 2
+                        ? "sem aviso nenhum"
+                        : `falta o de ${a.faltando.map((e) => e.toUpperCase()).join(" e ")}`}
+                </p>
+              ))}
+              <p>
+                Sem o aviso, a nota só se atualiza quando alguém abre a tela de Vendas.
+                {podeCadastrar ? "" : " Cadastre pelo sistema no ar, não daqui."}
+              </p>
+            </div>
           )}
         </div>
 
@@ -583,8 +604,7 @@ function Avisos({
         <fetcher.Form method="post" className="shrink-0">
           <input type="hidden" name="acao" value="avisos" />
           <input type="hidden" name="url" value={focus.urlDoAviso} />
-          <input type="hidden" name="cnpj" value={cnpjPadrao} />
-          <input type="hidden" name="lojaDoAviso" value={focus.lojaDosAvisos} />
+
           <Button
             type="submit"
             size="sm"
