@@ -68,8 +68,18 @@ model Loja {
   /// CRT: 1 Simples Nacional, 2 Simples com excesso de sublimite, 3 regime normal.
   /// Decide se o item vai com CSOSN (Simples) ou com CST e alíquota (normal).
   regimeTributario  Int?
-  /// Série da numeração. A sequência é da Focus; a série é do emitente, e mudá-la
-  /// depois de emitir reinicia a contagem — por isso fica cadastrada, não fixa.
+  /// Série da numeração — REGISTRO do que está configurado no painel da Focus,
+  /// não o que decide.
+  ///
+  /// Quem numera é a Focus, por `serie_nfce_producao` e
+  /// `proximo_numero_nfce_producao` no cadastro da empresa. Mandar a série no
+  /// payload da nota sem mandar o número junto não muda nada — foi o que
+  /// recusou as duas primeiras NFC-e de produção, que saíram na série 1 (já
+  /// gasta pelo sistema antigo) enquanto este campo dizia 3.
+  ///
+  /// Continua valendo a pena guardar: é o que permite a tela mostrar em que
+  /// série a loja emite sem abrir o painel da Focus, e comparar quando
+  /// divergir.
   serieNfce         Int?
   serieNfe          Int?
   /// O que a venda comum usa quando o produto não traz exceção. 5102 dentro do

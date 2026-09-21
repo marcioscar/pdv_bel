@@ -275,7 +275,8 @@ export default function AdminFiscal({ loaderData }: Route.ComponentProps) {
         <span className="text-muted-foreground">
           Carga entre lojas da rede sai como transferência, não como venda ·
           CFOP e CSOSN são definição do contador — o sistema só repete o que
-          estiver aqui
+          estiver aqui · Série e próximo número são configurados no painel da
+          Focus, por empresa; aqui é só o registro
         </span>
         {aviso ? (
           <span
@@ -428,16 +429,19 @@ function Emitente({
             ))}
           </select>
         </div>
+        {/* Anotação, não comando: quem numera é a Focus, pelo cadastro da
+            empresa no painel dela. O rótulo diz isso para ninguém trocar a
+            série aqui e esperar que a próxima nota mude. */}
         <Campo
           nome="serieNfce"
-          rotulo="Série NFC-e"
+          rotulo="Série NFC-e (na Focus)"
           valor={form.serieNfce}
           onChange={(v) => alterar({ serieNfce: v.replace(/\D/g, "") })}
           className="col-span-2"
         />
         <Campo
           nome="serieNfe"
-          rotulo="Série NF-e"
+          rotulo="Série NF-e (na Focus)"
           valor={form.serieNfe}
           onChange={(v) => alterar({ serieNfe: v.replace(/\D/g, "") })}
           className="col-span-2"

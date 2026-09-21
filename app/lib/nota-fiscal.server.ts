@@ -290,7 +290,20 @@ export async function emitirDaVenda(
     cnpj_emitente: loja.cnpj,
     nome_emitente: loja.razaoSocial,
     inscricao_estadual_emitente: loja.inscricaoEstadual,
-    serie: (modelo === "nfce" ? loja.serieNfce : loja.serieNfe) ?? undefined,
+    /*
+     * A SÉRIE NÃO VAI AQUI, e mandá-la sozinha não fazia nada.
+     *
+     * A Focus numera automaticamente pelo que está no cadastro da empresa —
+     * `serie_nfce_producao` e `proximo_numero_nfce_producao`. Para assumir o
+     * controle é preciso mandar `numero` E `serie` juntos, e aí a sequência
+     * passa a ser nossa, com todo o risco de descolar da SEFAZ. Mandar só a
+     * série era pior que não mandar nada: dava a impressão de que o cadastro
+     * daqui decidia, e a nota saía na série da Focus mesmo assim.
+     *
+     * Descoberto no primeiro dia de produção: as duas primeiras NFC-e foram
+     * recusadas por duplicidade porque saíram na série 1, que o sistema antigo
+     * já tinha usado, enquanto o cadastro daqui dizia série 3.
+     */
     valor_produtos: valorProdutos,
     valor_desconto: venda.desconto || undefined,
     valor_frete: valorFrete || undefined,
@@ -738,7 +751,8 @@ export async function emitirDaDevolucao(
     cnpj_emitente: loja.cnpj,
     nome_emitente: loja.razaoSocial,
     inscricao_estadual_emitente: loja.inscricaoEstadual,
-    serie: loja.serieNfe ?? undefined,
+    // Série: ver a nota longa em `emitirParaVenda`. Quem numera é a Focus,
+    // pelo cadastro da empresa no painel dela.
     valor_produtos: devolucao.total,
     valor_total: devolucao.total,
     informacoes_adicionais_contribuinte: [
