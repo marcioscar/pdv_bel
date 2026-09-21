@@ -11,7 +11,9 @@ npm run start      # serve the production build (react-router-serve)
 npm run typecheck  # react-router typegen && tsc  -- the only check available
 ```
 
-There is no test runner, linter, or formatter configured. `npm run typecheck` is the sole verification step; run it after changes, and run it (or `npm run dev`) after adding or renaming routes so `.react-router/types` is regenerated.
+There is no test runner, linter, or formatter configured. `npm run typecheck` is the main verification step; run it after changes, and run it (or `npm run dev`) after adding or renaming routes so `.react-router/types` is regenerated.
+
+**`npm run typecheck` is not enough before pushing a route change.** An import from a `.server` module that is left in the import list but no longer used passes typecheck (TS allows unused imports) and passes `npm run dev`, then fails `npm run build` with `Server-only module referenced by client` — which names the route and talks about client code, not about a leftover import. It breaks the deploy, not the local run. Run `npm run build` before pushing anything that touches a file under `app/routes/`.
 
 Docker: `docker build -t pdv . && docker run -p 3000:3000 pdv` (multi-stage; the final image runs `npm run start`).
 

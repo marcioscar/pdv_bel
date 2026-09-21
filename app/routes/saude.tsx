@@ -5,7 +5,10 @@ import {
   chavePixConfigurada,
   interConfigurado,
 } from "~/lib/inter.server"
-import { ambienteFocus, focusConfigurada, origemDoToken, variavelDoToken } from "~/lib/focus.server"
+// Só o que é usado: import pendurado de módulo `.server` derruba o build de
+// produção inteiro, com um erro que fala de código no cliente e não de import
+// sobrando.
+import { ambienteFocus, origemDoToken, variavelDoToken } from "~/lib/focus.server"
 import { certificadoSefazDaLoja, sefazConfigurado } from "~/lib/sefaz.server"
 import { diagnosticoSessao } from "~/lib/sessao.server"
 import { diagnosticoTelegram } from "~/lib/telegram.server"
