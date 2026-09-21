@@ -99,6 +99,12 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         somenteGerente: true,
       },
       {
+        para: "/admin/grupos",
+        rotulo: "Grupos",
+        descricao: "As gavetas do catálogo, e o que é encomenda em vez de mercadoria",
+        somenteGerente: true,
+      },
+      {
         para: "/admin/estoque",
         rotulo: "Entradas e inventário",
         descricao: "Entrada de mercadoria e saldo contado",

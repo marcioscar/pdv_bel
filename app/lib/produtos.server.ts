@@ -7,6 +7,8 @@ export type ProdutoEntrada = {
   descricao: string
   unidade: string
   preco: number
+  /** A gaveta do catálogo. Nulo é aceito: produto pode nascer sem classificação. */
+  grupoId: string | null
   /** Preço unitário a partir de `quantidadeCombo`. Nulo quando não há combo. */
   precoCombo: number | null
   quantidadeCombo: number | null
@@ -55,6 +57,7 @@ export function lerProduto(form: FormData): ProdutoEntrada | { erro: string } {
   const unidade = texto(form.get("unidade")).toUpperCase()
   const preco = interpretarValor(texto(form.get("preco")))
   const ncm = texto(form.get("ncm")).replace(/\D/g, "")
+  const grupoId = texto(form.get("grupoId"))
 
   const origemFiscal = texto(form.get("origemFiscal")).replace(/\D/g, "")
   const cfop = texto(form.get("cfop")).replace(/\D/g, "")
@@ -88,6 +91,9 @@ export function lerProduto(form: FormData): ProdutoEntrada | { erro: string } {
   if (cfop && !validarCfop(cfop)) return { erro: "CFOP precisa ter 4 dígitos" }
   if (csosn && !validarCsosn(csosn)) return { erro: "CSOSN precisa ter 3 dígitos" }
   if (cest && !validarCest(cest)) return { erro: "CEST precisa ter 7 dígitos" }
+  // O grupo vem de um <select> alimentado pelo loader, mas o formulário é
+  // POST: um id torto viraria erro do Prisma no meio do update, longe daqui.
+  if (grupoId && !OBJECT_ID.test(grupoId)) return { erro: "Grupo inválido" }
   // O CEST só existe para descrever mercadoria de substituição tributária: sem o
   // CSOSN que a declara, ele iria para a nota descrevendo o que ela não é.
   if (cest && !csosn) {
@@ -122,6 +128,7 @@ export function lerProduto(form: FormData): ProdutoEntrada | { erro: string } {
     descricao,
     unidade,
     preco,
+    grupoId: grupoId || null,
     precoCombo,
     quantidadeCombo,
     ncm: ncm || null,

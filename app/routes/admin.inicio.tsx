@@ -196,6 +196,15 @@ export default function AdminInicio({ loaderData }: Route.ComponentProps) {
               só quando a política de compra é recalculada. O valor é estimativa —
               quantidade vendida × preço de hoje, porque o preço praticado então não
               foi guardado.
+              {abc.foraPorGrupo > 0 ? (
+                <>
+                  {" "}
+                  Fora da conta: {abc.foraPorGrupo} produto
+                  {abc.foraPorGrupo === 1 ? "" : "s"} de grupo que não é mercadoria de
+                  prateleira — encomenda não volta a vender, e na curva empurraria para
+                  a faixa A um item que ninguém vai recomprar.
+                </>
+              ) : null}
             </p>
           </Cartao>
         ) : null}

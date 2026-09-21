@@ -128,11 +128,59 @@ model Produto {
   cfop  String?
   csosn String?
   cest  String?
+  /// A que grupo o produto pertence — "Sacos", "Isopor", "Encomenda"…
+  ///
+  /// Opcional porque o catálogo viveu 1.132 produtos sem ele, e porque produto
+  /// nascido no balcão pode nascer sem: travar o cadastro por falta de grupo
+  /// seria impedir a venda por causa de uma classificação.
+  grupoId   String? @db.ObjectId
+
   /// Produto não é apagado: sai das buscas e do caixa, e o histórico das vendas
   /// que o incluem continua íntegro. Apagar deixaria itens órfãos no relatório.
   ativo     Boolean @default(true)
 
   @@map("produtos")
+}
+
+/// O grupo a que o produto pertence — a gaveta do catálogo.
+///
+/// Veio do sistema antigo, onde o cadastro sempre teve grupo e o nosso não
+/// tinha. Serve a duas perguntas diferentes, e é a segunda que justifica o
+/// campo `tipo`:
+///
+/// 1. **Navegar o catálogo.** "Mostre os Isopor" é a pergunta de quem compra.
+///
+/// 2. **Separar o que é mercadoria do que é encomenda.** A curva ABC responde
+///    "o que sustenta a operação", e para isso só vale o que a rede vende de
+///    prateleira. Encomenda é item feito sob medida para um cliente — clichê,
+///    saco impresso com o nome da padaria —, que aparece uma vez e não volta.
+///    Misturado na curva, ele empurra para a faixa A um produto que ninguém vai
+///    recomprar, e o comprador compraria estoque de uma venda que não repete.
+///
+/// A transferência entre lojas fica fora da ABC por outro caminho, e não por
+/// aqui: ela não é um grupo de produto, é a forma de pagamento
+/// `FORMA_TRANSFERENCIA` — o mesmo saco que se transfere é o que se vende.
+model GrupoDeProduto {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+
+  /// O código do sistema antigo ("1", "19", "32"). É a chave da importação:
+  /// o nome é editável na tela e mudaria debaixo dela.
+  codigo String @unique
+  nome   String
+
+  /// "padrao" | "encomenda". Só "padrao" entra na curva ABC e nas análises de
+  /// giro. Um enum seria mais bonito; texto é o que o resto do schema usa, e
+  /// deixa acrescentar "servico" sem migração.
+  tipo String @default("padrao")
+
+  /// Grupo não é apagado, pelo mesmo motivo de produto e fornecedor: os
+  /// produtos apontam para ele, e apagar deixaria o ponteiro no vazio.
+  ativo Boolean @default(true)
+
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  @@map("grupos_de_produtos")
 }
 
 /// A tabela NCM oficial, copiada para cá.

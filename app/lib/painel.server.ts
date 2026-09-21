@@ -1,4 +1,5 @@
 import { db } from "~/lib/db.server"
+import { gruposDaAnalise } from "~/lib/grupos.server"
 import { arredondar } from "~/lib/moeda"
 import { percentuaisDaOperacao } from "~/lib/precificacao.server"
 import { NAO_CANCELADA, NAO_E_TRANSFERENCIA } from "~/lib/vendas.server"
@@ -95,25 +96,47 @@ export type LinhaAbc = {
  *    naquele período pode ter sido outro, e a política não guarda o preço.
  *
  * Corte clássico: A até 80% do valor acumulado, B até 95%, C o resto.
+ *
+ * **Só entra grupo do tipo "padrao".** Encomenda — clichê, saco impresso com o
+ * nome da padaria — é feita sob medida para um cliente e não volta a vender;
+ * na curva ela empurraria para a faixa A um produto que ninguém vai recomprar,
+ * e o comprador formaria estoque de uma venda que não repete. A transferência
+ * entre lojas já fica fora por outro caminho: a política é calculada da VENDA,
+ * e transferência não é venda.
  */
 export async function curvaAbc(limite = 10) {
-  const politicas = await db.politicaDeCompra.findMany({
-    select: { produtoId: true, vendidoNoPeriodo: true, calculadoEm: true, diasAnalisados: true },
-  })
+  const [politicas, daAnalise] = await Promise.all([
+    db.politicaDeCompra.findMany({
+      select: { produtoId: true, vendidoNoPeriodo: true, calculadoEm: true, diasAnalisados: true },
+    }),
+    gruposDaAnalise(),
+  ])
   if (politicas.length === 0) return null
 
   const produtos = await db.produto.findMany({
     where: { id: { in: politicas.map((p) => p.produtoId) } },
-    select: { id: true, codigo: true, descricao: true, preco: true },
+    select: { id: true, codigo: true, descricao: true, preco: true, grupoId: true },
   })
   const porId = new Map(produtos.map((p) => [p.id, p]))
 
+  let foraDaAnalise = 0
   const todas = politicas
     .flatMap((p) => {
       const produto = porId.get(p.produtoId)
       // Produto desativado depois do cálculo: a política sobrevive ao cadastro,
       // mas um item sem nome não diz nada numa curva que se lê pelo nome.
       if (!produto) return []
+      /*
+       * `daAnalise === null` é "ninguém cadastrou grupo ainda" — e aí a curva é
+       * do catálogo inteiro, como sempre foi. Diferente de um grupo marcado
+       * como encomenda, que tira o produto de propósito. Produto sem grupo
+       * ENTRA: é o estado de quem ainda não foi classificado, e sumir dele
+       * calado esvaziaria a curva sem ninguém entender por quê.
+       */
+      if (daAnalise && produto.grupoId && !daAnalise.has(produto.grupoId)) {
+        foraDaAnalise++
+        return []
+      }
       return [
         {
           produtoId: p.produtoId,
@@ -151,6 +174,8 @@ export async function curvaAbc(limite = 10) {
     faixas: { A: conta("A"), B: conta("B"), C: conta("C") },
     calculadoEm: politicas[0].calculadoEm.toISOString(),
     diasAnalisados: politicas[0].diasAnalisados,
+    /** Quantos produtos ficaram de fora por serem de grupo que não é padrão. */
+    foraPorGrupo: foraDaAnalise,
   }
 }
 

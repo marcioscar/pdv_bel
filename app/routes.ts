@@ -39,6 +39,7 @@ export default [
     layout("routes/admin.tsx", [
       index("routes/admin.inicio.tsx"),
       route("produtos", "routes/admin.produtos.tsx"),
+      route("grupos", "routes/admin.grupos.tsx"),
       // Sem tela: só responde a busca na tabela NCM e a reimportação.
       route("ncm", "routes/admin.ncm.tsx"),
       route("clientes", "routes/admin.clientes.tsx"),

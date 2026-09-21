@@ -10,6 +10,7 @@ import { Input } from "~/components/ui/input"
 import { Kbd } from "~/components/ui/kbd"
 import { db } from "~/lib/db.server"
 import { saldosPorProduto } from "~/lib/estoque.server"
+import { listarGrupos } from "~/lib/grupos.server"
 import { BuscaNcm } from "~/components/pdv/busca-ncm"
 import {
   ComprasDoProduto,
@@ -37,20 +38,26 @@ export async function loader({ request }: Route.LoaderArgs) {
   const eu = await exigirGerente(request, "editarProdutos")
 
   // Aqui vêm os inativos também: esta é a tela que os reativa.
-  const [cadastro, saldos, repetidos] = await Promise.all([
+  const [cadastro, saldos, repetidos, grupos] = await Promise.all([
     db.produto.findMany({ orderBy: { descricao: "asc" } }),
     // O saldo mostrado é o da loja em que o gerente está — o catálogo é da rede,
     // o estoque é da prateleira.
     saldosPorProduto(eu.loja),
     codigosRepetidos(),
+    listarGrupos(),
   ])
+  const nomeDoGrupo = new Map(grupos.map((g) => [g.id, g.nome]))
 
   return {
     loja: eu.loja,
+    // Só os ativos no <select>: reativar grupo é trabalho da tela de grupos, e
+    // um desativado na lista convidaria a classificar produto novo nele.
+    grupos: grupos.filter((g) => g.ativo).map((g) => ({ id: g.id, nome: g.nome })),
     produtos: cadastro.map((produto) => ({
       ...produto,
       estoque: saldos.get(produto.id) ?? 0,
       codigoRepetido: repetidos.has(produto.codigo),
+      grupoNome: produto.grupoId ? (nomeDoGrupo.get(produto.grupoId) ?? null) : null,
     })),
   }
 }
@@ -96,6 +103,7 @@ type EmEdicao = {
   descricao: string
   unidade: string
   preco: string
+  grupoId: string
   precoCombo: string
   quantidadeCombo: string
   ncm: string
@@ -106,13 +114,13 @@ type EmEdicao = {
 }
 
 const NOVO: EmEdicao = {
-  id: null, codigo: "", descricao: "", unidade: "", preco: "",
+  id: null, codigo: "", descricao: "", unidade: "", preco: "", grupoId: "",
   precoCombo: "", quantidadeCombo: "", ncm: "",
   origemFiscal: "", cfop: "", csosn: "", cest: "",
 }
 
 export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
-  const { produtos } = loaderData
+  const { produtos, grupos } = loaderData
 
   const [busca, setBusca] = useState("")
   const [mostrarInativos, setMostrarInativos] = useState(false)
@@ -193,6 +201,7 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
         descricao: edicao.descricao,
         unidade: edicao.unidade,
         preco: edicao.preco,
+        grupoId: edicao.grupoId,
         precoCombo: edicao.precoCombo,
         quantidadeCombo: edicao.quantidadeCombo,
         ncm: edicao.ncm,
@@ -268,6 +277,29 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
             onChange={(v) => setEdicao({ ...edicao, unidade: v })}
             className="col-span-1"
           />
+          {/* O grupo fica junto de descrição e unidade, e não com os campos
+              fiscais: é classificação de catálogo, não de tributação. */}
+          <div className="col-span-2">
+            <label
+              htmlFor="produto-grupo"
+              className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
+            >
+              Grupo
+            </label>
+            <select
+              id="produto-grupo"
+              value={edicao.grupoId}
+              onChange={(e) => setEdicao({ ...edicao, grupoId: e.target.value })}
+              className="h-9 w-full rounded-lg border border-border bg-background px-2 text-sm"
+            >
+              <option value="">Sem grupo</option>
+              {grupos.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.nome}
+                </option>
+              ))}
+            </select>
+          </div>
           <BuscaNcm
             valor={edicao.ncm}
             onEscolher={(ncm) => setEdicao({ ...edicao, ncm })}
@@ -440,6 +472,11 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
                     >
                       {produto.descricao}
                     </button>
+                    {produto.grupoNome ? (
+                      <div className="text-[10px] text-muted-foreground">
+                        {produto.grupoNome}
+                      </div>
+                    ) : null}
                   </td>
                   <td className="px-2 py-2">
                     <Badge variant="outline" className="font-mono text-[10px]">
@@ -476,6 +513,7 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
                           codigo: produto.codigo,
                           descricao: produto.descricao,
                           unidade: produto.unidade,
+                          grupoId: produto.grupoId ?? "",
                           // Vírgula, como se digita — interpretarValor aceita as duas.
                           preco: produto.preco.toFixed(2).replace(".", ","),
                           precoCombo:
