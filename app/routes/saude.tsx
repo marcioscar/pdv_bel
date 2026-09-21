@@ -5,6 +5,7 @@ import {
   chavePixConfigurada,
   interConfigurado,
 } from "~/lib/inter.server"
+import { ambienteFocus, focusConfigurada } from "~/lib/focus.server"
 import { certificadoSefazDaLoja, sefazConfigurado } from "~/lib/sefaz.server"
 import { diagnosticoSessao } from "~/lib/sessao.server"
 import { diagnosticoTelegram } from "~/lib/telegram.server"
@@ -73,6 +74,54 @@ export async function loader(_: Route.LoaderArgs) {
     banco = `falhou: ${erro instanceof Error ? erro.message.split("\n")[0] : "erro"}`
   }
 
+  /*
+   * O que faltava aqui, e é a pergunta que mais importa num deploy: a nota que
+   * sai é de verdade? O ambiente é escolhido pelo token, e o token só existe
+   * no servidor — sem esta linha, "estamos em produção" só se descobria
+   * emitindo, que é tarde demais para descobrir.
+   *
+   * E, junto, o que cada loja ainda não tem para poder emitir. A tela de
+   * Cadastros › Fiscal já mostra isso de dentro; de fora, sem login, era
+   * invisível.
+   */
+  let fiscal: Record<string, unknown>
+  try {
+    const lojas = await db.loja.findMany({
+      where: { ativo: true },
+      orderBy: { ordem: "asc" },
+    })
+
+    const pendenciasDe = (l: (typeof lojas)[number]) => {
+      const falta: string[] = []
+      if (!l.inscricaoEstadual) falta.push("inscricaoEstadual")
+      if (!l.regimeTributario) falta.push("regimeTributario")
+      if (!l.cfopVendaInterna) falta.push("cfopVendaInterna")
+      if (!l.cfopVendaInterestadual) falta.push("cfopVendaInterestadual")
+      if (!l.cfopTransferencia) falta.push("cfopTransferencia")
+      // Sem ele a NF-e de devolução não sai — e só se descobre com o cliente
+      // na frente devolvendo mercadoria.
+      if (!l.cfopDevolucao) falta.push("cfopDevolucao")
+      if (!l.csosnPadrao) falta.push("csosnPadrao")
+      return falta
+    }
+
+    fiscal = {
+      // "homologacao" = nota de teste, sem valor. "producao" = nota de verdade.
+      ambiente: ambienteFocus(),
+      tokenConfigurado: focusConfigurada(),
+      // Sem ele a Focus não consegue avisar quando a SEFAZ responde, e a nota
+      // fica "processando" até alguém consultar na mão.
+      avisoDaFocus: Boolean(process.env.FOCUS_NFE_WEBHOOK_SEGREDO),
+      emitem: lojas.filter((l) => l.emiteNotaFiscal).map((l) => l.codigo),
+      noCupomNaoFiscal: lojas.filter((l) => !l.emiteNotaFiscal).map((l) => l.codigo),
+      pendencias: Object.fromEntries(
+        lojas.map((l) => [l.codigo, pendenciasDe(l)]).filter(([, falta]) => falta.length > 0)
+      ),
+    }
+  } catch {
+    fiscal = { erro: "não foi possível ler as lojas" }
+  }
+
   return Response.json(
     {
       ok: true,
@@ -92,6 +141,7 @@ export async function loader(_: Route.LoaderArgs) {
       // Sem SESSION_SECRET nada que exige login funciona; melhor dizer aqui.
       sessao: diagnosticoSessao(),
       banco,
+      fiscal,
       contasInter: contas,
       // Sem isto, "o gerente parou de receber aviso" e "o token nunca subiu para
       // o ambiente" seriam indistinguíveis de fora.
