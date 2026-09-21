@@ -125,11 +125,43 @@ export default function RelatorioInventario({ loaderData }: Route.ComponentProps
     [filtradas, lojas]
   )
 
-  /** A margem que está dormindo na prateleira. Só sobre o que tem custo. */
-  const vendaComCusto = filtradas
-    .filter((l) => l.valorCusto !== null)
-    .reduce((s, l) => s + l.valorVenda, 0)
-  const margem = vendaComCusto > 0 ? ((vendaComCusto - custoFiltrado) / vendaComCusto) * 100 : null
+  /*
+   * Os cartões do topo somam O QUE ESTÁ NA TELA, não o inventário inteiro.
+   *
+   * Antes três deles vinham prontos do servidor e só a margem era calculada do
+   * recorte — então um filtro que não achava nada deixava a margem em branco
+   * enquanto os outros três seguiam mostrando o total da rede. Quatro números
+   * lado a lado respondendo a perguntas diferentes, sem nada na tela dizendo
+   * isso.
+   */
+  const resumo = useMemo(() => {
+    const semCusto = filtradas.filter((l) => l.valorCusto === null)
+    const comCusto = filtradas.filter((l) => l.valorCusto !== null)
+    const vendaComCusto = comCusto.reduce((s, l) => s + l.valorVenda, 0)
+    const custo = comCusto.reduce((s, l) => s + (l.valorCusto ?? 0), 0)
+
+    return {
+      itens: filtradas.length,
+      unidades: filtradas.reduce((s, l) => s + l.quantidade, 0),
+      valorCusto: custo,
+      valorVenda: filtradas.reduce((s, l) => s + l.valorVenda, 0),
+      semCusto: semCusto.length,
+      semCustoValorVenda: semCusto.reduce((s, l) => s + l.valorVenda, 0),
+      comCusto: comCusto.length,
+      /*
+       * A razão vale para saldo negativo também: custo e venda trocam de sinal
+       * juntos, e o percentual sai o mesmo. O que não existe é margem sobre
+       * venda zero — e zero seria uma resposta, não a ausência dela.
+       */
+      margem:
+        Math.abs(vendaComCusto) > 0.01
+          ? ((vendaComCusto - custo) / vendaComCusto) * 100
+          : null,
+    }
+  }, [filtradas])
+
+  /** Há recorte na tela? É o que decide se os cartões precisam se explicar. */
+  const filtrando = filtradas.length !== linhas.length
 
   function trocarLoja(valor: string) {
     setParams((atuais) => {
@@ -177,28 +209,42 @@ export default function RelatorioInventario({ loaderData }: Route.ComponentProps
         <div className="grid gap-3 border-b border-border px-4 py-4 sm:grid-cols-2 lg:grid-cols-4 sm:px-5">
           <Numero
             rotulo="Valor de custo"
-            valor={moeda(totais.valorCusto)}
-            apoio={`${totais.itens.toLocaleString("pt-BR")} itens · ${formatarQuantidade(totais.unidades)} unidades`}
+            valor={moeda(resumo.valorCusto)}
+            apoio={
+              filtrando
+                ? `${resumo.itens.toLocaleString("pt-BR")} de ${totais.itens.toLocaleString("pt-BR")} itens · ${moeda(totais.valorCusto)} sem filtro`
+                : `${resumo.itens.toLocaleString("pt-BR")} itens · ${formatarQuantidade(resumo.unidades)} unidades`
+            }
           />
           <Numero
             rotulo="Valor de venda"
-            valor={moeda(totais.valorVenda)}
+            valor={moeda(resumo.valorVenda)}
             apoio="se tudo sair pelo preço de hoje"
           />
           <Numero
             rotulo="Margem embutida"
-            valor={margem === null ? "—" : `${margem.toFixed(1)}%`}
-            apoio="o que a prateleira rende sobre o que custou"
+            valor={resumo.margem === null ? "—" : `${resumo.margem.toFixed(1)}%`}
+            apoio={
+              resumo.margem !== null
+                ? "o que a prateleira rende sobre o que custou"
+                : resumo.itens === 0
+                  ? "nada na tela para somar"
+                  : resumo.comCusto === 0
+                    ? "nenhum item do recorte tem custo conhecido"
+                    : "o recorte não soma valor de venda"
+            }
           />
           <Numero
             rotulo="Sem custo conhecido"
-            valor={totais.semCusto.toLocaleString("pt-BR")}
+            valor={resumo.semCusto.toLocaleString("pt-BR")}
             apoio={
-              totais.semCusto > 0
-                ? `${moeda(totais.semCustoValorVenda)} a preço de venda, fora do custo`
-                : "todo item com saldo tem custo"
+              resumo.semCusto > 0
+                ? `${moeda(resumo.semCustoValorVenda)} a preço de venda, fora do custo`
+                : resumo.itens === 0
+                  ? "—"
+                  : "todo item com saldo tem custo"
             }
-            alerta={totais.semCusto > 0}
+            alerta={resumo.semCusto > 0}
           />
         </div>
 
