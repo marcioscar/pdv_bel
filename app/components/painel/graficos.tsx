@@ -141,6 +141,44 @@ export type LinhaAbc = {
  * ordenada e não identidade. E a faixa vem escrita ao lado — cor sozinha nunca
  * carrega o significado.
  */
+/**
+ * O rótulo de cada barra da ABC: descrição em cima, código embaixo.
+ *
+ * Duas linhas porque é o código que se digita no caixa e se procura no
+ * fornecedor — ele precisa estar ali, mas não pode competir com o nome pelo
+ * primeiro olhar. Por isso sai menor, em monoespaçada e apagado.
+ *
+ * As props `x`, `y` e `payload` são injetadas pelo Recharts quando clona o
+ * elemento; só `codigos` vem de quem monta o gráfico.
+ */
+function TickDoProduto({
+  x,
+  y,
+  payload,
+  codigos,
+}: {
+  x?: number
+  y?: number
+  payload?: { value?: string }
+  codigos: Map<string, string>
+}) {
+  const nome = payload?.value ?? ""
+  const codigo = codigos.get(nome)
+
+  return (
+    <text x={x} y={y} textAnchor="end">
+      <tspan x={x} dy={-2} className="fill-foreground text-[10px]">
+        {nome}
+      </tspan>
+      {codigo ? (
+        <tspan x={x} dy={11} className="fill-muted-foreground font-mono text-[9px]">
+          {codigo}
+        </tspan>
+      ) : null}
+    </text>
+  )
+}
+
 export function GraficoAbc({ linhas }: { linhas: LinhaAbc[] }) {
   const config = {
     valor: { label: "Valor" },
@@ -151,11 +189,20 @@ export function GraficoAbc({ linhas }: { linhas: LinhaAbc[] }) {
 
   const dados = linhas.map((l) => ({
     nome: l.descricao.length > 30 ? `${l.descricao.slice(0, 29)}…` : l.descricao,
+    codigo: l.codigo,
     valor: l.valor,
     faixa: l.faixa,
     participacao: l.participacao,
     acumulado: l.acumulado,
   }))
+
+  /*
+   * O eixo do Recharts recebe só o valor da categoria, que aqui é a descrição.
+   * O código vem por fora, por este mapa — e não colado na descrição, que
+   * viraria "8298 Alcool Liquido 1 L…" numa linha só e gastaria com o código o
+   * espaço que falta para o nome.
+   */
+  const codigoPorNome = new Map(dados.map((d) => [d.nome, d.codigo]))
 
   return (
     <ChartContainer config={config} className="h-[22rem] w-full">
@@ -172,7 +219,7 @@ export function GraficoAbc({ linhas }: { linhas: LinhaAbc[] }) {
           tickLine={false}
           axisLine={false}
           width={200}
-          className="text-[10px]"
+          tick={<TickDoProduto codigos={codigoPorNome} />}
         />
         <ChartTooltip
           content={
