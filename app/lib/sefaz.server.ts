@@ -484,7 +484,13 @@ async function chamarDistribuicao(
 
   const texto = await resposta.text()
   if (!resposta.ok) {
-    return { ok: false, erro: `SEFAZ respondeu HTTP ${resposta.status}: ${texto.slice(0, 300)}` }
+    const razao = razaoDoFault(texto)
+    return {
+      ok: false,
+      erro: razao
+        ? `SEFAZ recusou o pedido: ${razao}`
+        : `SEFAZ respondeu HTTP ${resposta.status}: ${texto.slice(0, 300)}`,
+    }
   }
 
   let dados: any
@@ -517,6 +523,31 @@ async function chamarDistribuicao(
 }
 
 /** Acha o primeiro nó com este nome em qualquer profundidade — ver o comentário de uso abaixo. */
+/**
+ * A razão de um `soap:Fault`, venha ele com HTTP 200 ou 500.
+ *
+ * A SEFAZ manda Fault com status 500, então o ramo de "HTTP não-ok" pegava a
+ * resposta antes de alguém tentar entendê-la — e o corte em 300 caracteres
+ * parava exatamente em `<soap:Reason>`, que é a única parte que explica o que
+ * está errado. Custou uma ida e volta inteira contra o serviço para descobrir
+ * que a mensagem estava ali o tempo todo.
+ */
+function razaoDoFault(texto: string): string | null {
+  let dados: any
+  try {
+    dados = parser.parse(texto)
+  } catch {
+    return null
+  }
+
+  const fault = buscarEmProfundidade(dados, "Fault")
+  if (!fault) return null
+
+  const motivo = fault.Reason?.Text ?? fault.faultstring ?? fault.Reason
+  if (typeof motivo === "string") return motivo
+  return motivo ? JSON.stringify(motivo) : "Motivo não informado"
+}
+
 function buscarEmProfundidade(no: any, alvo: string): any {
   if (no == null || typeof no !== "object") return undefined
   if (alvo in no) return no[alvo]
@@ -780,9 +811,13 @@ export async function darCienciaDaOperacao(
     `xmlns:xsd="http://www.w3.org/2001/XMLSchema" ` +
     `xmlns:soap12="http://www.w3.org/2003/05/soap-envelope">` +
     `<soap12:Body>` +
-    `<nfeRecepcaoEvento xmlns="${NAMESPACE_EVENTO}">` +
+    /*
+     * `nfeDadosMsg` vai DIRETO no Body, sem elemento externo — ao contrário da
+     * distribuição, que se envolve em `nfeDistDFeInteresse`. Os dois serviços
+     * diferem nisso, e o wrapper a mais faz a SEFAZ recusar o envelope na
+     * validação de schema, com soap:Sender e HTTP 500.
+     */
     `<nfeDadosMsg xmlns="${NAMESPACE_EVENTO}">${envEvento}</nfeDadosMsg>` +
-    `</nfeRecepcaoEvento>` +
     `</soap12:Body>` +
     `</soap12:Envelope>`
 
@@ -803,7 +838,13 @@ export async function darCienciaDaOperacao(
 
   const texto = await resposta.text()
   if (!resposta.ok) {
-    return { ok: false, erro: `SEFAZ respondeu HTTP ${resposta.status}: ${texto.slice(0, 300)}` }
+    const razao = razaoDoFault(texto)
+    return {
+      ok: false,
+      erro: razao
+        ? `SEFAZ recusou o pedido: ${razao}`
+        : `SEFAZ respondeu HTTP ${resposta.status}: ${texto.slice(0, 300)}`,
+    }
   }
 
   let dados: any
