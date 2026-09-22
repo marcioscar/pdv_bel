@@ -458,15 +458,29 @@ export function FinalizarDialogo({
       role="dialog"
       aria-modal="true"
       aria-label="Finalizar venda"
-      className="absolute inset-0 z-40 flex items-start justify-center overflow-y-auto bg-background/80 p-8 backdrop-blur-sm"
+      className="absolute inset-0 z-40 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm sm:p-6"
     >
-      <div className="w-full max-w-lg rounded-xl border border-border bg-card p-6 shadow-xl">
-        <div className="flex items-baseline justify-between">
-          <h2 className="text-base font-semibold">Finalizar venda</h2>
-          <span className="text-xs text-muted-foreground">
-            <Kbd>Esc</Kbd> volta ao carrinho
-          </span>
+      {/*
+        Três faixas em vez de uma coluna que cresce: cabeçalho e botão ficam
+        parados, e só o meio rola. O botão de fechar a venda é a única coisa que
+        SEMPRE precisa estar à mão — com tudo numa coluna só, bastava a venda
+        ter cliente, vendedor, CPF na nota e escolha de documento para ele cair
+        abaixo da dobra, e quem está com o cliente na frente tinha de rolar para
+        cobrar.
+      */}
+      <div className="flex max-h-full w-full max-w-lg flex-col overflow-hidden rounded-xl border border-border bg-card shadow-xl">
+        <div className="shrink-0 px-6 pt-6">
+          <div className="flex items-baseline justify-between">
+            <h2 className="text-base font-semibold">Finalizar venda</h2>
+            <span className="text-xs text-muted-foreground">
+              <Kbd>Esc</Kbd> volta ao carrinho
+            </span>
+          </div>
         </div>
+
+        {/* `min-h-0` é o que permite encolher dentro do flex — sem ele o meio
+            empurra as faixas para fora da tela em vez de rolar. */}
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-2">
 
         <div className="mt-3 flex items-baseline justify-between">
           <span className="text-xs text-muted-foreground">
@@ -883,8 +897,9 @@ export function FinalizarDialogo({
           </p>
         ) : null}
 
-        <Separator className="my-4" />
+        </div>
 
+        <div className="shrink-0 border-t border-border px-6 pb-6 pt-4">
         <Button
           type="button"
           tabIndex={-1}
@@ -914,6 +929,7 @@ export function FinalizarDialogo({
             Faltam {moeda(Math.abs(troco ?? 0))} para fechar
           </p>
         ) : null}
+        </div>
       </div>
     </div>
   );
