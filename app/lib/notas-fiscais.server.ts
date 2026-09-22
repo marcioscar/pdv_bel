@@ -9,6 +9,7 @@ import {
 } from "~/lib/notas-fiscais"
 import {
   consultarChaveNaSefaz,
+  darCienciaDaOperacao,
   consultarNsuAvulsoNaSefaz,
   consultarNsuNaSefaz,
   decodificarChave,
@@ -623,4 +624,47 @@ export async function buscarNotaPorChave(loja: string, chave: string): Promise<R
     await registrarDocumento(loja, nsu, schema, chaveGravada)
   }
   return resultado
+}
+
+/**
+ * Dá a Ciência da Operação de uma nota e guarda o comprovante.
+ *
+ * O XML completo NÃO chega junto: quem o distribui é o serviço de distribuição,
+ * no ciclo dele. Por isso a função grava a manifestação e devolve, e a tela diz
+ * que é preciso sincronizar de novo — prometer o XML aqui faria o usuário achar
+ * que deu errado quando a nota continuasse mostrando "resumo".
+ */
+export async function darCiencia(notaId: string, quem: string) {
+  const nota = await db.notaFiscalRecebida.findUnique({ where: { id: notaId } })
+  if (!nota) return { ok: false as const, erro: "Nota não encontrada" }
+
+  if (nota.situacaoXml === "completa") {
+    return { ok: false as const, erro: "Esta nota já veio completa — não precisa de ciência" }
+  }
+  if (nota.cienciaEm) {
+    return {
+      ok: false as const,
+      erro: `Ciência já registrada em ${nota.cienciaEm.toLocaleString("pt-BR")}. Sincronize para o XML completo chegar.`,
+    }
+  }
+
+  const resultado = await darCienciaDaOperacao(nota.loja, nota.chaveAcesso)
+  if (!resultado.ok) return { ok: false as const, erro: resultado.erro }
+
+  await db.notaFiscalRecebida.update({
+    where: { id: notaId },
+    data: {
+      cienciaEm: new Date(),
+      cienciaPor: quem,
+      cienciaProtocolo: resultado.protocolo,
+    },
+  })
+
+  return {
+    ok: true as const,
+    mensagem: resultado.jaHavia
+      ? "A SEFAZ já tinha esta ciência registrada — sincronize para o XML completo chegar"
+      : "Ciência registrada. Sincronize daqui a pouco: o XML completo vem no próximo ciclo da SEFAZ",
+    jaHavia: resultado.jaHavia,
+  }
 }

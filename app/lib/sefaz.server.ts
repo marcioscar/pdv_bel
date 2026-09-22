@@ -1,6 +1,6 @@
 import "~/lib/env.server"
 
-import { createPrivateKey, X509Certificate } from "node:crypto"
+import { createHash, createPrivateKey, createSign, X509Certificate } from "node:crypto"
 import { readFileSync } from "node:fs"
 import { gunzipSync } from "node:zlib"
 import { Agent } from "undici"
@@ -31,12 +31,45 @@ const ENDPOINT = {
   homologacao: "https://hom1.nfe.fazenda.gov.br/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx",
 } as const
 
+/**
+ * Recepção de evento, para a manifestação do destinatário.
+ *
+ * Da mesma lista do sped-nfe, UF "AN": método `nfeRecepcaoEvento`, operação
+ * `NFeRecepcaoEvento4`, versão 1.00. Repare que produção é `www`, e não o
+ * `www1` da distribuição — são hosts diferentes.
+ */
+const ENDPOINT_EVENTO = {
+  producao: "https://www.nfe.fazenda.gov.br/NFeRecepcaoEvento4/NFeRecepcaoEvento4.asmx",
+  homologacao: "https://hom1.nfe.fazenda.gov.br/NFeRecepcaoEvento4/NFeRecepcaoEvento4.asmx",
+} as const
+
 // Confirmado contra a lista de webservices mantida pelo projeto sped-nfe
 // (nfephp-org/sped-nfe, storage/wsnfe_4.00_mod55.xml, UF "AN"): método
 // nfeDistDFeInteresse, operação NFeDistribuicaoDFe, versão do schema 1.01.
 const NAMESPACE_OPERACAO = "http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe"
+const NAMESPACE_EVENTO = "http://www.portalfiscal.inf.br/nfe/wsdl/NFeRecepcaoEvento4"
 const NAMESPACE_PORTAL = "http://www.portalfiscal.inf.br/nfe"
+const NAMESPACE_DSIG = "http://www.w3.org/2000/09/xmldsig#"
 const VERSAO_SCHEMA = "1.01"
+const VERSAO_EVENTO = "1.00"
+
+/**
+ * "Ciência da Operação": o destinatário diz que sabe que a nota existe.
+ *
+ * É a mais inofensiva das quatro manifestações — não confirma recebimento de
+ * mercadoria nem impede o emitente de cancelar. O que ela faz, e é por isso que
+ * existe aqui, é LIBERAR O XML COMPLETO: até a manifestação a SEFAZ distribui
+ * só o resumo (`resNFe`), sem itens, e sem itens não há entrada de estoque nem
+ * conta a pagar.
+ *
+ * As outras três — Confirmação, Desconhecimento e Operação não Realizada — são
+ * declaração sobre a mercadoria, e não entram aqui de propósito: quem as dá é
+ * quem conferiu a carga, não uma rotina.
+ */
+const TP_EVENTO_CIENCIA = "210210"
+const DESCRICAO_CIENCIA = "Ciencia da Operacao"
+/** Manifestação é evento do Ambiente Nacional, e o órgão dele é 91. */
+const C_ORGAO_AN = 91
 
 /** Código IBGE de cada UF — é o que a consulta chama de `cUFAutor`. */
 const CUF_POR_UF: Record<string, number> = {
@@ -615,4 +648,209 @@ export function resumoDoProcNFe(xml: string) {
       }
     }),
   }
+}
+
+/* ===================== Manifestação do destinatário ===================== */
+
+/**
+ * Assina o `infEvento` no padrão XML-DSig que a SEFAZ exige.
+ *
+ * Não há biblioteca de assinatura XML no projeto, e não precisa haver: o XML é
+ * construído AQUI, então dá para construí-lo já na forma canônica e assinar a
+ * própria string. O que torna isso seguro é um detalhe só, e é onde todo mundo
+ * erra — a canonicalização inclusiva RENDERIZA no elemento assinado o namespace
+ * que ele herda do pai. Por isso `infEvento` e `SignedInfo` saem daqui com o
+ * `xmlns` escrito neles, e não herdado: a string que eu assino passa a ser,
+ * caractere a caractere, a que a SEFAZ vai canonicalizar do outro lado.
+ *
+ * Declarar o mesmo namespace no pai e no filho é XML válido e não muda o
+ * resultado da canonicalização — ela o escreve uma vez de qualquer jeito.
+ *
+ * SHA-1 e RSA-SHA1 não são escolha: são o que o manual da NF-e especifica.
+ */
+function assinarInfEvento(infEvento: string, id: string, cert: Buffer, key: Buffer) {
+  const digest = createHash("sha1").update(infEvento, "utf8").digest("base64")
+
+  const signedInfo =
+    `<SignedInfo xmlns="${NAMESPACE_DSIG}">` +
+    `<CanonicalizationMethod Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"></CanonicalizationMethod>` +
+    `<SignatureMethod Algorithm="http://www.w3.org/2000/09/xmldsig#rsa-sha1"></SignatureMethod>` +
+    `<Reference URI="#${id}">` +
+    `<Transforms>` +
+    `<Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"></Transform>` +
+    `<Transform Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"></Transform>` +
+    `</Transforms>` +
+    `<DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1"></DigestMethod>` +
+    `<DigestValue>${digest}</DigestValue>` +
+    `</Reference>` +
+    `</SignedInfo>`
+
+  const assinatura = createSign("RSA-SHA1").update(signedInfo, "utf8").sign(key, "base64")
+
+  // O certificado vai em DER base64, sem cabeçalho PEM e sem quebras de linha.
+  // Só o primeiro do arquivo: se o PEM trouxer a cadeia, os intermediários não
+  // entram no KeyInfo.
+  const primeiro = cert.toString("utf8").match(/-----BEGIN CERTIFICATE-----([\s\S]*?)-----END CERTIFICATE-----/)
+  const x509 = (primeiro?.[1] ?? "").replace(/\s+/g, "")
+
+  return (
+    `<Signature xmlns="${NAMESPACE_DSIG}">` +
+    signedInfo +
+    `<SignatureValue>${assinatura}</SignatureValue>` +
+    `<KeyInfo><X509Data><X509Certificate>${x509}</X509Certificate></X509Data></KeyInfo>` +
+    `</Signature>`
+  )
+}
+
+/** "2026-09-22T10:30:00-03:00" — a SEFAZ recusa data sem fuso. */
+function dataHoraComFuso(quando: Date) {
+  const doisDigitos = (n: number) => String(Math.floor(Math.abs(n))).padStart(2, "0")
+  const minutos = -quando.getTimezoneOffset()
+  const sinal = minutos >= 0 ? "+" : "-"
+  const fuso = `${sinal}${doisDigitos(minutos / 60)}:${doisDigitos(minutos % 60)}`
+
+  return (
+    `${quando.getFullYear()}-${doisDigitos(quando.getMonth() + 1)}-${doisDigitos(quando.getDate())}` +
+    `T${doisDigitos(quando.getHours())}:${doisDigitos(quando.getMinutes())}:${doisDigitos(quando.getSeconds())}${fuso}`
+  )
+}
+
+export type ResultadoManifestacao =
+  | { ok: true; cStat: string; xMotivo: string; protocolo: string | null; jaHavia: boolean }
+  | { ok: false; erro: string }
+
+/**
+ * Registra a Ciência da Operação de uma nota destinada a esta loja.
+ *
+ * Depois dela, a próxima sincronização traz o XML completo no lugar do resumo —
+ * não é imediato, porque quem distribui é o serviço de distribuição, num ciclo
+ * próprio.
+ *
+ * `nSeqEvento` é 1 sempre: a Ciência é dada uma vez por nota. Repetir devolve
+ * cStat 573 ("duplicidade de evento"), que NÃO é falha — é o estado desejado,
+ * alcançado antes, e por isso volta como sucesso com `jaHavia`.
+ */
+export async function darCienciaDaOperacao(
+  loja: string,
+  chave: string,
+  ambiente: "producao" | "homologacao" = "producao"
+): Promise<ResultadoManifestacao> {
+  const chaveLimpa = chave.replace(/\D/g, "")
+  if (chaveLimpa.length !== 44) {
+    return { ok: false, erro: "Chave de acesso precisa ter 44 dígitos" }
+  }
+
+  let config: Config
+  try {
+    config = await lerConfig(loja)
+  } catch (erro) {
+    return { ok: false, erro: erro instanceof Error ? erro.message : String(erro) }
+  }
+
+  const tpAmb = ambiente === "producao" ? 1 : 2
+  const nSeqEvento = "01"
+  const id = `ID${TP_EVENTO_CIENCIA}${chaveLimpa}${nSeqEvento}`
+
+  const infEvento =
+    `<infEvento xmlns="${NAMESPACE_PORTAL}" Id="${id}">` +
+    `<cOrgao>${C_ORGAO_AN}</cOrgao>` +
+    `<tpAmb>${tpAmb}</tpAmb>` +
+    `<CNPJ>${config.cnpj}</CNPJ>` +
+    `<chNFe>${chaveLimpa}</chNFe>` +
+    `<dhEvento>${dataHoraComFuso(new Date())}</dhEvento>` +
+    `<tpEvento>${TP_EVENTO_CIENCIA}</tpEvento>` +
+    `<nSeqEvento>${Number(nSeqEvento)}</nSeqEvento>` +
+    `<verEvento>${VERSAO_EVENTO}</verEvento>` +
+    `<detEvento versao="${VERSAO_EVENTO}">` +
+    `<descEvento>${DESCRICAO_CIENCIA}</descEvento>` +
+    `</detEvento>` +
+    `</infEvento>`
+
+  const assinatura = assinarInfEvento(infEvento, id, config.cert, config.key)
+
+  const envEvento =
+    `<envEvento xmlns="${NAMESPACE_PORTAL}" versao="${VERSAO_EVENTO}">` +
+    `<idLote>1</idLote>` +
+    `<evento versao="${VERSAO_EVENTO}">${infEvento}${assinatura}</evento>` +
+    `</envEvento>`
+
+  const envelope =
+    `<?xml version="1.0" encoding="UTF-8"?>` +
+    `<soap12:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" ` +
+    `xmlns:xsd="http://www.w3.org/2001/XMLSchema" ` +
+    `xmlns:soap12="http://www.w3.org/2003/05/soap-envelope">` +
+    `<soap12:Body>` +
+    `<nfeRecepcaoEvento xmlns="${NAMESPACE_EVENTO}">` +
+    `<nfeDadosMsg xmlns="${NAMESPACE_EVENTO}">${envEvento}</nfeDadosMsg>` +
+    `</nfeRecepcaoEvento>` +
+    `</soap12:Body>` +
+    `</soap12:Envelope>`
+
+  let resposta: Response
+  try {
+    resposta = await fetch(ENDPOINT_EVENTO[ambiente], {
+      method: "POST",
+      headers: {
+        "content-type": `application/soap+xml; charset=utf-8; action="${NAMESPACE_EVENTO}/nfeRecepcaoEvento"`,
+      },
+      body: envelope,
+      dispatcher: agente(loja, config.cert, config.key),
+    } as RequestInit)
+  } catch (erro) {
+    const traduzido = traduzirErroDeTls(erro, loja)
+    return { ok: false, erro: traduzido instanceof Error ? traduzido.message : String(traduzido) }
+  }
+
+  const texto = await resposta.text()
+  if (!resposta.ok) {
+    return { ok: false, erro: `SEFAZ respondeu HTTP ${resposta.status}: ${texto.slice(0, 300)}` }
+  }
+
+  let dados: any
+  try {
+    dados = parser.parse(texto)
+  } catch {
+    return { ok: false, erro: "Resposta da SEFAZ não é um XML válido" }
+  }
+
+  const fault = buscarEmProfundidade(dados, "Fault")
+  if (fault) {
+    const motivo = fault.Reason?.Text ?? fault.faultstring ?? "Motivo não informado"
+    return {
+      ok: false,
+      erro: `SOAP Fault da SEFAZ: ${typeof motivo === "string" ? motivo : JSON.stringify(motivo)}`,
+    }
+  }
+
+  /*
+   * A resposta tem DOIS status: o do lote (`retEnvEvento`) e o do evento
+   * (`retEvento/infEvento`). O do lote pode ser 128 ("lote processado") com o
+   * evento recusado dentro — ler só o de fora daria sucesso para uma
+   * manifestação que não aconteceu.
+   */
+  const retorno = buscarEmProfundidade(dados, "retEnvEvento")
+  if (!retorno) return { ok: false, erro: "Resposta da SEFAZ sem retEnvEvento" }
+
+  const doLote = String(retorno.cStat ?? "")
+  const evento = buscarEmProfundidade(retorno, "retEvento")
+  const info = evento ? (evento.infEvento ?? evento) : null
+
+  if (!info) {
+    return { ok: false, erro: `SEFAZ recusou o lote: ${doLote} ${retorno.xMotivo ?? ""}`.trim() }
+  }
+
+  const cStat = String(info.cStat ?? "")
+  const xMotivo = String(info.xMotivo ?? "")
+  const protocolo = info.nProt ? String(info.nProt) : null
+
+  // 135 registrado e vinculado à NF-e · 136 registrado sem vínculo (a nota
+  // ainda não chegou ao Ambiente Nacional) · 573 já havia sido manifestada.
+  if (cStat === "135" || cStat === "136") {
+    return { ok: true, cStat, xMotivo, protocolo, jaHavia: false }
+  }
+  if (cStat === "573") {
+    return { ok: true, cStat, xMotivo, protocolo, jaHavia: true }
+  }
+
+  return { ok: false, erro: `SEFAZ recusou o evento: ${cStat} ${xMotivo}`.trim() }
 }

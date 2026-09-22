@@ -1,8 +1,10 @@
-import { Link, useSearchParams } from "react-router"
-import { ArrowLeft, FileSearch } from "lucide-react"
+import { Link, useFetcher, useSearchParams } from "react-router"
+import { ArrowLeft, FileCheck, FileSearch } from "lucide-react"
 
 import type { Route } from "./+types/admin.notas-de-entrada.$notaId"
 import { Badge } from "~/components/ui/badge"
+import { Button } from "~/components/ui/button"
+import { cn } from "~/lib/utils"
 import { formatarCpfCnpj } from "~/lib/documento"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { GerarDespesas, type RespostaDespesas } from "~/components/pdv/gerar-despesas"
@@ -13,7 +15,7 @@ import {
   gerarDespesas,
   type LinhaDeDespesa,
 } from "~/lib/despesas.server"
-import { notaPorId } from "~/lib/notas-fiscais.server"
+import { darCiencia, notaPorId } from "~/lib/notas-fiscais.server"
 import { criarFornecedor, lerFornecedor, proximoCodigoDeFornecedor } from "~/lib/fornecedores.server"
 import { resumoDoProcNFe } from "~/lib/sefaz.server"
 import { exigirGerente } from "~/lib/sessao.server"
@@ -134,15 +136,27 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   }
 }
 
+type RespostaCiencia =
+  | { intencao: "ciencia"; ok: true; mensagem: string }
+  | { intencao: "ciencia"; ok: false; erro: string }
+
 type RespostaAction =
   | RespostaDespesas
   | RespostaEntrada
+  | RespostaCiencia
 
 export async function action({ request }: Route.ActionArgs): Promise<RespostaAction> {
   const eu = await exigirGerente(request, "buscarNotaFiscal")
 
   const form = await request.formData()
   const intencao = String(form.get("intencao") ?? "")
+
+  if (intencao === "ciencia") {
+    const resultado = await darCiencia(String(form.get("notaId") ?? ""), eu.nome)
+    return resultado.ok
+      ? { intencao: "ciencia", ok: true, mensagem: resultado.mensagem }
+      : { intencao: "ciencia", ok: false, erro: resultado.erro }
+  }
 
   if (intencao === "receber") {
     let itens: ItemReconciliado[] = []
@@ -281,10 +295,7 @@ export default function DetalheNotaDeEntrada({ loaderData }: Route.ComponentProp
 
         <div>
           {nota.situacaoXml !== "completa" ? (
-            <p className="text-sm text-amber-600 dark:text-amber-500">
-              Só o resumo está disponível — a SEFAZ já não distribui o XML completo com os
-              itens para esta nota (mais antiga).
-            </p>
+            <SoResumo nota={nota} />
           ) : itensDaNota && itensDaNota.length > 0 ? (
             <div className="overflow-x-auto rounded-lg border">
               <table className="w-full text-xs">
@@ -364,6 +375,78 @@ export default function DetalheNotaDeEntrada({ loaderData }: Route.ComponentProp
           />
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * O que a tela mostra quando só veio o resumo.
+ *
+ * Antes dizia que a SEFAZ "já não distribui o XML completo para esta nota
+ * (mais antiga)", o que está errado na maioria dos casos: o motivo comum não é
+ * a idade da nota, é a falta da manifestação. Enquanto o destinatário não dá
+ * Ciência da Operação, a SEFAZ entrega só o resumo — e resumo não tem itens,
+ * então não há entrada de estoque nem conta a pagar.
+ *
+ * Depois da ciência o XML não chega na hora: quem distribui é o serviço de
+ * distribuição, no ciclo dele. Por isso o estado "já pedi" existe e tem texto
+ * próprio — sem ele alguém clicaria de novo achando que falhou.
+ */
+function SoResumo({
+  nota,
+}: {
+  nota: { id: string; cienciaEm: string | Date | null; cienciaProtocolo: string | null }
+}) {
+  const fetcher = useFetcher<typeof action>()
+  const enviando = fetcher.state !== "idle"
+  const resposta = fetcher.data?.intencao === "ciencia" ? fetcher.data : null
+
+  if (nota.cienciaEm) {
+    return (
+      <div className="rounded-lg border border-border bg-muted/30 px-4 py-3">
+        <p className="text-sm font-medium">Ciência registrada, esperando o XML</p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Dada em {new Date(nota.cienciaEm).toLocaleString("pt-BR")}
+          {nota.cienciaProtocolo ? ` · protocolo ${nota.cienciaProtocolo}` : ""}. O XML
+          completo com os itens vem no próximo ciclo de distribuição da SEFAZ — sincronize
+          as notas de entrada daqui a pouco.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 px-4 py-3">
+      <p className="text-sm font-medium text-amber-700 dark:text-amber-500">
+        Só o resumo chegou — sem os itens
+      </p>
+      <p className="mt-1 text-xs text-muted-foreground">
+        A SEFAZ distribui só emitente, data e valor até o destinatário se manifestar. A{" "}
+        <strong className="font-medium text-foreground">Ciência da Operação</strong> libera
+        o XML completo: ela apenas declara que você sabe que a nota existe — não confirma
+        recebimento de mercadoria e não impede o emitente de cancelar.
+      </p>
+
+      <fetcher.Form method="post" className="mt-3">
+        <input type="hidden" name="intencao" value="ciencia" />
+        <input type="hidden" name="notaId" value={nota.id} />
+        <Button type="submit" size="sm" variant="outline" disabled={enviando} className="rounded-lg">
+          <FileCheck className="size-4" />
+          {enviando ? "Registrando…" : "Dar ciência da operação"}
+        </Button>
+      </fetcher.Form>
+
+      {resposta ? (
+        <p
+          className={cn(
+            "mt-2 text-xs font-medium",
+            resposta.ok ? "text-foreground" : "text-destructive"
+          )}
+          role="status"
+        >
+          {resposta.ok ? resposta.mensagem : resposta.erro}
+        </p>
+      ) : null}
     </div>
   )
 }

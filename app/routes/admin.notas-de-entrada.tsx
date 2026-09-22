@@ -507,6 +507,13 @@ export default function AdminNotasDeEntrada({ loaderData }: Route.ComponentProps
                           <Badge variant={n.situacaoXml === "completa" ? "default" : "secondary"}>
                             {n.situacaoXml === "completa" ? "itens" : "resumo"}
                           </Badge>
+                          {/* "resumo" sozinho não diz se é caso de pedir ciência
+                              ou se ela já foi pedida e o XML está a caminho. */}
+                          {n.situacaoXml !== "completa" && n.cienciaEm ? (
+                            <Badge variant="outline" title="Ciência dada; o XML completo vem na próxima distribuição">
+                              ciência dada
+                            </Badge>
+                          ) : null}
                           {n.situacao !== "disponivel" ? (
                             <Badge variant="outline">{rotuloDaSituacaoNota(n.situacao)}</Badge>
                           ) : null}

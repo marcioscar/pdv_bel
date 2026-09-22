@@ -1197,6 +1197,7 @@ model AutorizacaoDeFaturamento {
   despesasGeradasEm  DateTime?
   despesasGeradasPor String?
 
+
   /// Procurar "a AF 4471 da Vabene" é a busca de sempre — pelo papel na mão.
   @@index([fornecedorDocumento, numero])
   @@index([loja, criadoEm])
@@ -1335,6 +1336,18 @@ model NotaFiscalRecebida {
   /// a pagar é o tipo de erro que só aparece quando alguém já pagou os dois.
   despesasGeradasEm  DateTime?
   despesasGeradasPor String?
+
+  /// Quando a Ciência da Operação foi registrada na SEFAZ, e por quem.
+  ///
+  /// Até ela, uma nota destinada a esta loja chega só como resumo — sem itens,
+  /// e sem itens não há entrada de estoque nem conta a pagar. Guardado aqui
+  /// porque o XML completo não vem na mesma hora: quem distribui é o serviço de
+  /// distribuição, no ciclo dele, e entre uma coisa e outra a tela precisa
+  /// poder dizer "já pedi, está esperando" em vez de oferecer o botão de novo.
+  cienciaEm        DateTime?
+  cienciaPor       String?
+  /// O protocolo do evento. É o comprovante de que a manifestação existe.
+  cienciaProtocolo String?
 
   criadoEm DateTime @default(now())
 
