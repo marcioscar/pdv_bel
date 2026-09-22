@@ -453,6 +453,54 @@ export function FinalizarDialogo({
   }
 
 
+  /*
+   * Vendedor e cliente respondem a mesma pergunta — quem —, então andam lado a
+   * lado e poupam uma faixa de altura no diálogo. O do vendedor passou a ter a
+   * forma do de cliente (rótulo em cima, resposta embaixo) porque dois cartões
+   * com anatomias diferentes na mesma linha leem-se como dois assuntos.
+   */
+  const cartaoVendedor = (
+    <div
+      className={cn(
+        "flex items-center gap-2 rounded-lg border p-3",
+        faltaVendedor ? "border-destructive/50 bg-destructive/5" : "border-border bg-muted/30",
+      )}
+    >
+      <Input
+        ref={campoVendedor}
+        id="vendedor"
+        type="search"
+        value={vendedorCodigo}
+        onChange={(e) => onVendedorCodigoChange(e.target.value)}
+        placeholder="cód"
+        inputMode="numeric"
+        autoComplete="off"
+        aria-label="Código do vendedor"
+        data-1p-ignore=""
+        data-lpignore="true"
+        className="h-9 w-14 shrink-0 rounded-lg px-1 text-center font-mono text-lg tabular-nums"
+      />
+      <div className="min-w-0 flex-1">
+        {/* A tecla sobe para a linha do rótulo: em meia largura ela roubava do
+            nome justamente o espaço que "Quem vendeu?" precisa, e o aviso saía
+            cortado — que é o oposto de avisar. */}
+        <div className="flex items-baseline justify-between gap-2">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Vendedor
+          </span>
+          <Kbd className="shrink-0">F8</Kbd>
+        </div>
+        {vendedor ? (
+          <div className="truncate text-sm font-medium">{vendedor.nome}</div>
+        ) : (
+          <div className="truncate text-sm font-medium text-destructive">
+            {vendedorCodigo.trim() ? "Não encontrado" : "Quem vendeu?"}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
   return (
     <div
       role="dialog"
@@ -625,51 +673,15 @@ export function FinalizarDialogo({
           </div>
         ) : null}
 
-        {/* Obrigatório e sem padrão: quem fecha é um caixa fixo e quem vendeu
-            muda de cliente para cliente. Um valor "lembrado" da venda anterior
-            creditaria a comissão errada em silêncio. */}
-        <div
-          className={cn(
-            "mt-3 flex items-center gap-3 rounded-lg border p-3",
-            faltaVendedor ? "border-destructive/50 bg-destructive/5" : "border-border bg-muted/30",
-          )}
-        >
-          <label
-            htmlFor="vendedor"
-            className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
-          >
-            Vendedor
-          </label>
-          <Input
-            ref={campoVendedor}
-            id="vendedor"
-            type="search"
-            value={vendedorCodigo}
-            onChange={(e) => onVendedorCodigoChange(e.target.value)}
-            placeholder="código"
-            inputMode="numeric"
-            autoComplete="off"
-            data-1p-ignore=""
-            data-lpignore="true"
-            className="h-9 w-24 rounded-lg font-mono text-lg tabular-nums"
-          />
-          <div className="min-w-0 flex-1 text-right">
-            {vendedor ? (
-              <div className="truncate text-sm font-medium">{vendedor.nome}</div>
-            ) : (
-              <div className="text-sm font-medium text-destructive">
-                {vendedorCodigo.trim() ? "Código não encontrado" : "Quem vendeu?"}
-              </div>
-            )}
-          </div>
-          <Kbd className="shrink-0">F8</Kbd>
-        </div>
-
         <Separator className="my-4" />
 
         {/* Combobox: a busca e a lista aparecem no lugar da linha, sem outro
-            diálogo por cima — o total continua à vista enquanto se escolhe. */}
-        {escolhendoCliente ? (
+            diálogo por cima — o total continua à vista enquanto se escolhe.
+            Escolhendo cliente a grade vira uma coluna: a lista precisa da
+            largura inteira, e o vendedor sobe para cima dela. */}
+        <div className={cn("grid gap-2", !escolhendoCliente && "sm:grid-cols-2")}>
+          {cartaoVendedor}
+          {escolhendoCliente ? (
           <div className="rounded-lg border border-primary bg-card p-2">
             <div className="flex items-center gap-2 px-1">
               <Search
@@ -815,7 +827,8 @@ export function FinalizarDialogo({
             </div>
             <Kbd className="shrink-0">F6</Kbd>
           </button>
-        )}
+          )}
+        </div>
 
         {/*
           O CPF na nota é outra coisa que o cliente: quem pede crédito da Nota
