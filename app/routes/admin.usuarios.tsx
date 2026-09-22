@@ -1,5 +1,6 @@
+import { useState } from "react"
 import { data, Form, useNavigation } from "react-router"
-import { UserPlus, Users } from "lucide-react"
+import { Check, Pencil, UserPlus, Users, X } from "lucide-react"
 
 import type { Route } from "./+types/admin.usuarios"
 import { Badge } from "~/components/ui/badge"
@@ -90,6 +91,63 @@ export async function action({ request }: Route.ActionArgs) {
     })
     const quantas = escolhidas.length === codigos.length ? "todas as lojas" : escolhidas.join(", ") || "nenhuma loja"
     return { mensagem: `${alvo.nome}: ${quantas}` }
+  }
+
+  /*
+   * Editar nome, e-mail e senha de quem já existe.
+   *
+   * Os três no mesmo lugar porque é a mesma conversa — "arrumar o cadastro
+   * desta pessoa" —, mas a senha é OPCIONAL: deixar em branco mantém a atual.
+   * Um campo de senha que apaga a senha quando fica vazio é a forma mais rápida
+   * de trancar alguém para fora sem perceber.
+   *
+   * Vale para si mesmo, ao contrário de papel e situação: trocar o próprio nome
+   * ou a própria senha não tranca ninguém do lado de fora.
+   */
+  if (acao === "editar") {
+    const id = String(form.get("id") ?? "")
+    if (!OBJECT_ID.test(id)) return data({ erro: "Usuário inválido" }, { status: 400 })
+
+    const alvo = await db.usuario.findUnique({ where: { id } })
+    if (!alvo) return data({ erro: "Usuário não encontrado" }, { status: 400 })
+
+    const nome = String(form.get("nome") ?? "").trim()
+    const email = String(form.get("email") ?? "").trim()
+    const senha = String(form.get("senha") ?? "")
+
+    if (nome.length < 3) return data({ erro: "Informe o nome completo" }, { status: 400 })
+    if (!validarEmail(email)) return data({ erro: "E-mail inválido" }, { status: 400 })
+
+    // O e-mail é a chave de entrada: dois iguais e o login fica ambíguo. O
+    // índice único do Mongo recusaria, mas com um erro que não explica nada.
+    const dono = await db.usuario.findUnique({ where: { email: normalizarEmail(email) } })
+    if (dono && dono.id !== id) {
+      return data({ erro: `O e-mail ${email} já é de ${dono.nome}` }, { status: 400 })
+    }
+
+    const mudou = []
+    if (alvo.nome !== nome) mudou.push("nome")
+    if (normalizarEmail(alvo.email) !== normalizarEmail(email)) mudou.push("e-mail")
+
+    const dados: { nome: string; email: string; senhaHash?: string } = {
+      nome,
+      email: normalizarEmail(email),
+    }
+
+    if (senha) {
+      const problema = validarSenha(senha)
+      if (problema) return data({ erro: problema }, { status: 400 })
+      dados.senhaHash = await gerarHash(senha)
+      mudou.push("senha")
+    }
+
+    await db.usuario.update({ where: { id }, data: dados })
+
+    return {
+      mensagem: mudou.length
+        ? `${nome}: ${mudou.join(", ")} ${mudou.length > 1 ? "atualizados" : "atualizado"}`
+        : `Nada mudou em ${nome}`,
+    }
   }
 
   if (acao === "codigoVendedor") {
@@ -193,6 +251,9 @@ export default function Usuarios({ loaderData, actionData }: Route.ComponentProp
   const enviando = navegacao.state !== "idle"
   const ativos = usuarios.filter((u) => u.ativo).length
 
+  /** Quem está em edição. Um de cada vez: duas linhas abertas confundem. */
+  const [editando, setEditando] = useState<string | null>(null)
+
   return (
     <>
       <div className="p-6">
@@ -274,7 +335,89 @@ export default function Usuarios({ loaderData, actionData }: Route.ComponentProp
               </tr>
             </thead>
             <tbody>
-              {usuarios.map((usuario) => (
+              {usuarios.map((usuario) =>
+                editando === usuario.id ? (
+                  <tr key={usuario.id} className="border-b border-border bg-primary/5">
+                    <td colSpan={8} className="py-3">
+                      <Form
+                        method="post"
+                        className="flex flex-wrap items-end gap-3"
+                        onSubmit={() => setEditando(null)}
+                      >
+                        <input type="hidden" name="acao" value="editar" />
+                        <input type="hidden" name="id" value={usuario.id} />
+                        <div>
+                          <label
+                            htmlFor={`nome-${usuario.id}`}
+                            className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
+                          >
+                            Nome
+                          </label>
+                          <Input
+                            id={`nome-${usuario.id}`}
+                            name="nome"
+                            defaultValue={usuario.nome}
+                            required
+                            autoComplete="off"
+                            className="h-9 w-56 rounded-lg"
+                          />
+                        </div>
+                        <div>
+                          <label
+                            htmlFor={`email-${usuario.id}`}
+                            className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
+                          >
+                            E-mail
+                          </label>
+                          <Input
+                            id={`email-${usuario.id}`}
+                            name="email"
+                            type="email"
+                            defaultValue={usuario.email}
+                            required
+                            autoComplete="off"
+                            className="h-9 w-64 rounded-lg"
+                          />
+                        </div>
+                        <div>
+                          <label
+                            htmlFor={`senha-${usuario.id}`}
+                            className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
+                          >
+                            Nova senha
+                          </label>
+                          <Input
+                            id={`senha-${usuario.id}`}
+                            name="senha"
+                            type="password"
+                            placeholder="deixe vazio para manter"
+                            autoComplete="new-password"
+                            className="h-9 w-56 rounded-lg"
+                          />
+                        </div>
+                        <Button type="submit" size="sm" disabled={enviando} className="h-9 rounded-lg">
+                          <Check className="size-4" />
+                          Salvar
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setEditando(null)}
+                          className="h-9 rounded-lg"
+                        >
+                          <X className="size-4" />
+                        </Button>
+                        {/* A senha em branco mantém a atual: dito aqui, e não só
+                            no rodapé, porque é onde a dúvida aparece. */}
+                        <p className="w-full text-[11px] text-muted-foreground">
+                          Senha vazia mantém a que ele já tem. Trocar o e-mail muda com o
+                          que ele entra no sistema.
+                        </p>
+                      </Form>
+                    </td>
+                  </tr>
+                ) : (
                 <tr
                   key={usuario.id}
                   className={cn("border-b border-border", !usuario.ativo && "opacity-60")}
@@ -376,6 +519,19 @@ export default function Usuarios({ loaderData, actionData }: Route.ComponentProp
                     </Badge>
                   </td>
                   <td className="py-2.5 text-right">
+                    {/* Editar vale para todo mundo, inclusive para si mesmo:
+                        trocar o próprio nome ou a própria senha não tranca
+                        ninguém do lado de fora, ao contrário de papel e
+                        situação, que continuam bloqueados no próprio usuário. */}
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      onClick={() => setEditando(usuario.id)}
+                    >
+                      <Pencil className="size-3.5" />
+                      Editar
+                    </Button>
                     {usuario.id === eu.id ? null : (
                       <>
                         <Form method="post" className="inline">
@@ -409,13 +565,14 @@ export default function Usuarios({ loaderData, actionData }: Route.ComponentProp
                     )}
                   </td>
                 </tr>
-              ))}
+                )
+              )}
             </tbody>
           </table>
 
           <p className="mt-6 text-xs text-muted-foreground">
             A senha é guardada como hash scrypt com sal — não há como recuperá-la, só
-            cadastrar outra. Desativar bloqueia o acesso na requisição seguinte, sem
+            cadastrar outra, e é o que "Editar" faz: campo vazio mantém a atual. Desativar bloqueia o acesso na requisição seguinte, sem
             esperar o cookie expirar. Sempre precisa sobrar um gerente ativo, e
             ninguém muda o próprio papel. Clique nos códigos de loja para vincular
             ou desvincular — quem tem mais de uma escolhe ao entrar.
