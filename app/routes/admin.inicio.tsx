@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { Link, useSearchParams } from "react-router"
+import { Link, redirect, useSearchParams } from "react-router"
 import { ArrowDownRight, ArrowUpRight, Table2, TrendingUp } from "lucide-react"
 
 import type { Route } from "./+types/admin.inicio"
@@ -14,6 +14,7 @@ import {
 import { configDasLojas } from "~/components/painel/paleta"
 import { listarLojas } from "~/lib/lojas.server"
 import { moeda } from "~/lib/moeda"
+import { ehGerente, secoesAdminDoPapel } from "~/lib/permissoes"
 import {
   curvaAbc,
   faturamentoDiario,
@@ -36,6 +37,17 @@ const PERIODOS = [
 
 export async function loader({ request }: Route.LoaderArgs) {
   const eu = await exigirUsuario(request)
+
+  /*
+   * O painel é faturamento da rede: coisa de gerente. Mas "Adm" na barra aponta
+   * para cá também para o operador, que tem Clientes e Entradas no escritório —
+   * então ele é levado para a primeira tela dele, em vez de dar com um 403 ao
+   * clicar num botão que a barra lhe oferece. Antes das consultas: o layout
+   * cobra permissão, mas os loaders filhos rodam em paralelo com o dele.
+   */
+  if (!ehGerente(eu.papel)) {
+    throw redirect(secoesAdminDoPapel(eu.papel)[0]?.para ?? "/")
+  }
 
   const pedido = Number(new URL(request.url).searchParams.get("dias"))
   const dias = PERIODOS.some((p) => p.dias === pedido) ? pedido : 30
