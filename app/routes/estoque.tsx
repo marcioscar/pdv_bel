@@ -15,6 +15,7 @@ import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { useAtalhosDeSecao } from "~/lib/navegacao"
 import { buscarProdutos, criarIndice } from "~/lib/pdv"
 import { SOMENTE_ATIVOS } from "~/lib/produtos.server"
+import { ehGerente } from "~/lib/permissoes"
 import { exigirUsuario } from "~/lib/sessao.server"
 import { useRelogio, useTema } from "~/lib/tema"
 import { cn } from "~/lib/utils"
@@ -168,17 +169,20 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
           data-lpignore="true"
           className="h-9 flex-1 rounded-none border-0 bg-transparent px-0 font-mono text-lg tracking-tight tabular-nums shadow-none placeholder:font-sans placeholder:text-sm placeholder:tracking-normal focus-visible:border-transparent focus-visible:ring-0 md:text-lg"
         />
-        <Button
-          type="button"
-          tabIndex={-1}
-          variant="outline"
-          size="sm"
-          nativeButton={false}
-          render={<Link to="/admin/estoque" />}
-          className="shrink-0 rounded-lg"
-        >
-          Dar entrada
-        </Button>
+        {/* Entrada manual é do gerente; para o operador o botão levaria a um 403. */}
+        {ehGerente(eu.papel) ? (
+          <Button
+            type="button"
+            tabIndex={-1}
+            variant="outline"
+            size="sm"
+            nativeButton={false}
+            render={<Link to="/admin/estoque" />}
+            className="shrink-0 rounded-lg"
+          >
+            Dar entrada
+          </Button>
+        ) : null}
       </div>
 
       <div className="flex min-h-0 flex-1">
@@ -290,11 +294,17 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
           <div className="min-h-0 flex-1 overflow-y-auto">
             {movimentos.length === 0 ? (
               <p className="p-4 text-xs text-muted-foreground">
-                Nenhum movimento nesta loja. As entradas ficam em{" "}
-                <Link to="/admin/estoque" className="underline">
-                  Adm → Entradas
-                </Link>
-                .
+                Nenhum movimento nesta loja.
+                {ehGerente(eu.papel) ? (
+                  <>
+                    {" "}
+                    As entradas ficam em{" "}
+                    <Link to="/admin/estoque" className="underline">
+                      Adm → Entradas
+                    </Link>
+                    .
+                  </>
+                ) : null}
               </p>
             ) : (
               <ul>

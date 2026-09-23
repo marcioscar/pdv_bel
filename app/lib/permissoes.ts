@@ -124,7 +124,10 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         para: "/admin/estoque",
         rotulo: "Entradas e inventário",
         descricao: "Entrada de mercadoria e saldo contado",
-        somenteGerente: false,
+        // Entrada manual cria estoque sem nota e sem remessa do outro lado —
+        // quem recebe do fornecedor dá entrada pela nota, e entre lojas pela
+        // conferência da transferência, que continua com o operador.
+        somenteGerente: true,
       },
       {
         para: "/admin/ficha",
@@ -342,6 +345,8 @@ export const ACOES_DE_GERENTE = {
   devolverMercadoria:
     "Só gerente registra devolução — volta mercadoria ao estoque e dinheiro à mão do cliente",
   inventario: "Só gerente faz inventário — o ajuste reescreve o saldo contado",
+  entradaManual:
+    "Só gerente dá entrada manual — ela cria estoque sem nota; mercadoria de outra loja entra pela conferência da transferência",
   baixaDeUso:
     "Só gerente dá baixa para uso da loja — sai do estoque sem venda e sem documento",
   gerenciarUsuarios: "Só gerente gerencia usuários",

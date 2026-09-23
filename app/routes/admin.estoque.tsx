@@ -16,7 +16,7 @@ import {
   saldosPorProduto,
 } from "~/lib/estoque.server"
 import { SOMENTE_ATIVOS } from "~/lib/produtos.server"
-import { exigirGerente, exigirUsuario } from "~/lib/sessao.server"
+import { exigirGerente } from "~/lib/sessao.server"
 import {
   interpretarValor,
   QUANTIDADE_INTEIRA,
@@ -39,7 +39,9 @@ export function meta(_: Route.MetaArgs) {
 }
 
 export async function loader({ request }: Route.LoaderArgs) {
-  const eu = await exigirUsuario(request)
+  // O layout de /admin já barra o operador, mas os loaders rodam em paralelo
+  // com o dele: a tela cobra a própria guarda.
+  const eu = await exigirGerente(request, "entradaManual")
 
   const [cadastro, saldos, movimentos] = await Promise.all([
     db.produto.findMany({ where: SOMENTE_ATIVOS, orderBy: { descricao: "asc" } }),
@@ -63,16 +65,17 @@ export async function action({ request }: Route.ActionArgs) {
   const modo = String(form.get("modo") ?? "entrada")
   const valor = Number(form.get("valor"))
 
-  // Entrada tem nota por trás e é trabalho de quem recebe mercadoria. Inventário
-  // reescreve o saldo para o número que a pessoa diz ter contado — é por onde uma
-  // falta desaparece sem deixar rastro, então fica com o gerente. A baixa de uso
-  // tira do saldo sem venda e sem documento, e fica com ele pela mesma razão.
+  // Os três são do gerente. Inventário reescreve o saldo para o número que a
+  // pessoa diz ter contado — é por onde uma falta desaparece sem rastro. A baixa
+  // de uso tira do saldo sem venda e sem documento. E a entrada manual cria
+  // estoque sem nota nem remessa: aberta ao operador, destravava venda de
+  // produto sem saldo e deixava o estoque sem ninguém para conferir.
   const eu =
     modo === "ajuste"
       ? await exigirGerente(request, "inventario")
       : modo === "uso"
         ? await exigirGerente(request, "baixaDeUso")
-        : await exigirUsuario(request)
+        : await exigirGerente(request, "entradaManual")
 
   if (!OBJECT_ID.test(produtoId)) {
     return data({ ok: false as const, erro: "Produto inválido" }, { status: 400 })
