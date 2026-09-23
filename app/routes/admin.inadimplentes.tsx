@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { data, Form, useNavigation } from "react-router"
+import { data, Form, useNavigation, useSearchParams } from "react-router"
 import { ChevronDown, ChevronRight, Loader2, Printer, RefreshCw, UserX } from "lucide-react"
 
 import type { Route } from "./+types/admin.inadimplentes"
@@ -18,7 +18,9 @@ import { formatarCpfCnpj } from "~/lib/documento"
 import { imprimirDocumento } from "~/lib/impressao"
 import { interpretarValor, moeda } from "~/lib/moeda"
 import { rotuloDaSituacao } from "~/lib/recebiveis"
-import { exigirGerente } from "~/lib/sessao.server"
+import { listarLojas } from "~/lib/lojas.server"
+import { ehGerente } from "~/lib/permissoes"
+import { exigirGerente, exigirUsuario } from "~/lib/sessao.server"
 import { cn } from "~/lib/utils"
 
 export function meta(_: Route.MetaArgs) {
@@ -34,23 +36,36 @@ export function meta(_: Route.MetaArgs) {
  * aqui.
  */
 export async function loader({ request }: Route.LoaderArgs) {
-  await exigirGerente(request, "verContasAReceber")
+  // Consulta aberta a quem opera: o vendedor é quem atende o cliente que deve.
+  // A baixa e a busca no Inter são do gerente — cobradas no action, não aqui.
+  const eu = await exigirUsuario(request)
 
-  const [devedores, resumo, pagamentos] = await Promise.all([
-    inadimplentes(),
-    resumoDosBoletos(),
-    pagamentosRecentes(),
+  const pedida = new URL(request.url).searchParams.get("loja") ?? ""
+  const loja = eu.lojasPermitidas.includes(pedida) ? pedida : null
+
+  const [devedores, resumo, pagamentos, lojas] = await Promise.all([
+    inadimplentes({ loja }),
+    resumoDosBoletos({ loja }),
+    pagamentosRecentes({ loja }),
+    listarLojas(),
   ])
-  return { devedores, resumo, pagamentos }
+  return {
+    devedores,
+    resumo,
+    pagamentos,
+    loja,
+    lojas: lojas.filter((l) => eu.lojasPermitidas.includes(l.codigo)).map((l) => l.codigo),
+    gerente: ehGerente(eu.papel),
+  }
 }
 
 export async function action({ request }: Route.ActionArgs) {
-  const eu = await exigirGerente(request, "verContasAReceber")
   const form = await request.formData()
 
   // A baixa de quem pagou na loja. Vem por um fetcher, e por isso responde com
   // `baixa` em vez de `busca`: a faixa do resultado da busca não se confunde.
   if (form.get("intencao") === "baixar") {
+    const eu = await exigirGerente(request, "baixarBoleto")
     const r = await baixarNaLoja({
       origem: String(form.get("origem") ?? ""),
       id: String(form.get("id") ?? ""),
@@ -63,6 +78,7 @@ export async function action({ request }: Route.ActionArgs) {
       : data({ ok: false as const, erro: r.erro }, { status: 400 })
   }
 
+  await exigirGerente(request, "buscarBoletos")
   try {
     return { ok: true as const, busca: await buscarBoletosNoInter() }
   } catch (erro) {
@@ -78,7 +94,8 @@ function dataCurta(d: Date | string) {
 }
 
 export default function Inadimplentes({ loaderData, actionData }: Route.ComponentProps) {
-  const { devedores, resumo, pagamentos } = loaderData
+  const { devedores, resumo, pagamentos, loja, lojas, gerente } = loaderData
+  const [, setParametros] = useSearchParams()
   const buscando = useNavigation().state === "submitting"
   const [aberto, setAberto] = useState<string | null>(null)
   const [gerando, setGerando] = useState(false)
@@ -92,7 +109,9 @@ export default function Inadimplentes({ loaderData, actionData }: Route.Componen
   async function imprimir() {
     setGerando(true)
     setErroDaFolha(null)
-    const problema = await imprimirDocumento("/admin/inadimplentes/impressao")
+    const problema = await imprimirDocumento(
+      `/admin/inadimplentes/impressao${loja ? `?loja=${loja}` : ""}`
+    )
     setGerando(false)
     if (problema) setErroDaFolha(problema)
   }
@@ -109,6 +128,22 @@ export default function Inadimplentes({ loaderData, actionData }: Route.Componen
         <span className="text-xs text-muted-foreground">
           boletos do PDV e do sistema antigo, no Inter
         </span>
+        <div className="flex gap-1">
+          {["", ...lojas].map((codigo) => (
+            <Button
+              key={codigo || "todas"}
+              type="button"
+              size="xs"
+              variant={(loja ?? "") === codigo ? "secondary" : "ghost"}
+              onClick={() =>
+                setParametros(codigo ? { loja: codigo } : {}, { preventScrollReset: true })
+              }
+              className={cn("rounded-lg", codigo && "font-mono")}
+            >
+              {codigo || "Todas"}
+            </Button>
+          ))}
+        </div>
         <Form method="post" className="ml-auto flex items-center gap-2">
           <span className="text-[11px] text-muted-foreground">
             {resumo.ultimaBusca
@@ -124,16 +159,18 @@ export default function Inadimplentes({ loaderData, actionData }: Route.Componen
             className="rounded-lg"
           >
             {gerando ? <Loader2 className="size-4 animate-spin" /> : <Printer className="size-4" />}
-            {gerando ? "Gerando…" : "Imprimir por loja"}
+            {gerando ? "Gerando…" : loja ? `Imprimir ${loja}` : "Imprimir por loja"}
           </Button>
-          <Button type="submit" size="sm" disabled={buscando} className="rounded-lg">
-            {buscando ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <RefreshCw className="size-4" />
-            )}
-            {buscando ? "Buscando no Inter…" : "Atualizar do Inter"}
-          </Button>
+          {gerente ? (
+            <Button type="submit" size="sm" disabled={buscando} className="rounded-lg">
+              {buscando ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <RefreshCw className="size-4" />
+              )}
+              {buscando ? "Buscando no Inter…" : "Atualizar do Inter"}
+            </Button>
+          ) : null}
         </Form>
       </div>
 
@@ -316,6 +353,8 @@ export default function Inadimplentes({ loaderData, actionData }: Route.Componen
                                     </td>
                                     <td className="py-1 text-right font-medium">{moeda(b.valor)}</td>
                                     <td className="py-1 pl-3 text-right">
+                                      {/* Baixar cancela a cobrança no Inter: é do gerente. */}
+                                      {gerente ? (
                                       <Button
                                         type="button"
                                         size="xs"
@@ -328,9 +367,10 @@ export default function Inadimplentes({ loaderData, actionData }: Route.Componen
                                       >
                                         Recebido na loja
                                       </Button>
+                                      ) : null}
                                     </td>
                                   </tr>,
-                                  baixando === b.id ? (
+                                  gerente && baixando === b.id ? (
                                     <tr key={`${b.id}-baixa`}>
                                       <td colSpan={8} className="pb-2">
                                         <BaixaNaLoja

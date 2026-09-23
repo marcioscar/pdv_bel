@@ -220,7 +220,9 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         para: "/admin/inadimplentes",
         rotulo: "Inadimplentes",
         descricao: "Quem deve boleto vencido, do PDV e do sistema antigo, e o que entrou",
-        somenteGerente: true,
+        // Consulta aberta ao vendedor: é ele quem atende o cliente que deve. A
+        // baixa e a busca no Inter continuam do gerente, cobradas na ação.
+        somenteGerente: false,
       },
     ],
   },
@@ -345,6 +347,9 @@ export const ACOES_DE_GERENTE = {
   devolverMercadoria:
     "Só gerente registra devolução — volta mercadoria ao estoque e dinheiro à mão do cliente",
   inventario: "Só gerente faz inventário — o ajuste reescreve o saldo contado",
+  baixarBoleto:
+    "Só gerente dá baixa em boleto — ela cancela a cobrança no Inter",
+  buscarBoletos: "Só gerente atualiza os boletos do Inter",
   entradaManual:
     "Só gerente dá entrada manual — ela cria estoque sem nota; mercadoria de outra loja entra pela conferência da transferência",
   baixaDeUso:

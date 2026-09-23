@@ -4,7 +4,7 @@ import { emDia, inicioDoDia, diaDeHoje } from "~/lib/dia"
 import { formatarCpfCnpj } from "~/lib/documento"
 import { escapar } from "~/lib/html"
 import { moeda } from "~/lib/moeda"
-import { exigirGerente } from "~/lib/sessao.server"
+import { exigirUsuario } from "~/lib/sessao.server"
 
 /**
  * O relatório de inadimplentes, por loja, para imprimir ou salvar em PDF.
@@ -22,10 +22,13 @@ import { exigirGerente } from "~/lib/sessao.server"
  * a folha sairia com a sidebar junto; por isso cobra a própria guarda.
  */
 export async function loader({ request }: Route.LoaderArgs) {
-  const eu = await exigirGerente(request, "verContasAReceber")
-  const devedores = await inadimplentes()
+  // Consulta, como a tela: o vendedor que cobra imprime a lista da loja dele.
+  const eu = await exigirUsuario(request)
+  const pedida = new URL(request.url).searchParams.get("loja") ?? ""
+  const loja = eu.lojasPermitidas.includes(pedida) ? pedida : null
+  const devedores = await inadimplentes({ loja })
 
-  return new Response(folha(devedores, eu.nome), {
+  return new Response(folha(devedores, eu.nome, loja), {
     headers: {
       "content-type": "text/html; charset=utf-8",
       // Retrato de agora: em cache, cobraria quem acabou de pagar.
@@ -110,7 +113,7 @@ function linhaDoDevedor(
   return cabeca + linhas
 }
 
-function folha(devedores: Devedor[], emitidoPor: string) {
+function folha(devedores: Devedor[], emitidoPor: string, loja: string | null) {
   const hoje = inicioDoDia(diaDeHoje()).getTime()
   const secoes = porLoja(devedores)
   const totalGeral = secoes.reduce((s, x) => s + x.total, 0)
@@ -152,7 +155,7 @@ function folha(devedores: Devedor[], emitidoPor: string) {
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8">
-<title>Inadimplentes por loja · ${escapar(agora)}</title>
+<title>Inadimplentes ${loja ? escapar(loja) : "por loja"} · ${escapar(agora)}</title>
 <style>
   @page { size: A4 portrait; margin: 12mm 10mm 14mm; }
   * { box-sizing: border-box; }
@@ -212,7 +215,7 @@ function folha(devedores: Devedor[], emitidoPor: string) {
 </head>
 <body>
   <header>
-    <h1>Inadimplentes por loja</h1>
+    <h1>Inadimplentes ${loja ? `— ${escapar(loja)}` : "por loja"}</h1>
     <div class="contexto">
       Boletos vencidos e não pagos em ${escapar(agora)}, do PDV e do sistema antigo, somados por cliente
       (pelo CPF/CNPJ; as filiais de uma empresa entram juntas, com o CNPJ da filial em cada boleto).

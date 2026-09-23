@@ -352,13 +352,30 @@ export type BoletoDoDevedor = {
  * o boleto do PDV sabe o cliente pela venda, o de fora só pelo pagador. Nome
  * não serve — "PADARIA X LTDA" e "Padaria X" são o mesmo devedor.
  */
-export async function inadimplentes() {
+/**
+ * O recorte de UMA loja nas duas coleções. O boleto do PDV sabe a loja; o de
+ * fora só a conta — então QI traz também os da conta da matriz, que ela divide
+ * com a QNE. É a mesma escolha da folha, que os agrupa em "QI/QNE".
+ */
+async function daLoja(loja: string | null | undefined) {
+  if (!loja) return { pdv: {}, fora: {} }
+  const cadastro = await db.loja.findUnique({ where: { codigo: loja }, select: { conta: true } })
+  return {
+    pdv: { loja },
+    // Loja sem cadastro não casa com conta nenhuma — e a lista sai vazia, que
+    // é a resposta certa, em vez de cair no "todas".
+    fora: { conta: cadastro?.conta ?? "—" },
+  }
+}
+
+export async function inadimplentes({ loja }: { loja?: string | null } = {}) {
   const hoje = inicioDoDia(diaDeHoje())
   const abertoVencido = { situacao: { in: SITUACOES_EM_ABERTO }, vencimento: { lt: hoje } }
+  const recorte = await daLoja(loja)
 
   const [doPdv, deFora] = await Promise.all([
-    db.cobranca.findMany({ where: abertoVencido }),
-    db.boletoExterno.findMany({ where: abertoVencido }),
+    db.cobranca.findMany({ where: { ...abertoVencido, ...recorte.pdv } }),
+    db.boletoExterno.findMany({ where: { ...abertoVencido, ...recorte.fora } }),
   ])
 
   const vendas = await db.venda.findMany({
@@ -475,7 +492,7 @@ export async function inadimplentes() {
  * últimos 30 dias — os dois lados juntos, e separados para quem quiser ver de
  * onde vem cada parte.
  */
-export async function resumoDosBoletos() {
+export async function resumoDosBoletos({ loja }: { loja?: string | null } = {}) {
   const hoje = inicioDoDia(diaDeHoje())
   const trintaDias = inicioDoDia(diaAtras(30))
 
@@ -490,19 +507,28 @@ export async function resumoDosBoletos() {
     return { valor: arredondar(r._sum.valor ?? 0), quantidade: r._count._all }
   }
 
+  const recorte = await daLoja(loja)
   const vencido = { situacao: { in: SITUACOES_EM_ABERTO }, vencimento: { lt: hoje } }
   const aVencer = { situacao: { in: SITUACOES_EM_ABERTO }, vencimento: { gte: hoje } }
 
   const [vencidoPdv, vencidoAntigo, aVencerPdv, aVencerAntigo, recebidoPdv, recebidoAntigo, ultima] =
     await Promise.all([
-      soma("cobranca", vencido),
-      soma("boletoExterno", vencido),
-      soma("cobranca", aVencer),
-      soma("boletoExterno", aVencer),
+      soma("cobranca", { ...vencido, ...recorte.pdv }),
+      soma("boletoExterno", { ...vencido, ...recorte.fora }),
+      soma("cobranca", { ...aVencer, ...recorte.pdv }),
+      soma("boletoExterno", { ...aVencer, ...recorte.fora }),
       // O boleto do PDV não guarda a data do pagamento; a última mudança dele
       // é a melhor aproximação que existe aqui.
-      soma("cobranca", { situacao: { in: SITUACOES_RECEBIDAS }, atualizadaEm: { gte: trintaDias } }),
-      soma("boletoExterno", { situacao: { in: SITUACOES_RECEBIDAS }, dataSituacao: { gte: trintaDias } }),
+      soma("cobranca", {
+        situacao: { in: SITUACOES_RECEBIDAS },
+        atualizadaEm: { gte: trintaDias },
+        ...recorte.pdv,
+      }),
+      soma("boletoExterno", {
+        situacao: { in: SITUACOES_RECEBIDAS },
+        dataSituacao: { gte: trintaDias },
+        ...recorte.fora,
+      }),
       db.boletoExterno.findFirst({ orderBy: { conferidoEm: "desc" }, select: { conferidoEm: true } }),
     ])
 
@@ -515,15 +541,19 @@ export async function resumoDosBoletos() {
 }
 
 /** Os últimos pagamentos que caíram, de qualquer lado — é o "entrou?" do dia. */
-export async function pagamentosRecentes(limite = 20) {
+export async function pagamentosRecentes({
+  loja,
+  limite = 20,
+}: { loja?: string | null; limite?: number } = {}) {
+  const recorte = await daLoja(loja)
   const [doPdv, deFora] = await Promise.all([
     db.cobranca.findMany({
-      where: { situacao: { in: SITUACOES_RECEBIDAS } },
+      where: { situacao: { in: SITUACOES_RECEBIDAS }, ...recorte.pdv },
       orderBy: { atualizadaEm: "desc" },
       take: limite,
     }),
     db.boletoExterno.findMany({
-      where: { situacao: { in: SITUACOES_RECEBIDAS } },
+      where: { situacao: { in: SITUACOES_RECEBIDAS }, ...recorte.fora },
       orderBy: { dataSituacao: "desc" },
       take: limite,
     }),
