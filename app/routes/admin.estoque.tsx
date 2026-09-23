@@ -30,6 +30,7 @@ import {
   produtosPorCodigo,
   type ProdutoCatalogo,
 } from "~/lib/pdv"
+import { focoEmMenu } from "~/lib/foco"
 import { cn } from "~/lib/utils"
 
 const OBJECT_ID = /^[0-9a-fA-F]{24}$/
@@ -413,7 +414,13 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
             }
             valor={entrada}
             onValorChange={setEntrada}
-            onBlur={() => requestAnimationFrame(focar)}
+            // Não quando o foco foi para um menu da barra de cima: ele fecharia
+            // no instante em que abre (ver ~/lib/foco).
+            onBlur={() =>
+              requestAnimationFrame(() => {
+                if (!focoEmMenu()) focar()
+              })
+            }
             resultados={resultados}
             indiceResultado={indiceResultado}
             onEscolherResultado={(i) => {

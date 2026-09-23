@@ -68,6 +68,7 @@ import { imprimirDocumento } from "~/lib/impressao"
 import { useAtalhosDeSecao } from "~/lib/navegacao"
 import { ACOES_DE_GERENTE, ehGerente } from "~/lib/permissoes"
 import { useRelogio, useTema } from "~/lib/tema"
+import { focoEmMenu } from "~/lib/foco"
 import { cn } from "~/lib/utils"
 import {
   buscarProdutos,
@@ -1072,7 +1073,11 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   // para que a próxima tecla continue caindo na barra de comando.
   const devolverFoco = useCallback(() => {
     if (ajudaAberta || clienteAberto || condicaoAberta || finalizando) return
-    requestAnimationFrame(focar)
+    // Menos quando o foco foi para um menu da barra de cima: puxado de volta,
+    // o menu fechava no instante em que abria.
+    requestAnimationFrame(() => {
+      if (!focoEmMenu()) focar()
+    })
   }, [ajudaAberta, clienteAberto, condicaoAberta, finalizando, focar])
 
   const voltarParaBusca = useCallback(() => {

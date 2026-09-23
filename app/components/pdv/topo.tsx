@@ -1,9 +1,10 @@
+import { memo } from "react"
 import { Form, Link, useLocation } from "react-router"
 import { ChevronDown, LogOut, Moon, SlidersHorizontal, Store, Sun } from "lucide-react"
 
 import { AvisosDoTopo } from "~/components/pdv/avisos-topo"
 import { Badge } from "~/components/ui/badge"
-import { Button } from "~/components/ui/button"
+import { Button, buttonVariants } from "~/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -47,11 +48,8 @@ export function Topo({
   // Trocar a loja do turno é do gerente: move venda, estoque e caixa de lugar.
   const podeTrocar = lojasPermitidas > 1 && ehGerente(papel)
 
-  // Prefixo, não igualdade: /vendas/123/cupom continua sendo Vendas.
-  const estaEm = (para: string) =>
-    pathname === para || (para !== "/" && pathname.startsWith(`${para}/`))
   const caixa = secoesDoPapel(papel).find((secao) => secao.para === "/")
-  const menus = menusDoTopo(papel)
+  const caixaAtivo = pathname === "/"
 
   return (
     <header className="flex items-center justify-between gap-2 border-b border-border px-2.5 py-2 sm:px-5 sm:py-2.5">
@@ -82,10 +80,10 @@ export function Topo({
               // O elemento renderizado é um <a>, não um <button>.
               nativeButton={false}
               tabIndex={-1}
-              variant={estaEm(caixa.para) ? "secondary" : "ghost"}
+              variant={caixaAtivo ? "secondary" : "ghost"}
               size="sm"
               title={caixa.tecla ? `Ctrl ${caixa.tecla}` : undefined}
-              className={cn("rounded-lg", estaEm(caixa.para) && "font-semibold")}
+              className={cn("rounded-lg", caixaAtivo && "font-semibold")}
             >
               {caixa.rotulo}
               {caixa.tecla ? (
@@ -94,71 +92,7 @@ export function Topo({
             </Button>
           ) : null}
 
-          {menus.map((menu) => {
-            const ativo =
-              menu.secoes.some((secao) => estaEm(secao.para)) ||
-              menu.grupos.some((grupo) => grupo.secoes.some((secao) => estaEm(secao.para)))
-            return (
-              <DropdownMenu key={menu.id}>
-                <DropdownMenuTrigger
-                  render={
-                    <Button
-                      type="button"
-                      tabIndex={-1}
-                      variant={ativo ? "secondary" : "ghost"}
-                      size="sm"
-                      className={cn("rounded-lg", ativo && "font-semibold")}
-                    />
-                  }
-                >
-                  {menu.id === "adm" ? (
-                    <SlidersHorizontal className="size-3.5" aria-hidden />
-                  ) : null}
-                  {menu.rotulo}
-                  <ChevronDown className="size-3.5 opacity-60" aria-hidden />
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="min-w-56">
-                  {menu.secoes.map((secao) => (
-                    <DropdownMenuItem
-                      key={secao.para}
-                      render={<Link to={secao.para} />}
-                      className={cn(estaEm(secao.para) && "font-semibold")}
-                    >
-                      {secao.para === "/admin" ? "Painel" : secao.rotulo}
-                      {secao.tecla ? (
-                        <DropdownMenuShortcut>Ctrl {secao.tecla}</DropdownMenuShortcut>
-                      ) : null}
-                    </DropdownMenuItem>
-                  ))}
-                  {menu.secoes.length > 0 && menu.grupos.length > 0 ? (
-                    <DropdownMenuSeparator />
-                  ) : null}
-                  {menu.grupos.map((grupo) => (
-                    <DropdownMenuSub key={grupo.id}>
-                      <DropdownMenuSubTrigger
-                        className={cn(
-                          grupo.secoes.some((secao) => estaEm(secao.para)) && "font-semibold"
-                        )}
-                      >
-                        {grupo.rotulo}
-                      </DropdownMenuSubTrigger>
-                      <DropdownMenuSubContent className="min-w-56">
-                        {grupo.secoes.map((secao) => (
-                          <DropdownMenuItem
-                            key={secao.para}
-                            render={<Link to={secao.para} />}
-                            className={cn(estaEm(secao.para) && "font-semibold")}
-                          >
-                            {secao.rotulo}
-                          </DropdownMenuItem>
-                        ))}
-                      </DropdownMenuSubContent>
-                    </DropdownMenuSub>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )
-          })}
+          <MenusDoTopo papel={papel} pathname={pathname} />
         </nav>
 
         {/* A loja é a única informação de contexto no topo. O selo "Caixa 01" saiu:
@@ -239,3 +173,97 @@ export function Topo({
     </header>
   )
 }
+
+/**
+ * Os três menus, num componente à parte e memorizado.
+ *
+ * Um menu aberto fecha quando o componente em volta é redesenhado — e a barra
+ * se redesenha muito: o relógio a cada 20 segundos, os avisos, e toda mudança
+ * de estado da tela que a contém (no caixa, cada tecla). O menu abria e sumia.
+ * Memorizado, ele só se redesenha quando muda o que ele mostra: quem está
+ * logado e em que tela.
+ */
+const MenusDoTopo = memo(function MenusDoTopo({
+  papel,
+  pathname,
+}: {
+  papel: string
+  pathname: string
+}) {
+  // Prefixo, não igualdade: /vendas/123/cupom continua sendo Vendas.
+  const estaEm = (para: string) =>
+    pathname === para || (para !== "/" && pathname.startsWith(`${para}/`))
+  const menus = menusDoTopo(papel)
+
+  return (
+    <>
+          {menus.map((menu) => {
+            const ativo =
+              menu.secoes.some((secao) => estaEm(secao.para)) ||
+              menu.grupos.some((grupo) => grupo.secoes.some((secao) => estaEm(secao.para)))
+            return (
+              <DropdownMenu key={menu.id}>
+                {/* `openOnHover={false}` explícito: o menu abria sozinho ao passar o
+                    mouse (~150 ms), e o clique que vinha logo depois o FECHAVA —
+                    abria rápido e sumia. Os submenus continuam abrindo no hover,
+                    que é onde isso ajuda. */}
+                <DropdownMenuTrigger
+                  tabIndex={-1}
+                  openOnHover={false}
+                  className={cn(
+                    buttonVariants({ variant: ativo ? "secondary" : "ghost", size: "sm" }),
+                    "rounded-lg",
+                    ativo && "font-semibold"
+                  )}
+                >
+                  {menu.id === "adm" ? (
+                    <SlidersHorizontal className="size-3.5" aria-hidden />
+                  ) : null}
+                  {menu.rotulo}
+                  <ChevronDown className="size-3.5 opacity-60" aria-hidden />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="min-w-56">
+                  {menu.secoes.map((secao) => (
+                    <DropdownMenuItem
+                      key={secao.para}
+                      render={<Link to={secao.para} />}
+                      className={cn(estaEm(secao.para) && "font-semibold")}
+                    >
+                      {secao.para === "/admin" ? "Painel" : secao.rotulo}
+                      {secao.tecla ? (
+                        <DropdownMenuShortcut>Ctrl {secao.tecla}</DropdownMenuShortcut>
+                      ) : null}
+                    </DropdownMenuItem>
+                  ))}
+                  {menu.secoes.length > 0 && menu.grupos.length > 0 ? (
+                    <DropdownMenuSeparator />
+                  ) : null}
+                  {menu.grupos.map((grupo) => (
+                    <DropdownMenuSub key={grupo.id}>
+                      <DropdownMenuSubTrigger
+                        className={cn(
+                          grupo.secoes.some((secao) => estaEm(secao.para)) && "font-semibold"
+                        )}
+                      >
+                        {grupo.rotulo}
+                      </DropdownMenuSubTrigger>
+                      <DropdownMenuSubContent className="min-w-56">
+                        {grupo.secoes.map((secao) => (
+                          <DropdownMenuItem
+                            key={secao.para}
+                            render={<Link to={secao.para} />}
+                            className={cn(estaEm(secao.para) && "font-semibold")}
+                          >
+                            {secao.rotulo}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuSubContent>
+                    </DropdownMenuSub>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )
+          })}
+    </>
+  )
+})
