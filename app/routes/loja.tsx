@@ -4,11 +4,12 @@ import { Store } from "lucide-react"
 
 import type { Route } from "./+types/loja"
 import { Button } from "~/components/ui/button"
+import { Input } from "~/components/ui/input"
 import { Kbd } from "~/components/ui/kbd"
 import { listarLojas } from "~/lib/lojas.server"
 import { cookieDaLojaDaMaquina, lojaDaMaquina } from "~/lib/maquina.server"
 import { ACOES_DE_GERENTE, ehGerente } from "~/lib/permissoes"
-import { definirLojaDaSessao, usuarioDaSessao } from "~/lib/sessao.server"
+import { conferirGerente, definirLojaDaSessao, usuarioDaSessao } from "~/lib/sessao.server"
 import { cn } from "~/lib/utils"
 
 export function meta(_: Route.MetaArgs) {
@@ -56,12 +57,17 @@ export async function loader({ request }: Route.LoaderArgs) {
   const todas = await listarLojas()
   const lojas = todas.filter((l) => usuario.lojasPermitidas.includes(l.codigo))
 
+  const daMaquina = await lojaDaMaquina(request)
+
   return {
     nome: usuario.nome,
     atual: usuario.loja,
     lojas,
     destino,
-    daMaquina: await lojaDaMaquina(request),
+    daMaquina,
+    // Navegador sem loja fixa — computador novo, aba anônima, cookies limpos —
+    // não é o operador quem decide onde ele vende: o gerente digita a senha.
+    precisaGerente: !daMaquina && !ehGerente(usuario.papel),
     // Configurar o terminal é do gerente: a loja fixa decide onde toda venda
     // feita aqui vai ser gravada, por todos os turnos seguintes.
     podeFixar: ehGerente(usuario.papel),
@@ -89,19 +95,45 @@ export async function action({ request }: Route.ActionArgs) {
   }
 
   /**
-   * A primeira escolha num computador sem loja o fixa, seja de quem for.
+   * A primeira escolha num computador sem loja o fixa — e essa escolha é do
+   * GERENTE.
    *
-   * Sem isto a trava do turno tinha uma porta dos fundos: sair e entrar de novo
-   * devolvia a escolha ao operador. Fixado, o computador entra sempre na mesma
-   * loja — a sessão nova já nasce com ela (`lojaParaEntrar`) e esta tela, com
-   * loja na sessão, é só do gerente. A loja é do lugar, não da pessoa: os
-   * vendedores revezam, e o caixa da QNE continua na QNE.
+   * Fixado, o computador entra sempre na mesma loja: a sessão nova já nasce com
+   * ela (`lojaParaEntrar`) e esta tela, com loja na sessão, é só do gerente. A
+   * loja é do lugar, não da pessoa: os vendedores revezam, e o caixa da QNE
+   * continua na QNE.
+   *
+   * Quem fixava era qualquer um, e o cookie da máquina é do navegador: numa aba
+   * anônima ele não existe, e o operador escolhia a loja que quisesse. Agora,
+   * sem loja fixa, o operador só passa daqui com a senha de um gerente — e num
+   * computador fixo, só entra na loja dele.
    *
    * Já fixado, mudar é do gerente e continua opcional para ele, que cobre turno
    * em outra loja: quem visita a QNE e troca de loja no terminal da QI não pode
    * deixar aquele caixa apontando para a QNE.
    */
   const daMaquina = await lojaDaMaquina(request)
+  if (!ehGerente(usuario.papel)) {
+    if (daMaquina && escolhida !== daMaquina) {
+      return data(
+        { erro: `Este computador é o caixa da ${daMaquina} — só um gerente muda` },
+        { status: 403 }
+      )
+    }
+    if (!daMaquina) {
+      const email = String(form.get("gerenteEmail") ?? "")
+      const senha = String(form.get("gerenteSenha") ?? "")
+      if (!email || !senha) {
+        return data(
+          { erro: "Este computador ainda não tem loja — um gerente precisa digitar a senha" },
+          { status: 403 }
+        )
+      }
+      const gerente = await conferirGerente(email, senha)
+      if (!gerente.ok) return data({ erro: gerente.erro }, { status: 403 })
+    }
+  }
+
   const fixar =
     !daMaquina ||
     (String(form.get("padraoDaMaquina")) === "on" && ehGerente(usuario.papel))
@@ -111,10 +143,14 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function EscolherLoja({ loaderData, actionData }: Route.ComponentProps) {
-  const { nome, atual, lojas, destino, daMaquina, podeFixar } = loaderData
+  const { nome, atual, lojas, destino, daMaquina, podeFixar, precisaGerente } = loaderData
   const navegacao = useNavigation()
   const enviando = navegacao.state !== "idle"
   const [fixar, setFixar] = useState(false)
+  // Os campos do gerente valem para qualquer um dos botões de loja, então o
+  // valor mora aqui e vai escondido em cada formulário.
+  const [gerenteEmail, setGerenteEmail] = useState("")
+  const [gerenteSenha, setGerenteSenha] = useState("")
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-muted/30 p-6">
@@ -137,6 +173,34 @@ export default function EscolherLoja({ loaderData, actionData }: Route.Component
           {nome} · a venda, o estoque e o boleto ficam na loja escolhida
         </p>
 
+        {precisaGerente && lojas.length > 0 ? (
+          <div className="mt-5 rounded-lg border-2 border-primary/40 bg-primary/5 p-3">
+            <p className="text-xs">
+              <b className="font-semibold">Este computador ainda não tem loja.</b> Um gerente
+              digita a senha e escolhe a loja — daí em diante, quem entrar aqui cai direto
+              nela.
+            </p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Input
+                type="email"
+                value={gerenteEmail}
+                onChange={(e) => setGerenteEmail(e.target.value)}
+                placeholder="E-mail do gerente"
+                autoComplete="off"
+                className="h-9 min-w-44 flex-1 rounded-lg bg-background text-sm"
+              />
+              <Input
+                type="password"
+                value={gerenteSenha}
+                onChange={(e) => setGerenteSenha(e.target.value)}
+                placeholder="Senha"
+                autoComplete="off"
+                className="h-9 min-w-32 flex-1 rounded-lg bg-background text-sm"
+              />
+            </div>
+          </div>
+        ) : null}
+
         {lojas.length === 0 ? (
           <p className="mt-6 text-sm text-destructive">
             Seu cadastro não tem loja liberada. Peça ao gerente para vincular.
@@ -147,6 +211,12 @@ export default function EscolherLoja({ loaderData, actionData }: Route.Component
               <Form method="post" key={loja.codigo}>
                 <input type="hidden" name="destino" value={destino} />
                 <input type="hidden" name="loja" value={loja.codigo} />
+                {precisaGerente ? (
+                  <>
+                    <input type="hidden" name="gerenteEmail" value={gerenteEmail} />
+                    <input type="hidden" name="gerenteSenha" value={gerenteSenha} />
+                  </>
+                ) : null}
                 {/* Sem padrão ainda, o action fixa de qualquer jeito. Havendo,
                     só muda se o gerente marcar a caixa abaixo. */}
                 <input
@@ -180,12 +250,14 @@ export default function EscolherLoja({ loaderData, actionData }: Route.Component
         )}
 
         {!daMaquina ? (
-          <p className="mt-4 text-[11px] leading-relaxed text-muted-foreground">
-            <b className="font-semibold text-foreground">
-              A loja escolhida fica fixa neste computador.
-            </b>{" "}
-            Quem entrar aqui depois cai direto nela, e só um gerente troca.
-          </p>
+          precisaGerente ? null : (
+            <p className="mt-4 text-[11px] leading-relaxed text-muted-foreground">
+              <b className="font-semibold text-foreground">
+                A loja escolhida fica fixa neste computador.
+              </b>{" "}
+              Quem entrar aqui depois cai direto nela, e só um gerente troca.
+            </p>
+          )
         ) : podeFixar ? (
           <label className="mt-4 flex cursor-pointer items-start gap-2 text-[11px] leading-relaxed text-muted-foreground">
             <input

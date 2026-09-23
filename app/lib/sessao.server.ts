@@ -214,6 +214,22 @@ export async function exigirUsuario(request: Request): Promise<UsuarioLogado> {
 }
 
 /**
+ * A senha de um gerente digitada na tela de outra pessoa — no caixa, na
+ * sangria, na escolha de loja de um computador novo. Confere quem é e se é
+ * gerente; a sessão continua sendo de quem está operando.
+ */
+export async function conferirGerente(email: string, senha: string) {
+  const login = await autenticar(email, senha)
+  if (!login.ok) return { ok: false as const, erro: login.erro }
+
+  const gerente = await db.usuario.findUnique({ where: { id: login.usuarioId } })
+  if (!gerente || !ehGerente(gerente.papel)) {
+    return { ok: false as const, erro: "Esta pessoa não é gerente" }
+  }
+  return { ok: true as const, nome: gerente.nome }
+}
+
+/**
  * Exige gerente. Vale para loader E action da mesma rota: esconder o botão não é
  * controle de acesso — a rota continua respondendo a quem digitar a URL, e a
  * action continua aceitando um POST montado à mão.

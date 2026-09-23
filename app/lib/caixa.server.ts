@@ -10,8 +10,7 @@ import {
   type TipoMovimentoDeCaixa,
 } from "~/lib/caixa"
 import { moeda } from "~/lib/moeda"
-import { ehGerente } from "~/lib/permissoes"
-import { autenticar } from "~/lib/sessao.server"
+import { conferirGerente } from "~/lib/sessao.server"
 import { NAO_CANCELADA, NAO_E_TRANSFERENCIA } from "~/lib/vendas.server"
 
 /**
@@ -181,18 +180,6 @@ async function sangriasSemGerente(loja: string, dia: string) {
   return arredondar(
     sangrias.filter((s) => !s.autorizadaPor).reduce((acc, s) => acc + s.valor, 0)
   )
-}
-
-/** A senha de um gerente digitada no balcão: confere quem é e se é gerente. */
-async function conferirGerente(email: string, senha: string) {
-  const login = await autenticar(email, senha)
-  if (!login.ok) return { ok: false as const, erro: login.erro }
-
-  const gerente = await db.usuario.findUnique({ where: { id: login.usuarioId } })
-  if (!gerente || !ehGerente(gerente.papel)) {
-    return { ok: false as const, erro: "Esta pessoa não é gerente" }
-  }
-  return { ok: true as const, nome: gerente.nome }
 }
 
 /** Lança troco inicial, sangria ou reforço. */
