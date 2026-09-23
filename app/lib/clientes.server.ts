@@ -311,21 +311,35 @@ export async function atualizarCliente(
  * A rede inteira de propósito: o cadastro é da rede, e quem comprou na QI e liga
  * para a SDS continua sendo o mesmo cliente com o mesmo pedido de sempre.
  *
+ * Inclui as compras do sistema antigo (`vendas_antigas`): o "de sempre" de
+ * quem é cliente há anos está lá, não aqui.
+ *
  * Traz os itens junto — são eles a resposta da pergunta. Sem os itens, a lista
  * diria quanto ele gastou, que é o que ninguém perguntou.
  */
 export async function historicoDoCliente(clienteId: string, { limite = 30 } = {}) {
   if (!OBJECT_ID.test(clienteId)) return []
 
-  const vendas = await db.venda.findMany({
-    where: { clienteId },
-    orderBy: { criadaEm: "desc" },
-    take: limite,
-  })
+  // As duas fontes pelo mesmo limite: juntas e cortadas depois, para as trinta
+  // mais recentes serem as trinta mais recentes de verdade, de onde vierem.
+  const [vendas, antigas] = await Promise.all([
+    db.venda.findMany({
+      where: { clienteId },
+      orderBy: { criadaEm: "desc" },
+      take: limite,
+    }),
+    db.vendaAntiga.findMany({
+      where: { clienteId },
+      orderBy: { data: "desc" },
+      take: limite,
+    }),
+  ])
 
-  return vendas.map((venda) => ({
+  const novas = vendas.map((venda) => ({
     id: venda.id,
-    numero: venda.numero,
+    /** Null na compra do sistema antigo, que não tem número daqui. */
+    numero: venda.numero as number | null,
+    antiga: null as null | { documento: string },
     loja: venda.loja,
     criadaEm: venda.criadaEm,
     forma: venda.forma,
@@ -342,4 +356,32 @@ export async function historicoDoCliente(clienteId: string, { limite = 30 } = {}
       subtotal: item.subtotal,
     })),
   }))
+
+  // Vem com a mesma forma, para o diálogo não precisar de dois desenhos. A
+  // cancelada não tem data de cancelamento no arquivo: a da compra serve, já
+  // que o diálogo só pergunta SE foi cancelada.
+  const doSistemaAntigo = antigas.map((venda) => ({
+    id: venda.id,
+    numero: null,
+    antiga: { documento: venda.documento },
+    loja: venda.loja,
+    criadaEm: venda.data,
+    forma: venda.forma,
+    total: venda.total,
+    desconto: venda.desconto,
+    canceladaEm: venda.cancelada ? venda.data : null,
+    vendedorNome: venda.vendedorNome,
+    itens: venda.itens.map((item) => ({
+      codigo: item.codigo,
+      descricao: item.descricao,
+      unidade: item.unidade,
+      quantidade: item.quantidade,
+      preco: item.preco,
+      subtotal: item.subtotal,
+    })),
+  }))
+
+  return [...novas, ...doSistemaAntigo]
+    .sort((a, b) => b.criadaEm.getTime() - a.criadaEm.getTime())
+    .slice(0, limite)
 }

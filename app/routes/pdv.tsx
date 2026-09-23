@@ -208,6 +208,17 @@ export async function loader({ request }: Route.LoaderArgs) {
           .findFirst({ where: { id: idParaRepetir, loja: { in: eu.lojasPermitidas } } })
           .catch(() => null)
       : null
+  /*
+   * A compra do sistema antigo também se repete: para o cliente de anos, o "de
+   * sempre" está lá. Só volta o item cujo código existe no catálogo de hoje —
+   * o resto não tem produto para pôr no carrinho.
+   */
+  const repeticaoAntiga =
+    idParaRepetir && OBJECT_ID.test(idParaRepetir) && !repeticao
+      ? await db.vendaAntiga
+          .findFirst({ where: { id: idParaRepetir, loja: { in: eu.lojasPermitidas } } })
+          .catch(() => null)
+      : null
 
   return {
     eu,
@@ -268,7 +279,19 @@ export async function loader({ request }: Route.LoaderArgs) {
               quantidade: item.quantidade,
             })),
           }
-      : null,
+        : repeticaoAntiga
+          ? {
+              origem: "repeticao" as const,
+              id: repeticaoAntiga.id,
+              numero: null,
+              quando: repeticaoAntiga.data.toISOString(),
+              desconto: 0,
+              clienteId: repeticaoAntiga.clienteId,
+              itens: repeticaoAntiga.itens.flatMap((item) =>
+                item.produtoId ? [{ produtoId: item.produtoId, quantidade: item.quantidade }] : []
+              ),
+            }
+          : null,
   }
 }
 
@@ -1483,7 +1506,9 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     const feito =
       retomada.origem === "autorizacao"
         ? "Venda liberada pelo gerente — carrinho retomado"
-        : `Pedido da venda #${retomada.numero} (${quando}) no carrinho — confira antes de fechar`
+        : retomada.numero === null
+          ? `Pedido do sistema antigo (${quando}) no carrinho — confira antes de fechar`
+          : `Pedido da venda #${retomada.numero} (${quando}) no carrinho — confira antes de fechar`
 
     avisar(
       faltaram.length > 0

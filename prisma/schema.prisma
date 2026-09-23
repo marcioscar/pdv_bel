@@ -531,6 +531,59 @@ type VendaItem {
   subtotal   Float
 }
 
+/// Uma compra do sistema antigo, trazida só para o histórico do cliente.
+///
+/// NÃO é Venda, e mora noutra coleção de propósito: estoque, caixa, comissão,
+/// painel, curva ABC e numeração leem `Venda`, e nenhum deles pode ver isto. Se
+/// fosse Venda com uma marca, cada consulta de lá precisaria lembrar de filtrar
+/// a marca — e a que esquecesse contaria nove meses de faturamento em dobro.
+///
+/// O arquivo antigo é uma linha por item, sem número de pedido. Uma "compra"
+/// aqui é o que o cliente levou num dia, na mesma loja, forma de pagamento e
+/// vendedor: dois pedidos iguais no mesmo dia viram um, e é o melhor que o
+/// arquivo permite.
+model VendaAntiga {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  /// Identidade da compra no arquivo (dia, pessoa, loja, forma…). Única: é o que
+  /// deixa rodar a importação de novo sem duplicar.
+  chave        String   @unique
+  /// Null quando a pessoa do sistema antigo não tem cadastro aqui — a compra é
+  /// guardada mesmo assim, e passa a aparecer se o cadastro vier depois.
+  clienteId    String?  @db.ObjectId
+  /// Código e nome da pessoa no sistema antigo, como vieram.
+  pessoaCodigo String
+  pessoaNome   String
+  loja         String
+  data         DateTime
+  /// Texto do sistema antigo ("CARTAO DE CREDITO VISA"), não o id de FORMAS_PAGAMENTO.
+  forma        String
+  /// "Pedido", "NFC-e" ou "NF-e".
+  documento    String
+  status       String
+  cancelada    Boolean  @default(false)
+  vendedorNome String?
+  total        Float
+  desconto     Float
+  itens        VendaAntigaItem[]
+  importadaEm  DateTime @default(now())
+
+  @@index([clienteId, data])
+  @@map("vendas_antigas")
+}
+
+type VendaAntigaItem {
+  /// O produto do catálogo de hoje com o mesmo código, quando existe. É o que
+  /// deixa "repetir no caixa" uma compra antiga.
+  produtoId  String? @db.ObjectId
+  codigo     String
+  descricao  String
+  unidade    String
+  preco      Float
+  quantidade Float
+  desconto   Float
+  subtotal   Float
+}
+
 /// Sequência do número de venda, uma por loja: `nome` é "venda:QI". O incremento
 /// é atômico ($inc num único documento), então dois caixas simultâneos da mesma
 /// loja não pegam o mesmo número.

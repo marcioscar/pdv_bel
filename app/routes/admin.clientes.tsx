@@ -502,6 +502,15 @@ function DialogoHistorico({ cliente }: { cliente: Cliente }) {
                 <Badge variant="outline" className="shrink-0 font-mono text-[10px]">
                   {compra.loja}
                 </Badge>
+                {compra.antiga ? (
+                  <Badge
+                    variant="secondary"
+                    className="shrink-0 text-[9px]"
+                    title="Importada do sistema anterior: é só histórico, não conta no caixa nem no estoque"
+                  >
+                    sistema antigo
+                  </Badge>
+                ) : null}
                 <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
                   {compra.itens.length === 1
                     ? compra.itens[0].descricao
@@ -558,7 +567,10 @@ function DialogoHistorico({ cliente }: { cliente: Cliente }) {
                     </tbody>
                   </table>
                   <p className="mt-1.5 text-[11px] text-muted-foreground">
-                    Venda #{compra.numero} ·{" "}
+                    {compra.antiga
+                      ? `Sistema antigo · ${compra.antiga.documento}`
+                      : `Venda #${compra.numero}`}{" "}
+                    ·{" "}
                     {FORMAS_PAGAMENTO.find((f) => f.id === compra.forma)?.rotulo ?? compra.forma}
                     {compra.desconto > 0 ? ` · desconto ${moeda(compra.desconto)}` : ""}
                     {compra.vendedorNome ? ` · ${compra.vendedorNome}` : ""}
