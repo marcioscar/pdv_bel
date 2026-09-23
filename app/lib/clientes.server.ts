@@ -12,6 +12,7 @@ import {
 
 export type ClienteEntrada = {
   nome: string
+  nomeFantasia?: string
   cpfCnpj: string
   endereco: string
   bairro: string
@@ -40,6 +41,7 @@ function texto(valor: FormDataEntryValue | null) {
 export function lerCliente(form: FormData): ClienteEntrada {
   return {
     nome: texto(form.get("nome")),
+    nomeFantasia: texto(form.get("nomeFantasia")) || undefined,
     cpfCnpj: texto(form.get("cpfCnpj")),
     endereco: texto(form.get("endereco")),
     bairro: texto(form.get("bairro")),
@@ -92,6 +94,13 @@ function validarEntrada(entrada: ClienteEntrada): { ok: false; erro: string; cam
   return null
 }
 
+/** Fantasia igual à razão social é texto repetido na lista — não se guarda. */
+function fantasiaPropria(entrada: ClienteEntrada) {
+  const fantasia = entrada.nomeFantasia?.trim()
+  if (!fantasia || fantasia.toUpperCase() === entrada.nome.trim().toUpperCase()) return undefined
+  return fantasia
+}
+
 /**
  * A loja vem à parte da entrada de propósito: ela sai da sessão, não do
  * formulário. Se viesse junto no `FormData`, um campo escondido bastaria para
@@ -116,6 +125,7 @@ export async function criarCliente(
   const cliente = await db.cliente.create({
     data: {
       nome: entrada.nome,
+      nomeFantasia: fantasiaPropria(entrada),
       cpfCnpj,
       tipoPessoa,
       endereco: entrada.endereco,
@@ -153,6 +163,64 @@ export function listarClientes({ incluirInativos = false } = {}) {
     where: incluirInativos ? {} : { ativo: true },
     orderBy: { nome: "asc" },
   })
+}
+
+const CLIENTES_POR_PAGINA = 50
+
+/**
+ * A lista da tela de Clientes, uma página por vez e filtrada no banco.
+ *
+ * Com o cadastro do sistema antigo são mais de seis mil clientes: mandar todos
+ * para o navegador e filtrar lá fazia a tela desenhar seis mil linhas para quem
+ * procurava uma. O F6 do caixa continua com `listarClientes`, porque mostra no
+ * máximo oito e precisa responder sem esperar a rede.
+ *
+ * A busca ignora maiúsculas mas não acentos — o Mongo não compara sem acento
+ * sem uma collation que o Prisma não expõe. O cadastro importado é todo sem
+ * acento, então "joao" acha "JOAO"; o que se cadastrou à mão como "João" pede
+ * o til.
+ */
+export async function buscarClientes({
+  busca = "",
+  pagina = 1,
+  incluirInativos = false,
+}: {
+  busca?: string
+  pagina?: number
+  incluirInativos?: boolean
+}) {
+  // O Prisma entrega o `contains` ao Mongo como regex sem escapar nada: sem
+  // isto, buscar "(teste" ou "S/A." derruba a consulta ou acha o que não devia.
+  const termo = busca.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  const digitos = busca.replace(/\D/g, "")
+
+  const filtroBusca = termo
+    ? {
+        OR: [
+          { nome: { contains: termo, mode: "insensitive" as const } },
+          { nomeFantasia: { contains: termo, mode: "insensitive" as const } },
+          { cidade: { contains: termo, mode: "insensitive" as const } },
+          ...(digitos.length >= 3 ? [{ cpfCnpj: { contains: digitos } }] : []),
+        ],
+      }
+    : {}
+  const where = incluirInativos ? filtroBusca : { ...filtroBusca, ativo: true }
+
+  const [total, inativos] = await Promise.all([
+    db.cliente.count({ where }),
+    db.cliente.count({ where: { ativo: false } }),
+  ])
+  const paginas = Math.max(1, Math.ceil(total / CLIENTES_POR_PAGINA))
+  const atual = Math.min(Math.max(1, Math.floor(pagina) || 1), paginas)
+
+  const clientes = await db.cliente.findMany({
+    where,
+    orderBy: { nome: "asc" },
+    skip: (atual - 1) * CLIENTES_POR_PAGINA,
+    take: CLIENTES_POR_PAGINA,
+  })
+
+  return { clientes, total, inativos, pagina: atual, paginas, porPagina: CLIENTES_POR_PAGINA }
 }
 
 /** Desativa ou reativa. Não existe apagar: vendas referenciam o clienteId. */
@@ -206,6 +274,7 @@ export async function atualizarCliente(
     where: { id },
     data: {
       nome: entrada.nome,
+      nomeFantasia: fantasiaPropria(entrada) ?? null,
       cpfCnpj,
       tipoPessoa,
       endereco: entrada.endereco,

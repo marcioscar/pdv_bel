@@ -13,6 +13,7 @@ import { cn } from "~/lib/utils"
 export type ClienteResumo = {
   id: string
   nome: string
+  nomeFantasia: string | null
   cpfCnpj: string
   cidade: string
   uf: string
@@ -87,6 +88,7 @@ export function ClienteDialogo({
       .filter(
         (cliente) =>
           normalizar(cliente.nome).includes(termo) ||
+          normalizar(cliente.nomeFantasia ?? "").includes(termo) ||
           (so.length >= 3 && cliente.cpfCnpj.includes(so))
       )
       .slice(0, 8)
@@ -262,6 +264,11 @@ export function ClienteDialogo({
                     >
                       <span className="min-w-0 flex-1 truncate font-medium">
                         {cliente.nome}
+                        {cliente.nomeFantasia ? (
+                          <span className="ml-2 font-normal text-muted-foreground">
+                            {cliente.nomeFantasia}
+                          </span>
+                        ) : null}
                       </span>
                       {/* Escolher uma loja da rede muda o que a venda é; o
                           caixa precisa ver isso ANTES do Enter, não depois. */}

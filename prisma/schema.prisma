@@ -401,6 +401,9 @@ model MovimentoEstoque {
 model Cliente {
   id          String   @id @default(auto()) @map("_id") @db.ObjectId
   nome        String
+  /// O nome pelo qual o balcão conhece o cliente ("BOSS - PARK SHOPPING") quando
+  /// é diferente da razão social. Só serve para achar: boleto e nota levam `nome`.
+  nomeFantasia String?
   cpfCnpj     String   @unique
   /// "FISICA" | "JURIDICA" — derivado do tamanho do documento
   tipoPessoa  String

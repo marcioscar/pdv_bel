@@ -37,6 +37,7 @@ import type { DadosDoCnpj } from "~/routes/cnpj"
 export type ClienteEditavel = {
   id: string
   nome: string
+  nomeFantasia: string | null
   cpfCnpj: string
   cep: string
   endereco: string
@@ -57,6 +58,7 @@ export type ClienteEditavel = {
 type Formulario = {
   id: string
   nome: string
+  nomeFantasia: string
   cpfCnpj: string
   cep: string
   endereco: string
@@ -77,6 +79,7 @@ type Formulario = {
 const VAZIO: Formulario = {
   id: "",
   nome: "",
+  nomeFantasia: "",
   cpfCnpj: "",
   cep: "",
   endereco: "",
@@ -98,6 +101,7 @@ function doCliente(c: ClienteEditavel): Formulario {
   return {
     id: c.id,
     nome: c.nome,
+    nomeFantasia: c.nomeFantasia ?? "",
     cpfCnpj: formatarCpfCnpj(c.cpfCnpj),
     cep: formatarCep(c.cep),
     endereco: c.endereco,
@@ -210,6 +214,7 @@ export function FormularioCliente({
     setForm((atual) => ({
       ...atual,
       nome: achado.nome || atual.nome,
+      nomeFantasia: achado.fantasia || atual.nomeFantasia,
       cep: achado.cep ? mascararCep(achado.cep) : atual.cep,
       endereco: achado.endereco || atual.endereco,
       numero: achado.numero || atual.numero,
@@ -284,6 +289,14 @@ export function FormularioCliente({
         valor={form.nome}
         onChange={(v) => alterar({ nome: v })}
         className="col-span-5"
+      />
+      {/* Razão social é o que vai no boleto; fantasia é como o balcão procura. */}
+      <Campo
+        rotulo="Nome fantasia"
+        valor={form.nomeFantasia}
+        onChange={(v) => alterar({ nomeFantasia: v })}
+        placeholder="Como o cliente é conhecido, se diferente da razão social"
+        className="col-span-12"
       />
 
       <div className="col-span-3">

@@ -231,6 +231,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     clientes: clientes.map((c) => ({
       id: c.id,
       nome: c.nome,
+      nomeFantasia: c.nomeFantasia,
       cpfCnpj: c.cpfCnpj,
       cidade: c.cidade,
       uf: c.uf,
@@ -282,13 +283,14 @@ export async function action({ request }: Route.ActionArgs) {
     if (!resultado.ok) {
       return data({ ok: false as const, tipo: "cliente" as const, erro: resultado.erro }, { status: 400 })
     }
-    const { id, nome, cpfCnpj, cidade, uf } = resultado.cliente
+    const { id, nome, nomeFantasia, cpfCnpj, cidade, uf } = resultado.cliente
     return {
       ok: true as const,
       tipo: "cliente" as const,
       cliente: {
         id,
         nome,
+        nomeFantasia,
         cpfCnpj,
         cidade,
         uf,

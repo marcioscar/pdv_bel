@@ -196,11 +196,13 @@ export function FinalizarDialogo({
     return clientes
       .filter(
         (c) =>
-          c.nome
-            .normalize("NFD")
-            .replace(/[\u0300-\u036f]/g, "")
-            .toLowerCase()
-            .includes(termo) ||
+          [c.nome, c.nomeFantasia ?? ""].some((nome) =>
+            nome
+              .normalize("NFD")
+              .replace(/[\u0300-\u036f]/g, "")
+              .toLowerCase()
+              .includes(termo),
+          ) ||
           (digitos.length >= 3 && c.cpfCnpj.includes(digitos)),
       )
       .slice(0, 6);

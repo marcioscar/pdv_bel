@@ -1,6 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react"
-import { data, useFetcher } from "react-router"
-import { Check, Plus, ShoppingCart, UserSearch, Users } from "lucide-react"
+import { useEffect, useRef, useState } from "react"
+import { data, useFetcher, useNavigation, useSearchParams } from "react-router"
+import {
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Plus,
+  ShoppingCart,
+  UserSearch,
+  Users,
+} from "lucide-react"
 
 import type { Route } from "./+types/admin.clientes"
 import { Badge } from "~/components/ui/badge"
@@ -20,9 +28,9 @@ import { formatarCep, formatarCpfCnpj } from "~/lib/documento"
 import {
   alternarCliente,
   atualizarCliente,
+  buscarClientes,
   criarCliente,
   lerCliente,
-  listarClientes,
 } from "~/lib/clientes.server"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { FORMAS_PAGAMENTO } from "~/lib/pdv"
@@ -38,9 +46,16 @@ export async function loader({ request }: Route.LoaderArgs) {
   // Cadastrar cliente é tarefa de operador — o boleto precisa do pagador, e quem
   // atende é quem tem os dados na mão.
   const eu = await exigirUsuario(request)
-  // Inclui inativos: é esta a tela que os reativa.
+  // Busca e página vão na URL: recarregar, voltar e mandar o link mantêm a
+  // mesma lista, e a gravação revalida exatamente a página que está na tela.
+  const url = new URL(request.url)
   return {
-    clientes: await listarClientes({ incluirInativos: true }),
+    // Inclui inativos quando pedido: é esta a tela que os reativa.
+    ...(await buscarClientes({
+      busca: url.searchParams.get("q") ?? "",
+      pagina: Number(url.searchParams.get("pagina") ?? 1),
+      incluirInativos: url.searchParams.get("inativos") === "1",
+    })),
     // A loja do turno: é ela que vai marcar o cadastro que nascer aqui.
     loja: eu.loja,
   }
@@ -78,20 +93,18 @@ export async function action({ request }: Route.ActionArgs) {
   }
 }
 
-type Cliente = Awaited<ReturnType<typeof listarClientes>>[number]
-
-function normalizar(texto: string) {
-  return texto
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase()
-}
+type Cliente = Awaited<ReturnType<typeof buscarClientes>>["clientes"][number]
 
 export default function AdminClientes({ loaderData }: Route.ComponentProps) {
-  const { clientes, loja } = loaderData
+  const { clientes, total, inativos, pagina, paginas, porPagina, loja } = loaderData
 
-  const [busca, setBusca] = useState("")
-  const [mostrarInativos, setMostrarInativos] = useState(false)
+  const [parametros, setParametros] = useSearchParams()
+  const buscaNaUrl = parametros.get("q") ?? ""
+  const mostrarInativos = parametros.get("inativos") === "1"
+  // O campo tem estado próprio para digitar sem esperar o servidor; a URL só
+  // acompanha depois de uma pausa, senão cada tecla seria uma consulta.
+  const [busca, setBusca] = useState(buscaNaUrl)
+  const carregando = useNavigation().state === "loading"
   const [aviso, setAviso] = useState<{ texto: string; tipo: "erro" | "sucesso" } | null>(null)
 
   // `editando` guarda quem está no diálogo mesmo depois de fechar, para a
@@ -103,29 +116,51 @@ export default function AdminClientes({ loaderData }: Route.ComponentProps) {
   const [chave, setChave] = useState(0)
 
   const campoBusca = useRef<HTMLInputElement>(null)
+  const rolagem = useRef<HTMLDivElement>(null)
   const ultimaResposta = useRef<unknown>(null)
 
   const fetcher = useFetcher<typeof action>()
   const gravando = fetcher.state !== "idle"
 
-  const visiveis = useMemo(
-    () => (mostrarInativos ? clientes : clientes.filter((c) => c.ativo)),
-    [clientes, mostrarInativos]
-  )
-  const inativos = clientes.length - clientes.filter((c) => c.ativo).length
-
-  const encontrados = useMemo(() => {
-    const termo = normalizar(busca)
-    const digitos = busca.replace(/\D/g, "")
-    if (!termo) return visiveis
-
-    return visiveis.filter(
-      (c) =>
-        normalizar(c.nome).includes(termo) ||
-        normalizar(c.cidade).includes(termo) ||
-        (digitos.length >= 3 && c.cpfCnpj.includes(digitos))
+  function navegar(mudar: (p: URLSearchParams) => void) {
+    setParametros(
+      (atuais) => {
+        const novos = new URLSearchParams(atuais)
+        mudar(novos)
+        return novos
+      },
+      { replace: true, preventScrollReset: true }
     )
-  }, [busca, visiveis])
+  }
+
+  useEffect(() => {
+    const termo = busca.trim()
+    if (termo === buscaNaUrl) return
+    const id = setTimeout(() => {
+      navegar((p) => {
+        if (termo) p.set("q", termo)
+        else p.delete("q")
+        // Busca nova começa do começo: a página 7 de "todos" não existe em "joão".
+        p.delete("pagina")
+      })
+    }, 300)
+    return () => clearTimeout(id)
+  }, [busca, buscaNaUrl])
+
+  // Página nova começa do topo; sem isto a 2 abriria rolada até o fim da 1.
+  useEffect(() => {
+    rolagem.current?.scrollTo({ top: 0 })
+  }, [pagina, buscaNaUrl, mostrarInativos])
+
+  function irPara(numero: number) {
+    navegar((p) => {
+      if (numero > 1) p.set("pagina", String(numero))
+      else p.delete("pagina")
+    })
+  }
+
+  const primeiro = total === 0 ? 0 : (pagina - 1) * porPagina + 1
+  const ultimo = Math.min(pagina * porPagina, total)
 
   useEffect(() => {
     if (!aberto) campoBusca.current?.focus()
@@ -164,21 +199,34 @@ export default function AdminClientes({ loaderData }: Route.ComponentProps) {
           value={busca}
           onChange={(e) => setBusca(e.target.value)}
           type="search"
-          placeholder="Buscar por nome, cidade ou CPF/CNPJ…"
+          placeholder="Buscar por nome, fantasia, cidade ou CPF/CNPJ…"
           aria-label="Buscar cliente"
           autoComplete="off"
           spellCheck={false}
           className="h-9 max-w-md rounded-lg"
         />
         <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
-          {visiveis.length} {visiveis.length === 1 ? "cadastrado" : "cadastrados"}
+          {total.toLocaleString("pt-BR")}{" "}
+          {buscaNaUrl
+            ? total === 1
+              ? "encontrado"
+              : "encontrados"
+            : total === 1
+              ? "cadastrado"
+              : "cadastrados"}
         </span>
         {inativos > 0 ? (
           <Button
             type="button"
             variant={mostrarInativos ? "secondary" : "ghost"}
             size="sm"
-            onClick={() => setMostrarInativos((v) => !v)}
+            onClick={() =>
+              navegar((p) => {
+                if (mostrarInativos) p.delete("inativos")
+                else p.set("inativos", "1")
+                p.delete("pagina")
+              })
+            }
             className="shrink-0 rounded-lg"
           >
             {mostrarInativos ? "Ocultar" : "Mostrar"} {inativos}{" "}
@@ -212,7 +260,13 @@ export default function AdminClientes({ loaderData }: Route.ComponentProps) {
         />
       </Dialog>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div
+        ref={rolagem}
+        className={cn(
+          "min-h-0 flex-1 overflow-y-auto transition-opacity",
+          carregando && "opacity-60"
+        )}
+      >
         <table className="w-full text-sm">
           <thead className="sticky top-0 z-10 bg-card">
             <tr className="border-b border-border text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -231,7 +285,7 @@ export default function AdminClientes({ loaderData }: Route.ComponentProps) {
             </tr>
           </thead>
           <tbody>
-            {encontrados.length === 0 ? (
+            {clientes.length === 0 ? (
               <tr>
                 <td colSpan={6} className="px-5 py-16 text-center">
                   <UserSearch
@@ -239,14 +293,14 @@ export default function AdminClientes({ loaderData }: Route.ComponentProps) {
                     aria-hidden
                   />
                   <p className="mt-3 text-sm text-muted-foreground">
-                    {busca
-                      ? `Nada encontrado para “${busca}”`
+                    {buscaNaUrl
+                      ? `Nada encontrado para “${buscaNaUrl}”`
                       : "Nenhum cliente cadastrado. A venda a prazo precisa de um."}
                   </p>
                 </td>
               </tr>
             ) : (
-              encontrados.map((cliente) => (
+              clientes.map((cliente) => (
                 <tr
                   key={cliente.id}
                   className={cn(
@@ -264,6 +318,11 @@ export default function AdminClientes({ loaderData }: Route.ComponentProps) {
                       <Badge variant="destructive" className="ml-1.5 text-[9px]">
                         inativo
                       </Badge>
+                    ) : null}
+                    {cliente.nomeFantasia ? (
+                      <span className="block text-xs font-normal text-muted-foreground">
+                        {cliente.nomeFantasia}
+                      </span>
                     ) : null}
                   </td>
                   <td className="px-2 py-2 font-mono text-xs text-muted-foreground tabular-nums">
@@ -337,10 +396,35 @@ export default function AdminClientes({ loaderData }: Route.ComponentProps) {
       </div>
 
       <div className="flex items-center justify-between border-t border-border px-5 py-2.5 text-xs">
-        <span className="text-muted-foreground">
-          O endereço aqui é o que vai no boleto — endereço incompleto faz o Inter
-          recusar a cobrança · cliente não é apagado, é desativado
-        </span>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-xs"
+            aria-label="Página anterior"
+            disabled={pagina <= 1 || carregando}
+            onClick={() => irPara(pagina - 1)}
+          >
+            <ChevronLeft className="size-3.5" />
+          </Button>
+          <span className="font-mono tabular-nums text-muted-foreground">
+            {primeiro.toLocaleString("pt-BR")}–{ultimo.toLocaleString("pt-BR")} de{" "}
+            {total.toLocaleString("pt-BR")} · página {pagina}/{paginas}
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-xs"
+            aria-label="Próxima página"
+            disabled={pagina >= paginas || carregando}
+            onClick={() => irPara(pagina + 1)}
+          >
+            <ChevronRight className="size-3.5" />
+          </Button>
+          <span className="ml-3 hidden text-muted-foreground xl:inline">
+            O endereço aqui é o que vai no boleto · cliente não é apagado, é desativado
+          </span>
+        </div>
         {aviso ? (
           <span
             className={cn(
