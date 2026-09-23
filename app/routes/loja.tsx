@@ -89,22 +89,23 @@ export async function action({ request }: Route.ActionArgs) {
   }
 
   /**
-   * Gravar o padrão da máquina é do GERENTE, e nunca automático.
+   * A primeira escolha num computador sem loja o fixa, seja de quem for.
    *
-   * Antes, a primeira escolha de qualquer um virava o padrão do terminal: o
-   * primeiro operador que entrasse decidia onde aquele caixa gravaria venda pelos
-   * turnos seguintes. Configuração de terminal é decisão de quem responde pela
-   * loja, não efeito colateral de um login.
+   * Sem isto a trava do turno tinha uma porta dos fundos: sair e entrar de novo
+   * devolvia a escolha ao operador. Fixado, o computador entra sempre na mesma
+   * loja — a sessão nova já nasce com ela (`lojaParaEntrar`) e esta tela, com
+   * loja na sessão, é só do gerente. A loja é do lugar, não da pessoa: os
+   * vendedores revezam, e o caixa da QNE continua na QNE.
    *
-   * E continua opcional mesmo para o gerente, porque ele cobre turno em outra
-   * loja: quem visita a QNE e troca de loja no terminal da QI não pode deixar
-   * aquele caixa apontando para a QNE — o vendedor de segunda venderia na loja
-   * errada sem tocar em nada.
+   * Já fixado, mudar é do gerente e continua opcional para ele, que cobre turno
+   * em outra loja: quem visita a QNE e troca de loja no terminal da QI não pode
+   * deixar aquele caixa apontando para a QNE.
    */
-  const cookies: string[] = []
-  if (String(form.get("padraoDaMaquina")) === "on" && ehGerente(usuario.papel)) {
-    cookies.push(await cookieDaLojaDaMaquina(escolhida))
-  }
+  const daMaquina = await lojaDaMaquina(request)
+  const fixar =
+    !daMaquina ||
+    (String(form.get("padraoDaMaquina")) === "on" && ehGerente(usuario.papel))
+  const cookies = fixar ? [await cookieDaLojaDaMaquina(escolhida)] : []
 
   return definirLojaDaSessao(request, escolhida, destino, cookies)
 }
@@ -146,10 +147,8 @@ export default function EscolherLoja({ loaderData, actionData }: Route.Component
               <Form method="post" key={loja.codigo}>
                 <input type="hidden" name="destino" value={destino} />
                 <input type="hidden" name="loja" value={loja.codigo} />
-                {/* Sem padrão nenhum ainda, a primeira escolha vira o padrão do
-                    terminal — é o caso da instalação. Havendo padrão, só muda se
-                    a pessoa marcar a caixa abaixo. */}
-                {/* Fixar é sempre uma escolha explícita do gerente. */}
+                {/* Sem padrão ainda, o action fixa de qualquer jeito. Havendo,
+                    só muda se o gerente marcar a caixa abaixo. */}
                 <input
                   type="hidden"
                   name="padraoDaMaquina"
@@ -180,7 +179,14 @@ export default function EscolherLoja({ loaderData, actionData }: Route.Component
           </div>
         )}
 
-        {podeFixar ? (
+        {!daMaquina ? (
+          <p className="mt-4 text-[11px] leading-relaxed text-muted-foreground">
+            <b className="font-semibold text-foreground">
+              A loja escolhida fica fixa neste computador.
+            </b>{" "}
+            Quem entrar aqui depois cai direto nela, e só um gerente troca.
+          </p>
+        ) : podeFixar ? (
           <label className="mt-4 flex cursor-pointer items-start gap-2 text-[11px] leading-relaxed text-muted-foreground">
             <input
               type="checkbox"
@@ -189,32 +195,17 @@ export default function EscolherLoja({ loaderData, actionData }: Route.Component
               className="mt-0.5"
             />
             <span>
-              {daMaquina ? (
-                <>
-                  Este computador é o caixa da{" "}
-                  <b className="font-semibold text-foreground">{daMaquina}</b>. Marque
-                  para trocar o padrão do terminal — se você só está cobrindo um turno
-                  em outra loja, deixe desmarcado.
-                </>
-              ) : (
-                <>
-                  <b className="font-semibold text-foreground">Fixar neste computador.</b>{" "}
-                  Quem entrar aqui nos próximos turnos cai direto na loja escolhida, sem
-                  poder trocar. É a configuração do terminal.
-                </>
-              )}
+              Este computador é o caixa da{" "}
+              <b className="font-semibold text-foreground">{daMaquina}</b>. Marque para
+              trocar o padrão do terminal — se você só está cobrindo um turno em outra
+              loja, deixe desmarcado.
             </span>
           </label>
-        ) : daMaquina ? (
+        ) : (
           <p className="mt-4 text-[11px] leading-relaxed text-muted-foreground">
             Este computador é o caixa da{" "}
             <b className="font-semibold text-foreground">{daMaquina}</b>. Só um gerente
             muda isso.
-          </p>
-        ) : (
-          <p className="mt-4 text-[11px] leading-relaxed text-muted-foreground">
-            Escolha vale para este turno. Para o computador entrar sempre na mesma loja,
-            um gerente precisa fixar.
           </p>
         )}
 
