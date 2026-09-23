@@ -3,7 +3,7 @@ import type { Prisma } from "@prisma/client"
 import { AFS_POR_PAGINA, type FiltroAfs } from "~/lib/afs"
 import { db } from "~/lib/db.server"
 import { PRIMEIRO_DIA, ULTIMO_DIA, depoisDoDia, inicioDoDia, meioDiaDe } from "~/lib/dia"
-import { arredondar } from "~/lib/moeda"
+import { arredondar, QUANTIDADE_INTEIRA } from "~/lib/moeda"
 import { pedidoFechaCom } from "~/lib/pedidos-compra.server"
 
 /**
@@ -181,6 +181,9 @@ export async function lancarAf(
 
   const itens = entrada.itens.filter((item) => item.quantidade > 0)
   if (itens.length === 0) return { ok: false, erro: "Nenhum item com quantidade para lançar" }
+  if (itens.some((item) => !Number.isInteger(item.quantidade))) {
+    return { ok: false, erro: QUANTIDADE_INTEIRA }
+  }
   if (itens.some((item) => !(item.custoUnitario > 0))) {
     return { ok: false, erro: "Todo item precisa do custo unitário que a AF cobrou" }
   }

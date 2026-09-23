@@ -1,5 +1,5 @@
 import { db } from "~/lib/db.server"
-import { arredondar } from "~/lib/moeda"
+import { arredondar, QUANTIDADE_INTEIRA } from "~/lib/moeda"
 import type { TipoMovimento } from "~/lib/estoque.server"
 
 const OBJECT_ID = /^[0-9a-fA-F]{24}$/
@@ -155,6 +155,7 @@ export async function registrarDevolucao(entrada: {
   const itens: ItemGravado[] = []
   for (const pedido of entrada.itens) {
     if (!(pedido.quantidade > 0)) continue
+    if (!Number.isInteger(pedido.quantidade)) return { ok: false, erro: QUANTIDADE_INTEIRA }
 
     const daVenda = porProduto.get(pedido.produtoId)
     if (!daVenda) {

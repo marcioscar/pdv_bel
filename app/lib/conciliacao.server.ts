@@ -1,4 +1,5 @@
 import { db } from "~/lib/db.server"
+import { QUANTIDADE_INTEIRA } from "~/lib/moeda"
 import { calcularCustoReal, type ItemComCustoReal } from "~/lib/custo-nfe"
 import { pedidoFechaCom } from "~/lib/pedidos-compra.server"
 import { resumoDoProcNFe } from "~/lib/sefaz.server"
@@ -168,6 +169,11 @@ export async function receberComNota(
   const idsValidos = new Set(produtosValidos.map((p) => p.id))
   const invalido = itens.find((i) => i.quantidade > 0 && !idsValidos.has(i.produtoId))
   if (invalido) return { ok: false, erro: "Produto não encontrado no catálogo" }
+  // A nota pode vir em fração (a unidade do fornecedor não é a nossa); o que
+  // entra no estoque é peça contada, e quem converte decide o inteiro.
+  if (itens.some((i) => i.quantidade > 0 && !Number.isInteger(i.quantidade))) {
+    return { ok: false, erro: `${QUANTIDADE_INTEIRA} — confira a conversão da unidade da nota` }
+  }
 
   const lancadosPorEstaNota = await db.movimentoEstoque.findMany({
     where: { notaFiscalRecebidaId: notaId, ...(pedidoId ? { pedidoDeCompraId: pedidoId } : {}) },

@@ -514,7 +514,7 @@ function Tabela({
                       min={0}
                       step={1}
                       value={qtd}
-                      onChange={(e) => onQuantidade(item.produtoId, Number(e.target.value) || 0)}
+                      onChange={(e) => onQuantidade(item.produtoId, Math.trunc(Number(e.target.value)) || 0)}
                       className="h-7 w-20 rounded border border-border bg-background px-1.5 text-right text-sm tabular-nums"
                     />
                   </td>
@@ -604,7 +604,7 @@ function ItemCartao({
               min={0}
               step={1}
               value={quantidade}
-              onChange={(e) => onQuantidade(Number(e.target.value) || 0)}
+              onChange={(e) => onQuantidade(Math.trunc(Number(e.target.value)) || 0)}
               className="h-9 w-20 rounded border border-border bg-background px-2 text-sm tabular-nums"
             />
             <span className="text-xs text-muted-foreground">{item.unidade}</span>

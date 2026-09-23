@@ -1,7 +1,7 @@
 import type { Prisma } from "@prisma/client"
 
 import { db } from "~/lib/db.server"
-import { arredondar } from "~/lib/moeda"
+import { arredondar, QUANTIDADE_INTEIRA, quantidadeInteira } from "~/lib/moeda"
 import { saldosPorProdutoELoja } from "~/lib/estoque.server"
 import { saldosEmTransito } from "~/lib/transferencias.server"
 import { diasDeCobertura, quantoComprar, urgencia, type Urgencia } from "~/lib/compras"
@@ -70,8 +70,11 @@ export async function criarPedido(entrada: {
   for (const pedido of entrada.itens) {
     const produto = porId.get(pedido.produtoId)
     if (!produto) return { ok: false, erro: "Produto não encontrado no catálogo" }
-    if (!(pedido.quantidade > 0)) {
-      return { ok: false, erro: `Quantidade inválida em ${produto.descricao}` }
+    if (!quantidadeInteira(pedido.quantidade)) {
+      return {
+        ok: false,
+        erro: `${produto.descricao}: ${QUANTIDADE_INTEIRA.toLowerCase()}`,
+      }
     }
 
     // Sem fornecimento registrado deste fornecedor para este produto, o preço de

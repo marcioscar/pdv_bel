@@ -18,6 +18,7 @@ import {
   interpretarValor,
   moeda,
   quantidade as formatarQuantidade,
+  quantidadeInteira,
 } from "~/lib/moeda"
 import { vendedorPorCodigo, type VendedorDoBalcao } from "~/lib/vendedores.server"
 import {
@@ -130,7 +131,8 @@ export function lerPedido(bruto: unknown): PedidoRecebido | null {
     if (typeof item !== "object" || item === null) return null
     const { produtoId, quantidade } = item as Record<string, unknown>
     if (typeof produtoId !== "string" || !OBJECT_ID.test(produtoId)) return null
-    if (typeof quantidade !== "number" || !Number.isFinite(quantidade) || quantidade <= 0) {
+    // Peça inteira: fração é recusada aqui, e não arredondada em silêncio.
+    if (typeof quantidade !== "number" || !quantidadeInteira(quantidade)) {
       return null
     }
     itens.push({ produtoId, quantidade })

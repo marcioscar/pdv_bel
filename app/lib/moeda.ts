@@ -21,6 +21,20 @@ export function quantidade(valor: number) {
   return Number.isInteger(valor) ? String(valor) : formatadorNumero.format(valor)
 }
 
+/**
+ * Quantidade de mercadoria é sempre peça inteira: nenhum produto da rede se
+ * vende, compra ou conta fracionado. "2,4 pacotes" não descreve prateleira
+ * nenhuma — e cada fração que entra no livro vira um saldo que ninguém consegue
+ * contar no inventário.
+ *
+ * Uma regra só, usada pela tela para avisar e pelo servidor para recusar.
+ */
+export const QUANTIDADE_INTEIRA = "Quantidade é em peças inteiras — sem casa decimal"
+
+export function quantidadeInteira(valor: number) {
+  return Number.isInteger(valor) && valor > 0
+}
+
 export function arredondar(valor: number) {
   return Math.round(valor * 100) / 100
 }

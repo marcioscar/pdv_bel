@@ -330,7 +330,7 @@ export function EntradaDeNota({
                   setPareamento((atual) => ({ ...atual, [i]: produtoId }))
                 }
                 onMudarQuantidade={(texto) =>
-                  setQuantidades((atual) => ({ ...atual, [i]: texto }))
+                  setQuantidades((atual) => ({ ...atual, [i]: texto.replace(/\D/g, "") }))
                 }
                 onAbrirCadastro={() => setCadastrando(cadastrando === i ? null : i)}
                 onCadastrar={(dados) =>

@@ -251,10 +251,13 @@ export default function Devolucao({ loaderData }: Route.ComponentProps) {
                     <Input
                       value={quantidades[linha.produtoId] ?? ""}
                       onChange={(e) =>
-                        setQuantidades((q) => ({ ...q, [linha.produtoId]: e.target.value }))
+                        setQuantidades((q) => ({
+                          ...q,
+                          [linha.produtoId]: e.target.value.replace(/\D/g, ""),
+                        }))
                       }
                       disabled={linha.devolvivel <= 0 || venda.cancelada}
-                      inputMode="decimal"
+                      inputMode="numeric"
                       placeholder="0"
                       autoComplete="off"
                       className={cn(

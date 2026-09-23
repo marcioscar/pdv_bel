@@ -374,7 +374,7 @@ export default function NovaAf({ loaderData }: Route.ComponentProps) {
                       <td className="px-2 py-1.5">
                         <Input
                           value={linha.quantidadeTexto}
-                          onChange={(e) => atualizar(i, "quantidadeTexto", e.target.value)}
+                          onChange={(e) => atualizar(i, "quantidadeTexto", e.target.value.replace(/\D/g, ""))}
                           className="h-7 w-full text-right font-mono text-xs"
                         />
                       </td>

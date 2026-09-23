@@ -516,7 +516,7 @@ function Tabela({
                         min={0}
                         step={1}
                         value={qtd}
-                        onChange={(e) => onQuantidade(l.produtoId, Number(e.target.value) || 0)}
+                        onChange={(e) => onQuantidade(l.produtoId, Math.trunc(Number(e.target.value)) || 0)}
                         className="h-7 w-20 rounded border border-border bg-background px-1.5 text-right text-sm tabular-nums"
                       />
                     ) : (
@@ -669,7 +669,7 @@ function Cartaozinho({
                 min={0}
                 step={1}
                 value={quantidade}
-                onChange={(e) => onQuantidade(Number(e.target.value) || 0)}
+                onChange={(e) => onQuantidade(Math.trunc(Number(e.target.value)) || 0)}
                 className="h-9 w-20 rounded border border-border bg-background px-2 text-sm tabular-nums"
               />
               <span className="text-xs text-muted-foreground">{l.unidade}</span>

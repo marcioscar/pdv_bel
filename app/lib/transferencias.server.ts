@@ -1,7 +1,7 @@
 import type { Prisma } from "@prisma/client"
 
 import { db } from "~/lib/db.server"
-import { arredondar } from "~/lib/moeda"
+import { arredondar, QUANTIDADE_INTEIRA, quantidadeInteira } from "~/lib/moeda"
 import type { TipoMovimento } from "~/lib/estoque.server"
 import { faltaDoItem, type ItemConferido } from "~/lib/transferencias"
 
@@ -69,8 +69,11 @@ export async function enviarTransferencia(entrada: {
   for (const pedido of entrada.itens) {
     const produto = porId.get(pedido.produtoId)
     if (!produto) return { ok: false, erro: "Produto não encontrado no catálogo" }
-    if (!(pedido.quantidade > 0)) {
-      return { ok: false, erro: `Quantidade inválida em ${produto.descricao}` }
+    if (!quantidadeInteira(pedido.quantidade)) {
+      return {
+        ok: false,
+        erro: `${produto.descricao}: ${QUANTIDADE_INTEIRA.toLowerCase()}`,
+      }
     }
 
     itens.push({
@@ -175,6 +178,18 @@ export async function conferirTransferencia(entrada: {
   }
 
   const contado = new Map(entrada.conferidos.map((i) => [i.produtoId, i.recebida]))
+
+  // Zero é contagem válida (nada chegou); fração não é contagem de nada.
+  const fracionado = doc.itens.find((item) => {
+    const recebida = contado.get(item.produtoId)
+    return recebida !== undefined && Number.isFinite(recebida) && !Number.isInteger(recebida)
+  })
+  if (fracionado) {
+    return {
+      ok: false,
+      erro: `${fracionado.descricao}: ${QUANTIDADE_INTEIRA.toLowerCase()}`,
+    }
+  }
 
   const itens = doc.itens.map((item) => {
     const recebida = contado.get(item.produtoId)

@@ -520,9 +520,10 @@ function NovaRemessa({
               </span>
               <Input
                 value={String(quantidade)}
-                inputMode="decimal"
+                inputMode="numeric"
                 onChange={(e) => {
-                  const valor = Number(e.target.value.replace(",", "."))
+                  // Só dígitos: peça inteira, sem vírgula para virar 2,4 pacotes.
+                  const valor = Number(e.target.value.replace(/\D/g, ""))
                   setItens((atuais) =>
                     atuais.map((i) =>
                       i.produto.id === produto.id
@@ -676,9 +677,12 @@ function Conferencia({
                   </span>
                   <Input
                     value={contagem[item.produtoId] ?? ""}
-                    inputMode="decimal"
+                    inputMode="numeric"
                     onChange={(e) =>
-                      setContagem((c) => ({ ...c, [item.produtoId]: e.target.value }))
+                      setContagem((c) => ({
+                        ...c,
+                        [item.produtoId]: e.target.value.replace(/\D/g, ""),
+                      }))
                     }
                     aria-label={`Contado de ${item.descricao}`}
                     className={cn(

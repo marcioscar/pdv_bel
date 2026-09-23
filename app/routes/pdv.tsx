@@ -57,6 +57,8 @@ import {
   interpretarValor,
   moeda,
   quantidade as formatarQuantidade,
+  quantidadeInteira,
+  QUANTIDADE_INTEIRA,
 } from "~/lib/moeda"
 import {
   aprovacaoValida,
@@ -1727,6 +1729,11 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   const confirmar = useCallback(() => {
     if (modo === "busca") {
       if (comando.tipo === "vazio") return
+      // "2,4*141" casa com o multiplicador, mas não é quantidade que exista.
+      if (!quantidadeInteira(comando.quantidade)) {
+        avisar(QUANTIDADE_INTEIRA, "erro")
+        return
+      }
 
       if (comando.tipo === "codigo") {
         const achados = produtosPorCodigo(produtos, comando.codigo)
@@ -1760,6 +1767,10 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     const valor = valorTeste
 
     if (modo === "quantidade") {
+      if (!quantidadeInteira(valor)) {
+        avisar(QUANTIDADE_INTEIRA, "erro")
+        return
+      }
       const alvo: ItemVenda | undefined = venda.itens[venda.indiceAtivo]
       if (alvo && valor > alvo.estoque) {
         avisarSemEstoque(alvo)

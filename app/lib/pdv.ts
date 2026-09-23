@@ -126,6 +126,7 @@ export function reduzirVenda(estado: EstadoVenda, acao: AcaoVenda): EstadoVenda 
   switch (acao.tipo) {
     case "adicionar": {
       const { produto, quantidade } = acao
+      if (!Number.isInteger(quantidade)) return estado
       const existente = estado.itens.findIndex((item) => item.produtoId === produto.id)
       const jaNoCarrinho = existente >= 0 ? estado.itens[existente].quantidade : 0
 
@@ -174,8 +175,11 @@ export function reduzirVenda(estado: EstadoVenda, acao: AcaoVenda): EstadoVenda 
 
       // Mesmo teto de "adicionar", agora para quem digitou a quantidade ou
       // apertou `+`: a linha para no estoque da loja.
+      // Fração não entra no carrinho: a tela avisa antes, e aqui é a garantia.
+      if (!Number.isInteger(quantidade)) return estado
+
       const alvo = estado.itens[indice]
-      const nova = Math.min(arredondar(quantidade), quantidadeQueCabe(alvo.estoque, 0))
+      const nova = Math.min(quantidade, quantidadeQueCabe(alvo.estoque, 0))
       if (nova <= 0) return reduzirVenda(estado, { tipo: "remover", indice })
       if (nova === alvo.quantidade) return estado
 

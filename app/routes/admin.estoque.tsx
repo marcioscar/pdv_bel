@@ -17,7 +17,11 @@ import {
 } from "~/lib/estoque.server"
 import { SOMENTE_ATIVOS } from "~/lib/produtos.server"
 import { exigirGerente, exigirUsuario } from "~/lib/sessao.server"
-import { interpretarValor, quantidade as formatarQuantidade } from "~/lib/moeda"
+import {
+  interpretarValor,
+  QUANTIDADE_INTEIRA,
+  quantidade as formatarQuantidade,
+} from "~/lib/moeda"
 import { ACOES_DE_GERENTE, ehGerente } from "~/lib/permissoes"
 import {
   buscarProdutos,
@@ -75,6 +79,10 @@ export async function action({ request }: Route.ActionArgs) {
   }
   if (!Number.isFinite(valor)) {
     return data({ ok: false as const, erro: "Quantidade inválida" }, { status: 400 })
+  }
+  // Vale para os três modos: entrada, uso e o saldo contado no inventário.
+  if (!Number.isInteger(valor)) {
+    return data({ ok: false as const, erro: QUANTIDADE_INTEIRA }, { status: 400 })
   }
   if (modo !== "entrada" && modo !== "ajuste" && modo !== "uso") {
     return data({ ok: false as const, erro: "Operação inválida" }, { status: 400 })
@@ -254,6 +262,10 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
     const valor = interpretarValor(entrada)
     if (valor === null) {
       avisar("Quantidade inválida", "erro")
+      return
+    }
+    if (!Number.isInteger(valor)) {
+      avisar(QUANTIDADE_INTEIRA, "erro")
       return
     }
 
