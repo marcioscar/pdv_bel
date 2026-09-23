@@ -1,8 +1,9 @@
 import { useState } from "react"
-import { data, Form, useFetcher, useNavigation } from "react-router"
+import { data, Form, useNavigation } from "react-router"
 import { ChevronDown, ChevronRight, Loader2, Printer, RefreshCw, UserX } from "lucide-react"
 
 import type { Route } from "./+types/admin.inadimplentes"
+import { BaixaNaLoja } from "~/components/pdv/baixa-na-loja"
 import { Numero } from "~/components/pdv/numero"
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
@@ -16,7 +17,7 @@ import {
 import { formatarCpfCnpj } from "~/lib/documento"
 import { imprimirDocumento } from "~/lib/impressao"
 import { interpretarValor, moeda } from "~/lib/moeda"
-import { FORMAS_DA_BAIXA, rotuloDaSituacao } from "~/lib/recebiveis"
+import { rotuloDaSituacao } from "~/lib/recebiveis"
 import { exigirGerente } from "~/lib/sessao.server"
 import { cn } from "~/lib/utils"
 
@@ -84,8 +85,7 @@ export default function Inadimplentes({ loaderData, actionData }: Route.Componen
   const [erroDaFolha, setErroDaFolha] = useState<string | null>(null)
   // O boleto com o formulário de baixa aberto — um de cada vez.
   const [baixando, setBaixando] = useState<string | null>(null)
-  const baixa = useFetcher<typeof action>()
-  const baixandoAgora = baixa.state !== "idle"
+  const [baixado, setBaixado] = useState<string | null>(null)
 
   // Abre a caixa de impressão do navegador — ali se escolhe a impressora ou
   // "Salvar como PDF".
@@ -138,19 +138,9 @@ export default function Inadimplentes({ loaderData, actionData }: Route.Componen
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {baixa.data && baixa.state === "idle" ? (
-          <div
-            className={cn(
-              "border-b border-border px-4 py-2.5 text-xs sm:px-5",
-              baixa.data.ok ? "bg-muted/40" : "bg-destructive/10 text-destructive"
-            )}
-            role="status"
-          >
-            {baixa.data.ok && "baixa" in baixa.data
-              ? baixa.data.baixa
-              : "erro" in baixa.data
-                ? baixa.data.erro
-                : null}
+        {baixado ? (
+          <div className="border-b border-border bg-muted/40 px-4 py-2.5 text-xs font-medium sm:px-5" role="status">
+            {baixado}
           </div>
         ) : null}
         {erroDaFolha ? (
@@ -221,6 +211,7 @@ export default function Inadimplentes({ loaderData, actionData }: Route.Componen
                     <th className="w-8 px-2 py-2" />
                     <th className="px-2 py-2 font-semibold">Cliente</th>
                     <th className="px-2 py-2 font-semibold">Contato</th>
+                    <th className="w-36 px-2 py-2 font-semibold">Situação</th>
                     <th className="w-20 px-2 py-2 text-right font-semibold">Boletos</th>
                     <th className="w-24 px-2 py-2 text-right font-semibold">Atraso</th>
                     <th className="w-32 px-4 py-2 text-right font-semibold sm:px-5">Devendo</th>
@@ -258,6 +249,20 @@ export default function Inadimplentes({ loaderData, actionData }: Route.Componen
                           {d.telefone ?? "—"}
                           {d.contato ? <span className="block">{d.contato}</span> : null}
                         </td>
+                        <td className="px-2 py-2">
+                          <div className="flex flex-wrap gap-1">
+                            {[...new Set(d.boletos.map((b) => b.situacao))].map((situacao) => (
+                              <Badge
+                                key={situacao}
+                                variant="destructive"
+                                className="font-mono text-[10px]"
+                                title={rotuloDaSituacao(situacao)}
+                              >
+                                {situacao}
+                              </Badge>
+                            ))}
+                          </div>
+                        </td>
                         <td className="px-2 py-2 text-right text-muted-foreground">{d.boletos.length}</td>
                         <td
                           className={cn(
@@ -272,7 +277,7 @@ export default function Inadimplentes({ loaderData, actionData }: Route.Componen
                       expandido ? (
                         <tr key={`${chave}-boletos`} className="bg-muted/30">
                           <td />
-                          <td colSpan={5} className="px-2 py-2 pr-4 sm:pr-5">
+                          <td colSpan={6} className="px-2 py-2 pr-4 sm:pr-5">
                             <table className="w-full text-xs">
                               <tbody>
                                 {d.boletos.map((b) => [
@@ -295,8 +300,16 @@ export default function Inadimplentes({ loaderData, actionData }: Route.Componen
                                     </td>
                                     <td className="py-1 pr-2 font-mono text-muted-foreground">{b.conta}</td>
                                     <td className="py-1 pr-2">venceu {dataCurta(b.vencimento)}</td>
-                                    <td className="py-1 pr-2 text-muted-foreground">
-                                      {rotuloDaSituacao(b.situacao)}
+                                    <td className="py-1 pr-2">
+                                      {/* Como em Contas a receber: o código do Inter, que é o
+                                          que se procura no extrato, com o rótulo no título. */}
+                                      <Badge
+                                        variant="destructive"
+                                        className="font-mono text-[10px]"
+                                        title={rotuloDaSituacao(b.situacao)}
+                                      >
+                                        {b.situacao}
+                                      </Badge>
                                     </td>
                                     <td className="max-w-56 truncate py-1 pr-2 font-mono text-[10px] text-muted-foreground">
                                       {b.linhaDigitavel ?? ""}
@@ -320,48 +333,14 @@ export default function Inadimplentes({ loaderData, actionData }: Route.Componen
                                   baixando === b.id ? (
                                     <tr key={`${b.id}-baixa`}>
                                       <td colSpan={8} className="pb-2">
-                                        <baixa.Form
-                                          method="post"
-                                          onSubmit={() => setBaixando(null)}
-                                          className="flex flex-wrap items-center gap-2 rounded-lg border-2 border-primary/40 bg-background p-2"
-                                        >
-                                          <input type="hidden" name="intencao" value="baixar" />
-                                          <input type="hidden" name="origem" value={b.origem} />
-                                          <input type="hidden" name="id" value={b.id} />
-                                          <span className="text-xs">
-                                            O cliente pagou na loja — o boleto é cancelado no Inter
-                                            para não ser pago de novo.
-                                          </span>
-                                          <select
-                                            name="forma"
-                                            defaultValue="dinheiro"
-                                            className="h-8 rounded-lg border border-border bg-background px-2 text-xs"
-                                          >
-                                            {FORMAS_DA_BAIXA.map((f) => (
-                                              <option key={f.id} value={f.id}>
-                                                {f.rotulo}
-                                              </option>
-                                            ))}
-                                          </select>
-                                          <input
-                                            name="valor"
-                                            defaultValue={b.valor.toFixed(2).replace(".", ",")}
-                                            inputMode="decimal"
-                                            aria-label="Valor recebido"
-                                            className="h-8 w-24 rounded-lg border border-border bg-background px-2 text-right font-mono text-xs"
-                                          />
-                                          <Button type="submit" size="xs" disabled={baixandoAgora}>
-                                            {baixandoAgora ? "Baixando…" : "Confirmar baixa"}
-                                          </Button>
-                                          <Button
-                                            type="button"
-                                            size="xs"
-                                            variant="ghost"
-                                            onClick={() => setBaixando(null)}
-                                          >
-                                            Voltar
-                                          </Button>
-                                        </baixa.Form>
+                                        <BaixaNaLoja
+                                          boleto={b}
+                                          onFechar={() => setBaixando(null)}
+                                          onBaixado={(mensagem) => {
+                                            setBaixando(null)
+                                            setBaixado(`${d.nome}: ${mensagem}`)
+                                          }}
+                                        />
                                       </td>
                                     </tr>
                                   ) : null,

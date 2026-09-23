@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react"
-import { Link, useNavigation, useSearchParams } from "react-router"
+import { data, Link, useNavigation, useSearchParams } from "react-router"
 import { FileText, Loader2, Printer, Search, Wallet } from "lucide-react"
 
 import type { Route } from "./+types/admin.contas-a-receber"
+import { BaixaNaLoja } from "~/components/pdv/baixa-na-loja"
 import { Atalho, Campo, ESTILO_CAMPO, Pagina } from "~/components/pdv/filtros"
 import { Numero } from "~/components/pdv/numero"
 import { Badge } from "~/components/ui/badge"
@@ -18,7 +19,8 @@ import {
 } from "~/lib/dia"
 import { imprimirDocumento } from "~/lib/impressao"
 import { listarLojas } from "~/lib/lojas.server"
-import { moeda } from "~/lib/moeda"
+import { baixarNaLoja } from "~/lib/boletos-externos.server"
+import { interpretarValor, moeda } from "~/lib/moeda"
 import {
   PERIODO_TODO,
   SITUACOES_EM_ABERTO,
@@ -61,6 +63,29 @@ export async function loader({ request }: Route.LoaderArgs) {
     hoje: diaDeHoje(),
     ...consulta,
   }
+}
+
+/**
+ * A baixa de quem pagou o boleto na loja — a mesma de Inadimplentes, aqui para
+ * o boleto que ainda não venceu, que lá não aparece.
+ */
+export async function action({ request }: Route.ActionArgs) {
+  const eu = await exigirGerente(request, "verContasAReceber")
+  const form = await request.formData()
+  if (form.get("intencao") !== "baixar") {
+    return data({ ok: false as const, erro: "Ação desconhecida" }, { status: 400 })
+  }
+
+  const r = await baixarNaLoja({
+    origem: String(form.get("origem") ?? ""),
+    id: String(form.get("id") ?? ""),
+    forma: String(form.get("forma") ?? ""),
+    valor: interpretarValor(String(form.get("valor") ?? "")) ?? 0,
+    gerente: eu.nome,
+  })
+  return r.ok
+    ? { ok: true as const, baixa: r.mensagem }
+    : data({ ok: false as const, erro: r.erro }, { status: 400 })
 }
 
 export default function AdminContasAReceber({ loaderData }: Route.ComponentProps) {
@@ -306,12 +331,13 @@ export default function AdminContasAReceber({ loaderData }: Route.ComponentProps
               <th scope="col" className="w-28 px-2 py-2.5 text-right font-semibold">Valor</th>
               <th scope="col" className="w-36 px-2 py-2.5 text-left font-semibold">Situação</th>
               <th scope="col" className="w-20 px-2 py-2.5 text-left font-semibold">Boleto</th>
+              <th scope="col" className="w-32 px-2 py-2.5 text-left font-semibold">Baixa</th>
             </tr>
           </thead>
           <tbody className={cn(consultando && "opacity-50")}>
             {recebiveis.length === 0 ? (
               <tr>
-                <td colSpan={8} className="py-16 text-center">
+                <td colSpan={9} className="py-16 text-center">
                   <Wallet className="mx-auto size-10 text-muted-foreground/40" aria-hidden />
                   <p className="mt-3 text-sm text-muted-foreground">
                     Nenhuma conta vencendo em {periodo}
@@ -382,6 +408,7 @@ function diasEntre(de: string, ate: string) {
 }
 
 function Linha({ conta, hoje }: { conta: RecebivelConsultado; hoje: string }) {
+  const [baixando, setBaixando] = useState(false)
   const vencimento = new Date(conta.vencimento)
   const dia = `${vencimento.getFullYear()}-${String(vencimento.getMonth() + 1).padStart(2, "0")}-${String(vencimento.getDate()).padStart(2, "0")}`
 
@@ -390,6 +417,7 @@ function Linha({ conta, hoje }: { conta: RecebivelConsultado; hoje: string }) {
   const atraso = emAberto ? diasEntre(dia, hoje) : 0
 
   return (
+    <>
     <tr
       className={cn(
         "border-b border-border",
@@ -501,6 +529,30 @@ function Linha({ conta, hoje }: { conta: RecebivelConsultado; hoje: string }) {
           <span className="text-xs text-muted-foreground">—</span>
         )}
       </td>
+      <td className="px-2 py-2.5">
+        {emAberto ? (
+          <Button
+            type="button"
+            size="xs"
+            variant={baixando ? "secondary" : "outline"}
+            onClick={() => setBaixando((v) => !v)}
+            className="rounded-lg whitespace-nowrap"
+          >
+            Recebido na loja
+          </Button>
+        ) : null}
+      </td>
     </tr>
+    {baixando ? (
+      <tr className="border-b border-border bg-muted/30">
+        <td colSpan={9} className="px-3 py-2">
+          <BaixaNaLoja
+            boleto={{ origem: conta.origem, id: conta.id, valor: conta.valor }}
+            onFechar={() => setBaixando(false)}
+          />
+        </td>
+      </tr>
+    ) : null}
+    </>
   )
 }
