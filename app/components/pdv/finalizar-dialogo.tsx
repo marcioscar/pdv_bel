@@ -238,6 +238,22 @@ export function FinalizarDialogo({
       campoRecebido.current?.focus();
   }, [emDinheiro, pausado, escolhendoCliente]);
 
+  /*
+   * Ao ABRIR, o cursor entra no vendedor — e não no valor recebido. Toda venda
+   * pede o código de quem vendeu, e ele era o campo que o caixa esquecia até o
+   * Enter esbarrar nele. Selecionado, para o código da venda anterior ser
+   * sobrescrito ao digitar. Declarado depois dos efeitos acima de propósito: na
+   * montagem eles também rodam, e o último foco é o que fica.
+   *
+   * Transferência não tem vendedor, e ali o foco segue a regra de antes.
+   */
+  useEffect(() => {
+    if (paraARede || pausado) return;
+    campoVendedor.current?.focus();
+    campoVendedor.current?.select();
+    // Só na abertura: trocar a forma depois continua levando ao valor recebido.
+  }, []);
+
   useEffect(() => {
     if (pausado) return;
 
@@ -303,6 +319,16 @@ export function FinalizarDialogo({
           campoVendedor.current?.select();
           return;
         }
+        // Do vendedor, em dinheiro sem valor digitado, o Enter segue para o
+        // valor recebido em vez de tentar fechar sem ele.
+        if (
+          emDinheiro &&
+          valorRecebido === null &&
+          document.activeElement === campoVendedor.current
+        ) {
+          campoRecebido.current?.focus();
+          return;
+        }
         onConfirmar();
         return;
       }
@@ -336,7 +362,9 @@ export function FinalizarDialogo({
     return () => window.removeEventListener("keydown", aoTeclar, true);
   }, [
     escolhendoCliente,
+    emDinheiro,
     faltaVendedor,
+    valorRecebido,
     imprimir,
     indiceCliente,
     onCadastrarCliente,
