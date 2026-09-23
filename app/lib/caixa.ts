@@ -76,8 +76,14 @@ export function retiradaDaGaveta(dinheiroNaGaveta: number, fundo: number) {
  */
 export const SANGRIA_SEM_AUTORIZACAO = 500
 
-export function sangriaExigeGerente(tipo: string, valor: number) {
-  return tipo === "sangria" && valor > SANGRIA_SEM_AUTORIZACAO
+/**
+ * O teto vale para o DIA, não para o lançamento: dez sangrias de R$ 490 são uma
+ * retirada de R$ 4.900 que, contada uma a uma, nunca chamaria o gerente.
+ * `jaRetiradoNoDia` é a soma das sangrias do dia que passaram SEM gerente: a
+ * que ele já liberou foi conferida por uma segunda pessoa e não gasta a cota.
+ */
+export function sangriaExigeGerente(tipo: string, valor: number, jaRetiradoNoDia = 0) {
+  return tipo === "sangria" && jaRetiradoNoDia + valor > SANGRIA_SEM_AUTORIZACAO
 }
 
 /**
@@ -91,4 +97,16 @@ export const DIFERENCA_TOLERADA = 1
 
 export function diferencaRelevante(diferenca: number) {
   return Math.abs(diferenca) >= DIFERENCA_TOLERADA
+}
+
+/**
+ * Cancelar lançamento que PÕE dinheiro na conta da gaveta é do gerente.
+ *
+ * Cancelar abertura ou reforço baixa o esperado do fim do dia: cancelar a
+ * abertura de R$ 200 e relançar R$ 50 deixava R$ 150 sobrando na gaveta, e o
+ * caixa fechava batendo. Cancelar sangria ou devolução só SOBE o esperado — o
+ * erro aparece contra quem cancelou —, e continua livre para corrigir engano.
+ */
+export function cancelamentoExigeGerente(tipo: string) {
+  return tipo === "abertura" || tipo === "suprimento"
 }

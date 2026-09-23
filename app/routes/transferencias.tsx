@@ -20,6 +20,7 @@ import {
   type ProdutoCatalogo,
 } from "~/lib/pdv"
 import { SOMENTE_ATIVOS } from "~/lib/produtos.server"
+import { ehGerente } from "~/lib/permissoes"
 import { exigirUsuario } from "~/lib/sessao.server"
 import { faltaEmAberto, rotuloDaSituacao } from "~/lib/transferencias"
 import {
@@ -116,7 +117,7 @@ export async function action({ request }: Route.ActionArgs) {
       conferidos,
       operador: eu.nome,
       operadorId: eu.id,
-      lojasPermitidas: eu.lojasPermitidas,
+      loja: eu.loja,
     })
 
     if (!resultado.ok) return data({ ok: false as const, erro: resultado.erro }, { status: 400 })
@@ -132,6 +133,8 @@ export async function action({ request }: Route.ActionArgs) {
     const resultado = await cancelarTransferencia({
       id: String(formulario.get("id") ?? ""),
       operador: eu.nome,
+      loja: eu.loja,
+      gerente: ehGerente(eu.papel),
     })
     if (!resultado.ok) return data({ ok: false as const, erro: resultado.erro }, { status: 400 })
     return { ok: true as const, mensagem: "Transferência cancelada — a carga voltou para a origem" }

@@ -356,6 +356,31 @@ export async function registrarVenda(
   if (!pedido.loja) return { ok: false, erro: "Venda sem loja" }
 
   /**
+   * Pix só existe com o txid que o Inter confirmou — e cada txid paga UMA venda.
+   *
+   * O caminho da tela passa sempre pela conferência no Inter, mas o payload da
+   * venda comum aceitava "pix" como forma: quem o montasse no console gravava
+   * uma venda recebida em dinheiro como Pix, e o valor sumia da conta da gaveta.
+   * E um txid já pago, reapresentado numa segunda venda de mesmo total, passava
+   * na conferência — o Inter diz que ele foi pago, e foi, uma vez.
+   */
+  if (pedido.forma === "pix") {
+    if (!pedido.pixTxid) {
+      return { ok: false, erro: "Pix só fecha pela cobrança conferida no Inter" }
+    }
+    const jaUsado = await db.venda.findFirst({
+      where: { pixTxid: pedido.pixTxid },
+      select: { numero: true, loja: true },
+    })
+    if (jaUsado) {
+      return {
+        ok: false,
+        erro: `Este Pix já pagou a venda #${jaUsado.numero} de ${jaUsado.loja}`,
+      }
+    }
+  }
+
+  /**
    * A saída para outra loja da rede, decidida AQUI e pelo CNPJ.
    *
    * A forma sozinha não podia mandar: quem montasse o payload escolheria

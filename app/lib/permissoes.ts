@@ -241,6 +241,12 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         descricao: "Quanto cada vendedor tem a receber, por período e por loja",
         somenteGerente: true,
       },
+      {
+        para: "/admin/relatorios/auditoria",
+        rotulo: "Auditoria do caixa",
+        descricao: "Cartão por dia, desconto e sangria por operador, lançamentos cancelados",
+        somenteGerente: true,
+      },
     ],
   },
   {

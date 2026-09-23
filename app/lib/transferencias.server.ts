@@ -153,15 +153,19 @@ export async function conferirTransferencia(entrada: {
   conferidos: ItemConferido[]
   operador: string
   operadorId: string
-  lojasPermitidas: string[]
+  /** A loja da SESSÃO: quem confere é quem está no destino, com a carga na frente. */
+  loja: string
 }): Promise<ResultadoConferencia> {
   const doc = await db.transferencia.findUnique({ where: { id: entrada.id } })
   if (!doc) return { ok: false, erro: "Transferência não encontrada" }
   if (doc.situacao !== "em_transito") {
     return { ok: false, erro: `Esta transferência já está como "${doc.situacao}"` }
   }
-  if (!entrada.lojasPermitidas.includes(doc.destino)) {
-    return { ok: false, erro: `Só quem opera em ${doc.destino} confere esta carga` }
+  // A sessão, e não as lojas que a pessoa alcança: como todo vendedor alcança
+  // a rede inteira, a regra antiga deixava um colega da ORIGEM declarar "tudo
+  // chegou" sobre uma carga que ninguém do destino viu.
+  if (doc.destino !== entrada.loja) {
+    return { ok: false, erro: `Só quem está em ${doc.destino} confere esta carga` }
   }
   if (doc.enviadaPorId === entrada.operadorId) {
     return {
@@ -311,9 +315,24 @@ export async function resolverFalta(entrada: {
 export async function cancelarTransferencia(entrada: {
   id: string
   operador: string
+  /** A loja da SESSÃO. */
+  loja: string
+  gerente: boolean
 }) {
   const doc = await db.transferencia.findUnique({ where: { id: entrada.id } })
   if (!doc) return { ok: false as const, erro: "Transferência não encontrada" }
+  /*
+   * Cancelar põe a carga de volta no saldo da origem — no papel. Aberto a
+   * qualquer um, a mercadoria que sumiu no caminho "voltava" para uma
+   * prateleira onde não está, e a falta só aparecia no próximo inventário. Quem
+   * despachou (a origem) desiste da própria remessa; o resto é do gerente.
+   */
+  if (doc.origem !== entrada.loja && !entrada.gerente) {
+    return {
+      ok: false as const,
+      erro: `Só ${doc.origem}, que despachou, ou um gerente cancela esta transferência`,
+    }
+  }
   if (doc.situacao !== "em_transito") {
     return {
       ok: false as const,

@@ -4,6 +4,7 @@ import { db } from "~/lib/db.server"
 import { depoisDoDia, inicioDoDia } from "~/lib/dia"
 import { arredondar } from "~/lib/moeda"
 import {
+  cancelamentoExigeGerente,
   sangriaExigeGerente,
   SANGRIA_SEM_AUTORIZACAO,
   type TipoMovimentoDeCaixa,
@@ -171,6 +172,29 @@ export async function caixaAberto(loja: string, dia: string) {
   return abertura !== null
 }
 
+/** O que já saiu em sangria no dia sem a senha de um gerente. */
+async function sangriasSemGerente(loja: string, dia: string) {
+  const sangrias = await db.movimentoCaixa.findMany({
+    where: { loja, dia, tipo: "sangria", AND: [NAO_CANCELADO] },
+    select: { valor: true, autorizadaPor: true },
+  })
+  return arredondar(
+    sangrias.filter((s) => !s.autorizadaPor).reduce((acc, s) => acc + s.valor, 0)
+  )
+}
+
+/** A senha de um gerente digitada no balcão: confere quem é e se é gerente. */
+async function conferirGerente(email: string, senha: string) {
+  const login = await autenticar(email, senha)
+  if (!login.ok) return { ok: false as const, erro: login.erro }
+
+  const gerente = await db.usuario.findUnique({ where: { id: login.usuarioId } })
+  if (!gerente || !ehGerente(gerente.papel)) {
+    return { ok: false as const, erro: "Esta pessoa não é gerente" }
+  }
+  return { ok: true as const, nome: gerente.nome }
+}
+
 /** Lança troco inicial, sangria ou reforço. */
 export async function lancarMovimentoDeCaixa(entrada: {
   loja: string
@@ -241,22 +265,22 @@ export async function lancarMovimentoDeCaixa(entrada: {
    * sem depender de ela estar presente para digitar em outro lugar.
    */
   let autorizadaPor: string | null = null
-  if (sangriaExigeGerente(entrada.tipo, entrada.valor)) {
+  const semGerenteNoDia =
+    entrada.tipo === "sangria" ? await sangriasSemGerente(entrada.loja, entrada.dia) : 0
+  if (sangriaExigeGerente(entrada.tipo, entrada.valor, semGerenteNoDia)) {
     if (!entrada.gerenteEmail || !entrada.gerenteSenha) {
       return {
         ok: false as const,
         precisaGerente: true as const,
-        erro: `Sangria acima de ${moeda(SANGRIA_SEM_AUTORIZACAO)} precisa da senha de um gerente`,
+        erro:
+          semGerenteNoDia > 0
+            ? `Já saíram ${moeda(semGerenteNoDia)} em sangria hoje sem gerente — acima de ${moeda(SANGRIA_SEM_AUTORIZACAO)} no dia, só com a senha de um gerente`
+            : `Sangria acima de ${moeda(SANGRIA_SEM_AUTORIZACAO)} precisa da senha de um gerente`,
       }
     }
 
-    const login = await autenticar(entrada.gerenteEmail, entrada.gerenteSenha)
-    if (!login.ok) return { ok: false as const, erro: login.erro }
-
-    const gerente = await db.usuario.findUnique({ where: { id: login.usuarioId } })
-    if (!gerente || !ehGerente(gerente.papel)) {
-      return { ok: false as const, erro: "Esta pessoa não é gerente" }
-    }
+    const gerente = await conferirGerente(entrada.gerenteEmail, entrada.gerenteSenha)
+    if (!gerente.ok) return { ok: false as const, erro: gerente.erro }
     autorizadaPor = gerente.nome
   }
 
@@ -284,17 +308,36 @@ export async function lancarMovimentoDeCaixa(entrada: {
  * apagar o registro. O papel existia, o sistema não sabia de nada. Cancelado
  * fica na lista, riscado, com o nome de quem cancelou.
  */
-export async function cancelarMovimentoDeCaixa(
-  id: string,
-  loja: string,
+export async function cancelarMovimentoDeCaixa(entrada: {
+  id: string
+  loja: string
   operador: string
-) {
+  /** Quem está na sessão já é gerente: não precisa digitar a própria senha. */
+  souGerente: boolean
+  gerenteEmail?: string
+  gerenteSenha?: string
+}) {
+  const { id, loja, operador } = entrada
   const movimento = await db.movimentoCaixa.findUnique({ where: { id } })
   if (!movimento || movimento.loja !== loja) {
     return { ok: false as const, erro: "Lançamento não encontrado" }
   }
   if (movimento.canceladoEm) {
     return { ok: false as const, erro: "Este lançamento já foi cancelado" }
+  }
+
+  let canceladoPor = operador
+  if (cancelamentoExigeGerente(movimento.tipo) && !entrada.souGerente) {
+    if (!entrada.gerenteEmail || !entrada.gerenteSenha) {
+      return {
+        ok: false as const,
+        precisaGerente: movimento.id,
+        erro: "Cancelar abertura ou reforço baixa o esperado da gaveta — só com a senha de um gerente",
+      }
+    }
+    const gerente = await conferirGerente(entrada.gerenteEmail, entrada.gerenteSenha)
+    if (!gerente.ok) return { ok: false as const, erro: gerente.erro }
+    canceladoPor = `${operador} (liberado por ${gerente.nome})`
   }
 
   const fechado = await db.fechamentoCaixa.findFirst({
@@ -310,7 +353,7 @@ export async function cancelarMovimentoDeCaixa(
 
   await db.movimentoCaixa.update({
     where: { id },
-    data: { canceladoEm: new Date(), canceladoPor: operador },
+    data: { canceladoEm: new Date(), canceladoPor },
   })
   return { ok: true as const }
 }

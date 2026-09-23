@@ -296,6 +296,14 @@ export type ResultadoLogin =
  * Autentica. A mensagem de erro é a mesma para e-mail inexistente e senha
  * errada, de propósito: dizer qual dos dois falhou entrega quais e-mails existem.
  */
+/**
+ * Cinco erros seguidos travam a conta por quinze minutos, em qualquer tela que
+ * pede senha — o login, a liberação no caixa, a sangria. Poucas o bastante para
+ * que testar senhas vire semanas; muitas para o dedo que erra duas vezes.
+ */
+const SENHAS_ERRADAS_PARA_TRAVAR = 5
+const MINUTOS_DE_TRAVA = 15
+
 export async function autenticar(email: string, senha: string): Promise<ResultadoLogin> {
   const usuario = await db.usuario.findUnique({
     where: { email: normalizarEmail(email) },
@@ -308,13 +316,37 @@ export async function autenticar(email: string, senha: string): Promise<Resultad
     return { ok: false, erro: "E-mail ou senha inválidos" }
   }
 
+  // Travada responde antes de conferir: senha certa durante o bloqueio também
+  // é recusada, senão a trava só atrasaria quem está testando senhas.
+  const agora = new Date()
+  if (usuario.bloqueadoAte && usuario.bloqueadoAte > agora) {
+    const minutos = Math.ceil((usuario.bloqueadoAte.getTime() - agora.getTime()) / 60_000)
+    return {
+      ok: false,
+      erro: `Senha errada ${SENHAS_ERRADAS_PARA_TRAVAR} vezes — tente de novo em ${minutos} min`,
+    }
+  }
+
   if (!(await conferirSenha(senha, usuario.senhaHash))) {
-    return { ok: false, erro: "E-mail ou senha inválidos" }
+    const erradas = (usuario.senhasErradas ?? 0) + 1
+    const trava = erradas >= SENHAS_ERRADAS_PARA_TRAVAR
+    await db.usuario.update({
+      where: { id: usuario.id },
+      data: trava
+        ? { senhasErradas: 0, bloqueadoAte: new Date(agora.getTime() + MINUTOS_DE_TRAVA * 60_000) }
+        : { senhasErradas: erradas },
+    })
+    return {
+      ok: false,
+      erro: trava
+        ? `Senha errada ${SENHAS_ERRADAS_PARA_TRAVAR} vezes — acesso travado por ${MINUTOS_DE_TRAVA} min`
+        : "E-mail ou senha inválidos",
+    }
   }
 
   await db.usuario.update({
     where: { id: usuario.id },
-    data: { ultimoAcessoEm: new Date() },
+    data: { ultimoAcessoEm: agora, senhasErradas: 0, bloqueadoAte: null },
   })
 
   return {

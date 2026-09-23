@@ -71,6 +71,7 @@ export default [
       route("relatorios/abc", "routes/admin.relatorios.abc.tsx"),
       route("relatorios/comissao", "routes/admin.relatorios.comissao.tsx"),
       route("relatorios/inventario", "routes/admin.relatorios.inventario.tsx"),
+      route("relatorios/auditoria", "routes/admin.relatorios.auditoria.tsx"),
       route("usuarios", "routes/admin.usuarios.tsx"),
       route("certificados", "routes/admin.certificados.tsx"),
     ]),

@@ -293,6 +293,14 @@ model Usuario {
   criadoEm      DateTime  @default(now())
   ultimoAcessoEm DateTime?
 
+  /// Senhas erradas seguidas, e até quando a conta fica travada depois delas.
+  /// Sem isto a senha do gerente podia ser testada à vontade no próprio caixa
+  /// (liberação de venda, sangria), e uma senha fraca caía numa tarde.
+  /// Opcional porque os cadastros anteriores não têm o campo, e o Prisma no
+  /// Mongo recusa ler campo obrigatório ausente.
+  senhasErradas Int?
+  bloqueadoAte  DateTime?
+
   @@map("usuarios")
 }
 

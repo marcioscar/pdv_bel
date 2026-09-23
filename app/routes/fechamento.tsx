@@ -26,6 +26,7 @@ import { diaAtras, diaDeHoje, diaEmTexto } from "~/lib/dia"
 import { imprimirDocumento } from "~/lib/impressao"
 import { interpretarValor, moeda } from "~/lib/moeda"
 import { useAtalhosDeSecao } from "~/lib/navegacao"
+import { ehGerente } from "~/lib/permissoes"
 import { exigirUsuario } from "~/lib/sessao.server"
 import { useRelogio, useTema } from "~/lib/tema"
 import { cn } from "~/lib/utils"
@@ -112,12 +113,25 @@ export async function action({ request }: Route.ActionArgs) {
   }
 
   if (intencao === "apagar") {
-    const r = await cancelarMovimentoDeCaixa(
-      String(formulario.get("id") ?? ""),
-      eu.loja,
-      eu.nome
-    )
-    if (!r.ok) return data({ ok: false as const, erro: r.erro }, { status: 400 })
+    const r = await cancelarMovimentoDeCaixa({
+      id: String(formulario.get("id") ?? ""),
+      loja: eu.loja,
+      operador: eu.nome,
+      souGerente: ehGerente(eu.papel),
+      gerenteEmail: String(formulario.get("gerenteEmail") ?? "") || undefined,
+      gerenteSenha: String(formulario.get("gerenteSenha") ?? "") || undefined,
+    })
+    if (!r.ok) {
+      return data(
+        {
+          ok: false as const,
+          erro: r.erro,
+          // O id do lançamento: é naquela linha que os campos do gerente abrem.
+          gerenteParaCancelar: "precisaGerente" in r ? r.precisaGerente : null,
+        },
+        { status: 400 }
+      )
+    }
     return { ok: true as const, mensagem: "Lançamento cancelado — fica riscado na lista" }
   }
 
@@ -161,6 +175,10 @@ export default function Fechamento({ loaderData, actionData }: Route.ComponentPr
   // O servidor recusou por falta de gerente: a tela abre os campos da senha.
   const precisaGerente =
     actionData && !actionData.ok && "precisaGerente" in actionData && actionData.precisaGerente
+  const gerenteParaCancelar =
+    actionData && !actionData.ok && "gerenteParaCancelar" in actionData
+      ? actionData.gerenteParaCancelar
+      : null
   const navegacao = useNavigation()
   const enviando = navegacao.state !== "idle"
   const fechado = resumo.fechamento
@@ -547,8 +565,8 @@ export default function Fechamento({ loaderData, actionData }: Route.ComponentPr
                   {precisaGerente ? (
                     <div className="flex w-full flex-wrap items-end gap-2 rounded-lg border-2 border-primary/40 bg-primary/5 p-3">
                       <p className="w-full text-xs">
-                        Sangria acima de {moeda(SANGRIA_SEM_AUTORIZACAO)} precisa de um
-                        gerente. Ele digita aqui — a sangria continua no nome de quem
+                        Sangria acima de {moeda(SANGRIA_SEM_AUTORIZACAO)} no dia precisa de
+                        um gerente. Ele digita aqui — a sangria continua no nome de quem
                         está operando.
                       </p>
                       <Input
@@ -577,7 +595,7 @@ export default function Fechamento({ loaderData, actionData }: Route.ComponentPr
                   <li
                     key={m.id}
                     className={cn(
-                      "flex items-center gap-2 py-2 text-sm",
+                      "flex flex-wrap items-center gap-2 py-2 text-sm",
                       // Cancelado fica visível e riscado: sumir da lista seria o
                       // mesmo que apagar, só que com passo a mais.
                       m.canceladoEm && "opacity-60"
@@ -625,7 +643,7 @@ export default function Fechamento({ loaderData, actionData }: Route.ComponentPr
                         sangria (sai) e para o reforço (entra): nos dois casos
                         alguém carregou dinheiro de um lugar para outro. */}
                     {!m.canceladoEm ? <BotaoComprovante id={m.id} /> : null}
-                    {!fechado && !m.canceladoEm ? (
+                    {!fechado && !m.canceladoEm && gerenteParaCancelar !== m.id ? (
                       <Form method="post" className="shrink-0">
                         <input type="hidden" name="intencao" value="apagar" />
                         <input type="hidden" name="dia" value={dia} />
@@ -638,6 +656,39 @@ export default function Fechamento({ loaderData, actionData }: Route.ComponentPr
                           className="text-muted-foreground"
                         >
                           <Trash2 className="size-4" aria-hidden />
+                        </Button>
+                      </Form>
+                    ) : null}
+                    {/* Mesmo padrão da sangria: os campos só abrem depois da
+                        recusa, na linha do lançamento que se quer cancelar. */}
+                    {!fechado && !m.canceladoEm && gerenteParaCancelar === m.id ? (
+                      <Form
+                        method="post"
+                        className="flex w-full basis-full flex-wrap items-end gap-2 rounded-lg border-2 border-primary/40 bg-primary/5 p-3"
+                      >
+                        <input type="hidden" name="intencao" value="apagar" />
+                        <input type="hidden" name="dia" value={dia} />
+                        <input type="hidden" name="id" value={m.id} />
+                        <p className="w-full text-xs">
+                          Cancelar {rotuloDoMovimento(m.tipo).toLowerCase()} baixa o que a
+                          gaveta deve ter no fim do dia. Um gerente confirma aqui.
+                        </p>
+                        <Input
+                          name="gerenteEmail"
+                          type="email"
+                          placeholder="E-mail do gerente"
+                          autoComplete="off"
+                          className="h-9 min-w-44 flex-1 rounded-lg border-border bg-background text-sm"
+                        />
+                        <Input
+                          name="gerenteSenha"
+                          type="password"
+                          placeholder="Senha"
+                          autoComplete="off"
+                          className="h-9 min-w-32 flex-1 rounded-lg border-border bg-background text-sm"
+                        />
+                        <Button type="submit" size="sm" variant="destructive" disabled={enviando}>
+                          Cancelar lançamento
                         </Button>
                       </Form>
                     ) : null}
