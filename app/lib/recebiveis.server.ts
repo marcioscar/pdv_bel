@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client"
 
+import { seuNumeroDaParcela } from "~/lib/cobranca.server"
 import { db } from "~/lib/db.server"
 import {
   depoisDoDia,
@@ -83,12 +84,17 @@ export function lerFiltroRecebiveis(
  * carteira coerente com o histórico: cliente que trocou de nome no cadastro
  * continua sendo achado pelo nome que estava no boleto.
  */
+/** O Prisma entrega o `contains` ao Mongo como regex cru: "(teste" derrubava a busca. */
+function literal(busca: string) {
+  return busca.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
 async function vendasDoCliente(busca: string) {
   const digitos = busca.replace(/\D/g, "")
   const vendas = await db.venda.findMany({
     where: {
       OR: [
-        { clienteNome: { contains: busca, mode: "insensitive" } },
+        { clienteNome: { contains: literal(busca), mode: "insensitive" } },
         ...(digitos.length >= 3 ? [{ clienteCpfCnpj: { contains: digitos } }] : []),
       ],
     },
@@ -100,7 +106,7 @@ async function vendasDoCliente(busca: string) {
 function condicaoDaSituacao(
   situacao: SituacaoRecebivel,
   hoje: Date
-): Prisma.CobrancaWhereInput | null {
+): (Prisma.CobrancaWhereInput & Prisma.BoletoExternoWhereInput) | null {
   switch (situacao) {
     case "abertas":
       return { situacao: { in: SITUACOES_EM_ABERTO } }
@@ -147,6 +153,80 @@ async function condicoesDoFiltro(filtro: FiltroRecebiveis, hoje: Date) {
   return { conteudo, base, where, daSituacao }
 }
 
+/**
+ * O mesmo filtro, traduzido para os boletos do sistema antigo (`boletos_externos`).
+ *
+ * Duas diferenças que não são escolha: boleto de fora não tem loja, tem a CONTA
+ * que emitiu — então filtrar QI traz os da conta da matriz, que a QI divide com
+ * a QNE. E não tem número de venda: o número pedido é procurado no "seu número"
+ * dele, que é o que o sistema antigo imprimiu no papel.
+ */
+async function condicoesExternas(filtro: FiltroRecebiveis, hoje: Date) {
+  const lojas = await db.loja.findMany({
+    where: { codigo: { in: filtro.lojas } },
+    select: { conta: true },
+  })
+  const conteudo: Prisma.BoletoExternoWhereInput[] = [
+    { conta: { in: [...new Set(lojas.map((l) => l.conta))] } },
+  ]
+  if (filtro.numero) conteudo.push({ seuNumero: filtro.numero })
+  if (filtro.cliente) {
+    const digitos = filtro.cliente.replace(/\D/g, "")
+    conteudo.push({
+      OR: [
+        { pagadorNome: { contains: literal(filtro.cliente), mode: "insensitive" } },
+        ...(digitos.length >= 3 ? [{ pagadorCpfCnpj: { contains: digitos } }] : []),
+      ],
+    })
+  }
+
+  const periodo: Prisma.BoletoExternoWhereInput = {
+    vencimento: { gte: inicioDoDia(filtro.de), lt: depoisDoDia(filtro.ate) },
+  }
+  const base: Prisma.BoletoExternoWhereInput = { AND: [periodo, ...conteudo] }
+  const daSituacao = condicaoDaSituacao(filtro.situacao, hoje)
+  const where: Prisma.BoletoExternoWhereInput = daSituacao
+    ? { AND: [periodo, ...conteudo, daSituacao] }
+    : base
+
+  return { conteudo, base, where, daSituacao }
+}
+
+type ExternoCru = Awaited<ReturnType<typeof db.boletoExterno.findMany>>[number]
+
+/**
+ * O boleto de fora com a mesma forma de uma parcela do PDV, para tela e folha
+ * não terem dois desenhos. O que ele não tem (venda, parcela) vem nulo, e é o
+ * `origem` que diz à tela para não oferecer link de venda nem PDF.
+ */
+function externoComoRecebivel(b: ExternoCru) {
+  return {
+    origem: "antigo" as const,
+    id: b.id,
+    vendaId: null,
+    vendaNumero: null,
+    loja: b.conta,
+    parcela: 1,
+    parcelas: 1,
+    situacao: b.situacao,
+    valor: b.valor,
+    vencimento: b.vencimento,
+    linhaDigitavel: b.linhaDigitavel,
+    nossoNumero: b.nossoNumero,
+    /** O número que o sistema antigo imprimiu no boleto. */
+    documento: b.seuNumero ?? b.nossoNumero ?? null,
+    vendaEm: b.emissao,
+    clienteNome: b.pagadorNome,
+    clienteCpfCnpj: b.pagadorCpfCnpj,
+    vendaCancelada: false,
+  }
+}
+
+/** Duas listas já ordenadas por vencimento, numa só. */
+function porVencimento<T extends { vencimento: Date }>(a: T[], b: T[]) {
+  return [...a, ...b].sort((x, y) => x.vencimento.getTime() - y.vencimento.getTime())
+}
+
 /** Do mais antigo para o mais novo — que é a ordem em que a gaveta é arquivada
  *  e por onde quem cobra começa o dia. */
 const POR_VENCIMENTO = [
@@ -178,9 +258,10 @@ async function comOPagador(cobrancas: CobrancaCrua[]) {
   return cobrancas.map((cobranca) => {
     const venda = porId.get(cobranca.vendaId)
     return {
+      origem: "pdv" as "pdv" | "antigo",
       id: cobranca.id,
-      vendaId: cobranca.vendaId,
-      vendaNumero: cobranca.vendaNumero,
+      vendaId: cobranca.vendaId as string | null,
+      vendaNumero: cobranca.vendaNumero as number | null,
       loja: cobranca.loja,
       parcela: cobranca.parcela,
       parcelas: cobranca.parcelas,
@@ -191,6 +272,12 @@ async function comOPagador(cobrancas: CobrancaCrua[]) {
       /** O que está impresso no canto do boleto — é por ele que se acha o papel
        *  na gaveta. Fica nulo enquanto o Inter não termina de emitir. */
       nossoNumero: cobranca.nossoNumero,
+      documento: seuNumeroDaParcela(
+        cobranca.loja,
+        cobranca.vendaNumero,
+        cobranca.parcela,
+        cobranca.parcelas
+      ) as string | null,
       vendaEm: venda?.criadaEm ?? null,
       clienteNome: venda?.clienteNome ?? null,
       clienteCpfCnpj: venda?.clienteCpfCnpj ?? null,
@@ -213,30 +300,49 @@ export type RecebivelConsultado = Awaited<ReturnType<typeof comOPagador>>[number
  */
 export async function consultarRecebiveis(filtro: FiltroRecebiveis) {
   const hoje = inicioDoDia(diaDeHoje())
-  const { conteudo, base, where, daSituacao } = await condicoesDoFiltro(filtro, hoje)
-
-  const emAberto = { AND: [base, { situacao: { in: SITUACOES_EM_ABERTO } }] }
-
-  const [pagina, total, aberto, vencido, recebido] = await Promise.all([
-    db.cobranca.findMany({
-      where,
-      orderBy: POR_VENCIMENTO,
-      skip: (filtro.pagina - 1) * RECEBIVEIS_POR_PAGINA,
-      take: RECEBIVEIS_POR_PAGINA,
-    }),
-    db.cobranca.count({ where }),
-    db.cobranca.aggregate({ where: emAberto, _sum: { valor: true }, _count: { _all: true } }),
-    db.cobranca.aggregate({
-      where: { AND: [emAberto, { vencimento: { lt: hoje } }] },
-      _sum: { valor: true },
-      _count: { _all: true },
-    }),
-    db.cobranca.aggregate({
-      where: { AND: [base, { situacao: { in: SITUACOES_RECEBIDAS } }] },
-      _sum: { valor: true },
-      _count: { _all: true },
-    }),
+  const [pdv, fora] = await Promise.all([
+    condicoesDoFiltro(filtro, hoje),
+    condicoesExternas(filtro, hoje),
   ])
+
+  const abertoPdv = { AND: [pdv.base, { situacao: { in: SITUACOES_EM_ABERTO } }] }
+  const abertoFora = { AND: [fora.base, { situacao: { in: SITUACOES_EM_ABERTO } }] }
+  const recebidoPdv = { AND: [pdv.base, { situacao: { in: SITUACOES_RECEBIDAS } }] }
+  const recebidoFora = { AND: [fora.base, { situacao: { in: SITUACOES_RECEBIDAS } }] }
+
+  /*
+   * Duas coleções numa lista só, em ordem de vencimento. Para a página N basta
+   * pegar as N primeiras páginas de CADA lado, juntar e cortar: nenhuma linha
+   * da página N pode estar além disso em nenhuma das duas.
+   */
+  const ate = filtro.pagina * RECEBIVEIS_POR_PAGINA
+  const soma = (r: { _sum: { valor: number | null }; _count: { _all: number } }[]) => ({
+    valor: r.reduce((s, x) => s + (x._sum.valor ?? 0), 0),
+    quantidade: r.reduce((s, x) => s + x._count._all, 0),
+  })
+  const agregado = { _sum: { valor: true }, _count: { _all: true } } as const
+
+  const [
+    dePdv, deFora, totalPdv, totalFora,
+    aPdv, aFora, vPdv, vFora, rPdv, rFora,
+  ] = await Promise.all([
+    db.cobranca.findMany({ where: pdv.where, orderBy: POR_VENCIMENTO, take: ate }),
+    db.boletoExterno.findMany({ where: fora.where, orderBy: { vencimento: "asc" }, take: ate }),
+    db.cobranca.count({ where: pdv.where }),
+    db.boletoExterno.count({ where: fora.where }),
+    db.cobranca.aggregate({ where: abertoPdv, ...agregado }),
+    db.boletoExterno.aggregate({ where: abertoFora, ...agregado }),
+    db.cobranca.aggregate({ where: { AND: [abertoPdv, { vencimento: { lt: hoje } }] }, ...agregado }),
+    db.boletoExterno.aggregate({ where: { AND: [abertoFora, { vencimento: { lt: hoje } }] }, ...agregado }),
+    db.cobranca.aggregate({ where: recebidoPdv, ...agregado }),
+    db.boletoExterno.aggregate({ where: recebidoFora, ...agregado }),
+  ])
+
+  const pagina = porVencimento(
+    await comOPagador(dePdv),
+    deFora.map(externoComoRecebivel)
+  ).slice((filtro.pagina - 1) * RECEBIVEIS_POR_PAGINA, ate)
+  const total = totalPdv + totalFora
 
   /**
    * Quantas casariam se o vencimento não estivesse no caminho. Mesma ideia da
@@ -245,23 +351,32 @@ export async function consultarRecebiveis(filtro: FiltroRecebiveis) {
    */
   const foraDoPeriodo =
     total === 0 && (filtro.numero || filtro.cliente)
-      ? await db.cobranca.count({
-          where: daSituacao ? { AND: [...conteudo, daSituacao] } : { AND: conteudo },
-        })
+      ? (await db.cobranca.count({
+          where: pdv.daSituacao ? { AND: [...pdv.conteudo, pdv.daSituacao] } : { AND: pdv.conteudo },
+        })) +
+        (await db.boletoExterno.count({
+          where: fora.daSituacao
+            ? { AND: [...fora.conteudo, fora.daSituacao] }
+            : { AND: fora.conteudo },
+        }))
       : 0
 
+  const aberto = soma([aPdv, aFora])
+  const vencido = soma([vPdv, vFora])
+  const recebido = soma([rPdv, rFora])
+
   return {
-    recebiveis: await comOPagador(pagina),
+    recebiveis: pagina,
     total,
     foraDoPeriodo,
     paginas: Math.max(1, Math.ceil(total / RECEBIVEIS_POR_PAGINA)),
     resumo: {
-      aberto: aberto._sum.valor ?? 0,
-      abertoQuantidade: aberto._count._all,
-      vencido: vencido._sum.valor ?? 0,
-      vencidoQuantidade: vencido._count._all,
-      recebido: recebido._sum.valor ?? 0,
-      recebidoQuantidade: recebido._count._all,
+      aberto: aberto.valor,
+      abertoQuantidade: aberto.quantidade,
+      vencido: vencido.valor,
+      vencidoQuantidade: vencido.quantidade,
+      recebido: recebido.valor,
+      recebidoQuantidade: recebido.quantidade,
     },
   }
 }
@@ -283,17 +398,34 @@ export const LIMITE_IMPRESSAO = 1000
  */
 export async function recebiveisParaImpressao(filtro: FiltroRecebiveis) {
   const hoje = inicioDoDia(diaDeHoje())
-  const { where } = await condicoesDoFiltro(filtro, hoje)
-
-  const [cobrancas, total] = await Promise.all([
-    db.cobranca.findMany({ where, orderBy: POR_VENCIMENTO, take: LIMITE_IMPRESSAO }),
-    db.cobranca.count({ where }),
+  const [pdv, fora] = await Promise.all([
+    condicoesDoFiltro(filtro, hoje),
+    condicoesExternas(filtro, hoje),
   ])
 
+  // Os boletos do sistema antigo entram na mesma folha: são eles, na maior
+  // parte, os papéis que estão na gaveta.
+  const [cobrancas, externos, totalPdv, totalFora] = await Promise.all([
+    db.cobranca.findMany({ where: pdv.where, orderBy: POR_VENCIMENTO, take: LIMITE_IMPRESSAO }),
+    db.boletoExterno.findMany({
+      where: fora.where,
+      orderBy: { vencimento: "asc" },
+      take: LIMITE_IMPRESSAO,
+    }),
+    db.cobranca.count({ where: pdv.where }),
+    db.boletoExterno.count({ where: fora.where }),
+  ])
+
+  const recebiveis = porVencimento(
+    await comOPagador(cobrancas),
+    externos.map(externoComoRecebivel)
+  ).slice(0, LIMITE_IMPRESSAO)
+  const total = totalPdv + totalFora
+
   return {
-    recebiveis: await comOPagador(cobrancas),
+    recebiveis,
     total,
     /** Quantas ficaram de fora por causa do teto — a folha precisa admitir isso. */
-    cortadas: Math.max(0, total - cobrancas.length),
+    cortadas: Math.max(0, total - recebiveis.length),
   }
 }

@@ -1,5 +1,4 @@
 import type { Route } from "./+types/contas-a-receber.impressao"
-import { seuNumeroDaParcela } from "~/lib/cobranca.server"
 import { diaEmTexto, emDia, inicioDoDia } from "~/lib/dia"
 import { escapar } from "~/lib/html"
 import { moeda } from "~/lib/moeda"
@@ -98,9 +97,9 @@ const TITULOS: Record<SituacaoRecebivel, { titulo: string; instrucao: string }> 
 function linha(conta: RecebivelConsultado) {
   return `<tr>
     <td class="marca"><span class="caixa"></span></td>
-    <td class="numero">${escapar(
-      seuNumeroDaParcela(conta.loja, conta.vendaNumero, conta.parcela, conta.parcelas)
-    )}</td>
+    <td class="numero">${escapar(conta.documento ?? conta.nossoNumero ?? "—")}${
+      conta.origem === "antigo" ? `<span class="doc"> antigo</span>` : ""
+    }</td>
     <td class="loja">${escapar(conta.loja)}</td>
     <td>
       ${escapar(conta.clienteNome ?? "—")}
@@ -308,7 +307,7 @@ function folha({
       Vencimento entre ${escapar(periodo)} · agrupado por dia de vencimento: cada faixa cinza é um maço da gaveta,
       com quantos papéis esperar e quanto somam.
       <br>
-      <strong>Nº do documento</strong> é o que está impresso no boleto (ex.: <strong>QI000003-1</strong> = loja QI, venda 3, parcela 1) — é por ele que se acha o papel.
+      <strong>Nº do documento</strong> é o que está impresso no boleto (ex.: <strong>QI000003-1</strong> = loja QI, venda 3, parcela 1) — é por ele que se acha o papel. Os marcados <strong>antigo</strong> são do sistema anterior: o número é o que ele imprimiu, e a coluna Loja traz a conta do Inter que emitiu (MATRIZ é QI e QNE).
     </div>
     ${
       cortadas > 0

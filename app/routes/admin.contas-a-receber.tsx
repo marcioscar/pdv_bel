@@ -421,12 +421,24 @@ function Linha({ conta, hoje }: { conta: RecebivelConsultado; hoje: string }) {
         {/* Leva para a venda inteira, com o período aberto: o vencimento não diz
             de que dia foi a venda, e um link que herdasse o período desta tela
             cairia numa lista vazia. */}
-        <Link
-          to={`/admin/vendas?numero=${conta.vendaNumero}&loja=${conta.loja}&de=${PRIMEIRO_DIA}&ate=${hoje}`}
-          className="font-mono font-semibold underline tabular-nums"
-        >
-          #{conta.vendaNumero}
-        </Link>
+        {conta.origem === "antigo" ? (
+          // Boleto do sistema antigo: não há venda aqui para abrir.
+          <>
+            <Badge variant="secondary" className="text-[9px]">
+              sistema antigo
+            </Badge>
+            {conta.documento ? (
+              <span className="block font-mono text-[11px] tabular-nums">{conta.documento}</span>
+            ) : null}
+          </>
+        ) : (
+          <Link
+            to={`/admin/vendas?numero=${conta.vendaNumero}&loja=${conta.loja}&de=${PRIMEIRO_DIA}&ate=${hoje}`}
+            className="font-mono font-semibold underline tabular-nums"
+          >
+            #{conta.vendaNumero}
+          </Link>
+        )}
         {conta.vendaEm ? (
           <span className="block font-mono text-[11px] text-muted-foreground tabular-nums">
             {new Date(conta.vendaEm).toLocaleDateString("pt-BR")}
@@ -457,7 +469,7 @@ function Linha({ conta, hoje }: { conta: RecebivelConsultado; hoje: string }) {
       </td>
 
       <td className="px-2 py-2.5 font-mono text-xs tabular-nums">
-        {conta.parcela}/{conta.parcelas}
+        {conta.origem === "antigo" ? "—" : `${conta.parcela}/${conta.parcelas}`}
       </td>
 
       <td className="px-2 py-2.5 text-right font-mono font-medium tabular-nums">
@@ -476,7 +488,7 @@ function Linha({ conta, hoje }: { conta: RecebivelConsultado; hoje: string }) {
       <td className="px-2 py-2.5">
         {/* Só o que ainda pode ser pago: link de PDF de boleto cancelado leva a um
             503 do Inter, que na tela parece defeito nosso. */}
-        {emAberto ? (
+        {emAberto && conta.origem === "pdv" ? (
           <a
             href={`/vendas/${conta.vendaId}/boleto.pdf?parcela=${conta.parcela}`}
             target="_blank"
