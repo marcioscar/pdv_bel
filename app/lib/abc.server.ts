@@ -1,7 +1,6 @@
 import { db } from "~/lib/db.server"
-import { gruposDaAnalise, nomesDosGrupos } from "~/lib/grupos.server"
+import { gruposDaAnalise } from "~/lib/grupos.server"
 import { arredondar } from "~/lib/moeda"
-import { NAO_CANCELADA, NAO_E_TRANSFERENCIA } from "~/lib/vendas.server"
 
 export type Faixa = "A" | "B" | "C"
 
@@ -129,9 +128,8 @@ type LinhaSemFaixa = Omit<LinhaAbc, "participacao" | "acumulado" | "faixa">
 
 /**
  * Participação, acumulado e faixa — a parte da curva que não depende de onde
- * vieram os números. Uma só para a curva do relatório (histórico do sistema
- * antigo) e a do painel (vendas do PDV): cortes diferentes nas duas mostrariam
- * faixa A com dois critérios.
+ * vieram os números. Separada da leitura para que a curva das vendas do PDV,
+ * quando vier, use os mesmos cortes: faixa A com dois critérios não compara.
  */
 function faixasDaCurva(linhasSemFaixa: LinhaSemFaixa[]) {
   const todas = [...linhasSemFaixa].sort((a, b) => b.valor - a.valor)
@@ -167,68 +165,4 @@ function faixasDaCurva(linhasSemFaixa: LinhaSemFaixa[]) {
     produtos: linhas.length,
     faixas: { A: daFaixa("A"), B: daFaixa("B"), C: daFaixa("C") },
   }
-}
-
-/**
- * A curva ABC das vendas do PDV no período — o que o painel mostra.
- *
- * Diferente da do relatório, o valor aqui não é estimado: é o subtotal que
- * cada item REALMENTE saiu na venda. Mesmo filtro de grupo (encomenda fora) e
- * mesmas faixas. Vazia enquanto o PDV não tiver venda — e é para ser assim:
- * o painel se baseia só no que foi vendido aqui.
- */
-export async function curvaAbcDoPdv(inicio: Date, lojas: string[]) {
-  const [vendas, daAnalise] = await Promise.all([
-    db.venda.findMany({
-      where: {
-        AND: [{ loja: { in: lojas }, criadaEm: { gte: inicio } }, NAO_CANCELADA, NAO_E_TRANSFERENCIA],
-      },
-      select: { itens: true },
-    }),
-    gruposDaAnalise(),
-  ])
-
-  const porProduto = new Map<string, { codigo: string; descricao: string; quantidade: number; valor: number }>()
-  for (const venda of vendas) {
-    for (const item of venda.itens) {
-      const atual =
-        porProduto.get(item.produtoId) ??
-        { codigo: item.codigo, descricao: item.descricao, quantidade: 0, valor: 0 }
-      atual.quantidade += item.quantidade
-      atual.valor += item.subtotal
-      porProduto.set(item.produtoId, atual)
-    }
-  }
-  if (porProduto.size === 0) return null
-
-  const produtos = await db.produto.findMany({
-    where: { id: { in: [...porProduto.keys()] } },
-    select: { id: true, grupoId: true },
-  })
-  const grupoDe = new Map(produtos.map((p) => [p.id, p.grupoId]))
-  const nomeDoGrupo = await nomesDosGrupos()
-
-  let foraPorGrupo = 0
-  const linhas: LinhaSemFaixa[] = []
-  for (const [produtoId, l] of porProduto) {
-    const grupoId = grupoDe.get(produtoId) ?? null
-    if (daAnalise && grupoId && !daAnalise.has(grupoId)) {
-      foraPorGrupo++
-      continue
-    }
-    linhas.push({
-      produtoId,
-      codigo: l.codigo,
-      descricao: l.descricao,
-      grupoId,
-      grupoNome: grupoId ? (nomeDoGrupo.get(grupoId) ?? null) : null,
-      quantidade: l.quantidade,
-      // O preço médio praticado, não o de tabela: desconto de combo incluído.
-      preco: l.quantidade > 0 ? arredondar(l.valor / l.quantidade) : 0,
-      valor: l.valor,
-    })
-  }
-
-  const curva = faixasDaCurva(linhas)
-  return curva ? { ...curva, foraPorGrupo, vendas: vendas.length } : null
 }

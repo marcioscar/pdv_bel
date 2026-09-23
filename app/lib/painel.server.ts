@@ -1,12 +1,13 @@
 import type { Prisma } from "@prisma/client"
 
-import { curvaAbcDoPdv } from "~/lib/abc.server"
+import { curvaAbc as abcDoSistemaAntigo } from "~/lib/abc.server"
 import { db } from "~/lib/db.server"
 import { arredondar } from "~/lib/moeda"
 import { NAO_CANCELADA, NAO_E_TRANSFERENCIA } from "~/lib/vendas.server"
 
 /**
- * Os números do painel da administração — todos das vendas do PDV.
+ * Os números do painel da administração — das vendas do PDV, com UMA exceção
+ * declarada: a curva ABC (ver `curvaAbc`).
  *
  * Já leu o faturamento de `receitas`, o sistema de contas, porque o PDV tinha
  * acabado de entrar e as vendas dele não diziam nada da rede. Foi decisão do
@@ -66,11 +67,15 @@ export async function faturamentoDiario(dias: number, lojas: string[]) {
 }
 
 /**
- * A curva ABC do painel: os maiores das vendas do PDV no período, e o resumo
- * da curva inteira. As faixas saem de `abc.server`, as mesmas do relatório.
+ * A curva ABC do painel — POR ENQUANTO do histórico do sistema antigo.
+ *
+ * É a exceção à regra "só o PDV" do painel, pedida pelo Marcio em 23/09/2026:
+ * com o PDV sem venda, a curva dele seria vazia, e a do antigo (235 dias) é a
+ * que orienta compra hoje. A tela diz de onde ela vem. Quando o PDV tiver
+ * volume, a troca é por uma curva das vendas daqui com as mesmas faixas.
  */
-export async function curvaAbc(dias: number, lojas: string[], limite = 10) {
-  const curva = await curvaAbcDoPdv(new Date(Date.now() - dias * DIA_MS), lojas)
+export async function curvaAbc(limite = 10) {
+  const curva = await abcDoSistemaAntigo()
   if (!curva) return null
   return { ...curva, linhas: curva.linhas.slice(0, limite) }
 }

@@ -63,7 +63,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   const [resumo, diario, abc, rankings] = await Promise.all([
     resumoDoMes(lojas),
     faturamentoDiario(dias, lojas),
-    curvaAbc(dias, lojas),
+    curvaAbc(10),
     rankingsDoPdv(dias, lojas),
   ])
 
@@ -172,15 +172,10 @@ export default function AdminInicio({ loaderData }: Route.ComponentProps) {
         </div>
 
         {/* ---- Curva ABC ---- */}
-        {!abc ? (
-          <Cartao className="mt-4" titulo="Curva ABC" apoio={`vendas do PDV, ${dias} dias`}>
-            <Vazio>Nenhum produto vendido no PDV neste período.</Vazio>
-          </Cartao>
-        ) : null}
         {abc ? (
           <Cartao
             className="mt-4"
-            titulo="Curva ABC — os 10 maiores por valor"
+            titulo="Curva ABC — os 10 maiores por valor · sistema antigo"
             apoio={`${abc.faixas.A.produtos} produtos fazem 80% do valor · ${abc.produtos} no total`}
             acao={
               <Button
@@ -201,14 +196,19 @@ export default function AdminInicio({ loaderData }: Route.ComponentProps) {
               <GraficoAbc linhas={abc.linhas} />
             )}
 
+            {/*
+              A única parte do painel que não vem do PDV — e por isso diz de onde
+              vem e de quando é, para ninguém ler como série viva.
+            */}
             <p className="mt-3 border-t border-border pt-2 text-[11px] leading-relaxed text-muted-foreground">
-              {abc.vendas} {abc.vendas === 1 ? "venda" : "vendas"} do PDV nos últimos {dias}{" "}
-              dias, pelo valor que cada item realmente saiu. A curva do histórico do
-              sistema antigo continua no{" "}
-              <Link to="/admin/relatorios/abc" className="underline underline-offset-2">
-                relatório Curva ABC
-              </Link>
-              .
+              <b className="font-medium text-foreground">
+                Esta curva não vem do PDV: é do histórico do sistema antigo
+              </b>{" "}
+              — {abc.diasAnalisados} dias, calculado em{" "}
+              {new Date(abc.calculadoEm).toLocaleDateString("pt-BR")}. Fica aqui por
+              enquanto, até o PDV ter vendas que bastem. Não muda sozinha, e o valor é
+              estimativa: quantidade vendida × preço de hoje. Não muda com o período
+              escolhido acima.
               {abc.foraPorGrupo > 0 ? (
                 <>
                   {" "}
@@ -269,7 +269,8 @@ export default function AdminInicio({ loaderData }: Route.ComponentProps) {
 
         <p className="mt-4 text-[11px] leading-relaxed text-muted-foreground">
           Tudo aqui vem das vendas registradas <b>neste PDV</b> — sem cancelada e sem
-          transferência entre lojas. Enquanto o caixa novo não estiver em todas as lojas,
+          transferência entre lojas —, menos a curva ABC, que por enquanto é do sistema
+          antigo. Enquanto o caixa novo não estiver em todas as lojas,
           os números são só do que passou por ele.{" "}
           <Link to="/admin/relatorios/comissao" className="underline underline-offset-2">
             Comissão
