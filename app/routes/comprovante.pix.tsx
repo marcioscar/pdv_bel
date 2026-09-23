@@ -79,7 +79,10 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   @page { size: 80mm auto; margin: 2mm 3mm; }
   * { box-sizing: border-box; }
   body {
-    width: 72mm; margin: 0 auto; padding: 0;
+    /* 68mm, e não 72: a área que a térmica da loja imprime é menor que a
+       teórica, e a 72mm o último caractere da coluna da direita saía cortado
+       ("R$ 9,0", "Débit"). Centralizado, sobra folga dos dois lados. */
+    width: 68mm; margin: 0 auto; padding: 0;
     font-family: ui-monospace, "SFMono-Regular", "Menlo", monospace;
     font-size: 11px; line-height: 1.35; color: #000; background: #fff;
   }
@@ -106,7 +109,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   .valor { font-size: 20px; font-weight: 700; margin: 2px 0; }
 
   /*
-   * O E2E quebra em qualquer lugar porque tem 32 caracteres e a bobina tem 72mm.
+   * O E2E quebra em qualquer lugar porque tem 32 caracteres e a bobina tem 68mm úteis.
    * Em corpo menor e ocupando as duas colunas, ele cabe em duas linhas — e é o
    * dado que alguém vai digitar no aplicativo do banco para achar a transação.
    */

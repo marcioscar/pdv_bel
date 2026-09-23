@@ -19,8 +19,9 @@ function formatarCnpj(d: string) {
  *
  * HTML e não PDF de propósito: o navegador imprime direto, sem depender de
  * biblioteca de PDF no servidor, e a impressora térmica recebe do driver comum.
- * A largura útil considerada é 72mm — os 80mm da bobina menos as margens que a
- * própria impressora reserva.
+ * A largura útil considerada é 68mm — os 80mm da bobina menos as margens que a
+ * própria impressora reserva, e mais uma folga: a 72mm a térmica da QI cortava
+ * o último caractere da direita.
  *
  * "NÃO FISCAL" aparece grande e no rodapé: este documento não substitui NF-e, e
  * um cupom que pareça fiscal sem ser é problema do lojista, não do cliente.
@@ -91,7 +92,10 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   @page { size: 80mm auto; margin: 2mm 3mm; }
   * { box-sizing: border-box; }
   body {
-    width: 72mm; margin: 0 auto; padding: 0;
+    /* 68mm, e não 72: a área que a térmica da loja imprime é menor que a
+       teórica, e a 72mm o último caractere da coluna da direita saía cortado
+       ("R$ 9,0", "Débit"). Centralizado, sobra folga dos dois lados. */
+    width: 68mm; margin: 0 auto; padding: 0;
     font-family: ui-monospace, "SFMono-Regular", "Menlo", monospace;
     font-size: 11px; line-height: 1.35; color: #000; background: #fff;
   }
