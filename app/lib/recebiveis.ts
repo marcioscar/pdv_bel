@@ -17,9 +17,12 @@ import { PRIMEIRO_DIA, ULTIMO_DIA } from "~/lib/dia"
  * dinheiro em caixa — e é esse tipo de divergência que faz dois relatórios do
  * mesmo dia darem números diferentes.
  */
-export const SITUACOES_EM_ABERTO = ["A_RECEBER", "EM_PROCESSAMENTO", "ATRASADO"]
-export const SITUACOES_RECEBIDAS = ["RECEBIDO", "PAGO"]
-export const SITUACOES_ENCERRADAS = ["CANCELADO", "EXPIRADO"]
+// PROTESTO continua sendo dívida; MARCADO_RECEBIDO é o "recebi por fora" dado
+// no app do banco; FALHA_EMISSAO nunca virou boleto. As três só aparecem nos
+// boletos emitidos fora daqui, mas a régua é uma só para os dois.
+export const SITUACOES_EM_ABERTO = ["A_RECEBER", "EM_PROCESSAMENTO", "ATRASADO", "PROTESTO"]
+export const SITUACOES_RECEBIDAS = ["RECEBIDO", "PAGO", "MARCADO_RECEBIDO"]
+export const SITUACOES_ENCERRADAS = ["CANCELADO", "EXPIRADO", "FALHA_EMISSAO"]
 
 /**
  * A situação em português, para o papel que vai à gaveta.
@@ -38,6 +41,9 @@ const ROTULOS_DE_SITUACAO: Record<string, string> = {
   PAGO: "Pago",
   CANCELADO: "Cancelado",
   EXPIRADO: "Expirado",
+  PROTESTO: "Em protesto",
+  MARCADO_RECEBIDO: "Baixado à mão",
+  FALHA_EMISSAO: "Falha na emissão",
 }
 
 export function rotuloDaSituacao(situacao: string) {

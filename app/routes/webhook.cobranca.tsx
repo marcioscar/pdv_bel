@@ -1,3 +1,4 @@
+import { reconferirBoletoExterno } from "~/lib/boletos-externos.server"
 import type { Route } from "./+types/webhook.cobranca"
 import { consultarCobranca } from "~/lib/cobranca.server"
 import { db } from "~/lib/db.server"
@@ -79,7 +80,26 @@ export async function action({ request, params }: Route.ActionArgs) {
       select: { conta: true, situacao: true },
     })
     if (!nossa) {
-      console.info(`[webhook cobranca ${rotulo}] ${codigoSolicitacao} não é nossa`)
+      /*
+       * Não é do PDV, mas pode ser um boleto do sistema antigo que a busca de
+       * Inadimplentes já trouxe: o Inter avisa de todos os boletos da conta.
+       * Esse é conferido no banco e atualizado — é assim que o pagamento de um
+       * boleto antigo tira o cliente da lista sem ninguém clicar em nada.
+       */
+      try {
+        const externo = await reconferirBoletoExterno(codigoSolicitacao)
+        console.info(
+          externo
+            ? `[webhook cobranca ${rotulo}] ${codigoSolicitacao} (externo): ${externo.antes} -> ${externo.depois}`
+            : `[webhook cobranca ${rotulo}] ${codigoSolicitacao} não é nossa nem conhecida`
+        )
+      } catch (erro) {
+        falhouConsulta = true
+        console.error(
+          `[webhook cobranca ${rotulo}] falha ao conferir externo ${codigoSolicitacao}:`,
+          erro instanceof Error ? erro.message : erro
+        )
+      }
       continue
     }
 

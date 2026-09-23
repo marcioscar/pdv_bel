@@ -339,6 +339,43 @@ model Cobranca {
   @@map("cobrancas")
 }
 
+/// Boleto emitido no Inter por FORA deste sistema — o sistema de contas antigo,
+/// o app do banco. Trazido pela busca em "Inadimplentes" e mantido em dia pelo
+/// webhook, para o mesmo cliente não ser inadimplente num sistema e bom pagador
+/// no outro.
+///
+/// Não é `Cobranca`: aquela nasce de uma venda do PDV e carrega `vendaId`,
+/// parcela e a numeração dela. Este não tem venda nenhuma aqui — só pagador,
+/// valor e vencimento. Forçar os dois no mesmo modelo deixaria `vendaId`
+/// opcional, e toda regra que hoje confia nele precisaria desconfiar.
+///
+/// O cliente é achado pelo CPF/CNPJ do pagador na hora da consulta, e não
+/// gravado: cadastro feito depois da busca já enxerga a dívida dele.
+model BoletoExterno {
+  id                String    @id @default(auto()) @map("_id") @db.ObjectId
+  codigoSolicitacao String    @unique
+  /// Conta do Inter que emitiu (MATRIZ, NRT, SDS) — a mesma que se consulta.
+  conta             String
+  seuNumero         String?
+  situacao          String
+  dataSituacao      DateTime?
+  emissao           DateTime?
+  vencimento        DateTime
+  valor             Float
+  valorRecebido     Float?
+  /// Só dígitos.
+  pagadorCpfCnpj    String
+  pagadorNome       String
+  nossoNumero       String?
+  linhaDigitavel    String?
+  /// Quando a busca ou o webhook confirmou esta situação no Inter.
+  conferidoEm       DateTime  @default(now())
+
+  @@index([pagadorCpfCnpj])
+  @@index([situacao, vencimento])
+  @@map("boletos_externos")
+}
+
 /// Livro-caixa do estoque: o saldo de um produto é a soma de `quantidade` dos
 /// seus movimentos, nunca um número guardado. Saída é negativa, entrada é
 /// positiva — assim o estorno é só um movimento de sinal oposto, e o histórico

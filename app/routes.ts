@@ -66,6 +66,7 @@ export default [
       route("caixas", "routes/admin.caixas.tsx"),
       route("caixas/:fechamentoId", "routes/admin.caixa.tsx"),
       route("contas-a-receber", "routes/admin.contas-a-receber.tsx"),
+      route("inadimplentes", "routes/admin.inadimplentes.tsx"),
       route("autorizacoes", "routes/admin.autorizacoes.tsx"),
       // Cada relatório é uma rota irmã: nenhum deles é layout do outro.
       route("relatorios/abc", "routes/admin.relatorios.abc.tsx"),

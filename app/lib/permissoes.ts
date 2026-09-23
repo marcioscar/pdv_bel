@@ -213,6 +213,12 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         descricao: "Boletos por vencimento: em aberto, vencidos e recebidos",
         somenteGerente: true,
       },
+      {
+        para: "/admin/inadimplentes",
+        rotulo: "Inadimplentes",
+        descricao: "Quem deve boleto vencido, do PDV e do sistema antigo, e o que entrou",
+        somenteGerente: true,
+      },
     ],
   },
   {

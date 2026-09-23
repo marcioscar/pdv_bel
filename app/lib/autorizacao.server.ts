@@ -43,23 +43,37 @@ export async function dividaDoCliente(clienteId: string | null): Promise<Divida>
   if (!clienteId) return SEM_DIVIDA
 
   // As vendas do cliente em qualquer loja — é por elas que se chega às cobranças.
-  const vendas = await db.venda.findMany({
-    where: { clienteId },
-    select: { id: true },
-  })
-  if (vendas.length === 0) return SEM_DIVIDA
+  const [vendas, cliente] = await Promise.all([
+    db.venda.findMany({ where: { clienteId }, select: { id: true } }),
+    db.cliente.findUnique({ where: { id: clienteId }, select: { cpfCnpj: true } }),
+  ])
 
   const limite = inicioDoDia(diaAtras(DIAS_DE_CARENCIA))
+  const vencidoEmAberto = { situacao: { in: SITUACOES_EM_ABERTO }, vencimento: { lt: limite } }
 
-  const vencidas = await db.cobranca.findMany({
-    where: {
-      vendaId: { in: vendas.map((venda) => venda.id) },
-      situacao: { in: SITUACOES_EM_ABERTO },
-      vencimento: { lt: limite },
-    },
-    orderBy: { vencimento: "asc" },
-    select: { valor: true, vencimento: true },
-  })
+  /*
+   * Os boletos emitidos FORA daqui (sistema antigo, app do banco) entram pela
+   * mesma régua, achados pelo CPF/CNPJ do pagador: dívida é do documento, não
+   * do sistema que emitiu. Decisão do Marcio em 23/09/2026 — sem isto, quem
+   * devia no sistema antigo passava no caixa como bom pagador.
+   */
+  const [doPdv, deFora] = await Promise.all([
+    vendas.length > 0
+      ? db.cobranca.findMany({
+          where: { vendaId: { in: vendas.map((venda) => venda.id) }, ...vencidoEmAberto },
+          select: { valor: true, vencimento: true },
+        })
+      : [],
+    cliente?.cpfCnpj
+      ? db.boletoExterno.findMany({
+          where: { pagadorCpfCnpj: cliente.cpfCnpj, ...vencidoEmAberto },
+          select: { valor: true, vencimento: true },
+        })
+      : [],
+  ])
+  const vencidas = [...doPdv, ...deFora].sort(
+    (a, b) => a.vencimento.getTime() - b.vencimento.getTime()
+  )
 
   if (vencidas.length === 0) return SEM_DIVIDA
 
