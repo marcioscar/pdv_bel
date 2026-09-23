@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { data, Form, useNavigation } from "react-router"
-import { ChevronDown, ChevronRight, Loader2, RefreshCw, UserX } from "lucide-react"
+import { ChevronDown, ChevronRight, Loader2, Printer, RefreshCw, UserX } from "lucide-react"
 
 import type { Route } from "./+types/admin.inadimplentes"
 import { Numero } from "~/components/pdv/numero"
@@ -13,6 +13,7 @@ import {
   resumoDosBoletos,
 } from "~/lib/boletos-externos.server"
 import { formatarCpfCnpj } from "~/lib/documento"
+import { imprimirDocumento } from "~/lib/impressao"
 import { moeda } from "~/lib/moeda"
 import { rotuloDaSituacao } from "~/lib/recebiveis"
 import { exigirGerente } from "~/lib/sessao.server"
@@ -61,6 +62,18 @@ export default function Inadimplentes({ loaderData, actionData }: Route.Componen
   const { devedores, resumo, pagamentos } = loaderData
   const buscando = useNavigation().state === "submitting"
   const [aberto, setAberto] = useState<string | null>(null)
+  const [gerando, setGerando] = useState(false)
+  const [erroDaFolha, setErroDaFolha] = useState<string | null>(null)
+
+  // Abre a caixa de impressão do navegador — ali se escolhe a impressora ou
+  // "Salvar como PDF".
+  async function imprimir() {
+    setGerando(true)
+    setErroDaFolha(null)
+    const problema = await imprimirDocumento("/admin/inadimplentes/impressao")
+    setGerando(false)
+    if (problema) setErroDaFolha(problema)
+  }
 
   const vencidoTotal = resumo.vencido.pdv.valor + resumo.vencido.antigo.valor
   const aVencerTotal = resumo.aVencer.pdv.valor + resumo.aVencer.antigo.valor
@@ -80,6 +93,17 @@ export default function Inadimplentes({ loaderData, actionData }: Route.Componen
               ? `boletos antigos conferidos em ${new Date(resumo.ultimaBusca).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}`
               : "boletos do sistema antigo ainda não trazidos"}
           </span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={gerando || devedores.length === 0}
+            onClick={imprimir}
+            className="rounded-lg"
+          >
+            {gerando ? <Loader2 className="size-4 animate-spin" /> : <Printer className="size-4" />}
+            {gerando ? "Gerando…" : "Imprimir por loja"}
+          </Button>
           <Button type="submit" size="sm" disabled={buscando} className="rounded-lg">
             {buscando ? (
               <Loader2 className="size-4 animate-spin" />
@@ -92,6 +116,11 @@ export default function Inadimplentes({ loaderData, actionData }: Route.Componen
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
+        {erroDaFolha ? (
+          <div className="border-b border-border bg-destructive/10 px-4 py-2.5 text-xs text-destructive sm:px-5">
+            {erroDaFolha}
+          </div>
+        ) : null}
         {actionData ? (
           <div
             className={cn(
@@ -182,6 +211,7 @@ export default function Inadimplentes({ loaderData, actionData }: Route.Componen
                           ) : null}
                           <span className="block font-mono text-[11px] text-muted-foreground">
                             {d.documento ? formatarCpfCnpj(d.documento) : "sem documento"}
+                            {d.documentos.length > 1 ? ` · ${d.documentos.length} filiais` : null}
                             {d.clienteId ? null : " · sem cadastro aqui"}
                           </span>
                         </td>
@@ -216,7 +246,14 @@ export default function Inadimplentes({ loaderData, actionData }: Route.Componen
                                         {b.origem === "antigo" ? "sistema antigo" : "PDV"}
                                       </Badge>
                                     </td>
-                                    <td className="py-1 pr-2">{b.referencia}</td>
+                                    <td className="py-1 pr-2">
+                                      {b.referencia}
+                                      {d.documentos.length > 1 ? (
+                                        <span className="ml-2 font-mono text-[10px] text-muted-foreground">
+                                          {formatarCpfCnpj(b.documento)}
+                                        </span>
+                                      ) : null}
+                                    </td>
                                     <td className="py-1 pr-2 font-mono text-muted-foreground">{b.conta}</td>
                                     <td className="py-1 pr-2">venceu {dataCurta(b.vencimento)}</td>
                                     <td className="py-1 pr-2 text-muted-foreground">

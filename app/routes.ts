@@ -80,6 +80,7 @@ export default [
     // Fora do layout de propósito: é folha para imprimir, e dentro dele sairia
     // com a sidebar junto. A guarda de gerente é cobrada na própria rota.
     route("contas-a-receber/impressao", "routes/contas-a-receber.impressao.tsx"),
+    route("inadimplentes/impressao", "routes/inadimplentes.impressao.tsx"),
   ]),
 
   // Usuários morava aqui: quem tiver o link antigo continua chegando.

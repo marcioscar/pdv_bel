@@ -1,6 +1,7 @@
 import { db } from "~/lib/db.server"
 import { diaAdiante, diaAtras, diaDeHoje, emDia, inicioDoDia, meioDiaDe } from "~/lib/dia"
 import { chamarInter, ErroInter, interConfigurado } from "~/lib/inter.server"
+import { raizDoCnpj } from "~/lib/documento"
 import { arredondar } from "~/lib/moeda"
 import {
   SITUACOES_EM_ABERTO,
@@ -317,6 +318,14 @@ export type BoletoDoDevedor = {
   origem: "pdv" | "antigo"
   referencia: string
   conta: string
+  /**
+   * A loja, quando se sabe. O boleto do PDV sabe (a venda foi numa loja); o de
+   * fora só sabe a conta que emitiu, e a da matriz é de QI e QNE juntas — aí
+   * vem "QI/QNE", que é a verdade: não há como dizer qual das duas vendeu.
+   */
+  loja: string
+  /** O CPF/CNPJ que está no boleto — numa empresa com filiais, diz qual delas deve. */
+  documento: string
   vencimento: Date
   valor: number
   situacao: string
@@ -345,20 +354,35 @@ export async function inadimplentes() {
   })
   const vendaPorId = new Map(vendas.map((v) => [v.id, v]))
 
-  const grupos = new Map<string, { nome: string; boletos: BoletoDoDevedor[] }>()
-  const juntar = (documento: string, nome: string, boleto: BoletoDoDevedor) => {
-    const chave = documento || `sem-documento:${nome}`
-    const grupo = grupos.get(chave) ?? { nome, boletos: [] }
+  // Conta → as lojas que a usam, na ordem do cadastro (matriz antes da filial).
+  const lojas = await db.loja.findMany({ orderBy: { ordem: "asc" }, select: { codigo: true, conta: true } })
+  const lojasDaConta = new Map<string, string[]>()
+  for (const l of lojas) lojasDaConta.set(l.conta, [...(lojasDaConta.get(l.conta) ?? []), l.codigo])
+  const lojaDaConta = (conta: string) => (lojasDaConta.get(conta) ?? [conta]).join("/")
+
+  /*
+   * A chave é a EMPRESA, não o estabelecimento: as filiais de um CNPJ (mesma
+   * raiz, os 8 primeiros dígitos) são uma dívida só — a CIPLAN com quatro
+   * filiais devendo aparecia quatro vezes, e quem liga para cobrar liga para
+   * uma empresa. CPF não tem filial e fica inteiro.
+   */
+  const grupos = new Map<string, { nome: string; documentos: Set<string>; boletos: BoletoDoDevedor[] }>()
+  const juntar = (nome: string, boleto: BoletoDoDevedor) => {
+    const chave = raizDoCnpj(boleto.documento) ?? (boleto.documento || `sem-documento:${nome}`)
+    const grupo = grupos.get(chave) ?? { nome, documentos: new Set<string>(), boletos: [] }
+    if (boleto.documento) grupo.documentos.add(boleto.documento)
     grupo.boletos.push(boleto)
     grupos.set(chave, grupo)
   }
 
   for (const c of doPdv) {
     const venda = vendaPorId.get(c.vendaId)
-    juntar(soDocumento(venda?.clienteCpfCnpj ?? ""), venda?.clienteNome ?? "—", {
+    juntar(venda?.clienteNome ?? "—", {
+      documento: soDocumento(venda?.clienteCpfCnpj ?? ""),
       origem: "pdv",
       referencia: `Venda #${c.vendaNumero}${c.parcelas > 1 ? ` · ${c.parcela}/${c.parcelas}` : ""}`,
       conta: c.conta,
+      loja: c.loja,
       vencimento: c.vencimento,
       valor: c.valor,
       situacao: c.situacao,
@@ -366,10 +390,12 @@ export async function inadimplentes() {
     })
   }
   for (const b of deFora) {
-    juntar(b.pagadorCpfCnpj, b.pagadorNome, {
+    juntar(b.pagadorNome, {
+      documento: b.pagadorCpfCnpj,
       origem: "antigo",
       referencia: b.seuNumero ? `Nº ${b.seuNumero}` : "Sistema antigo",
       conta: b.conta,
+      loja: lojaDaConta(b.conta),
       vencimento: b.vencimento,
       valor: b.valor,
       situacao: b.situacao,
@@ -378,7 +404,7 @@ export async function inadimplentes() {
   }
 
   // O cadastro daqui, quando existe: nome certo e telefone para ligar.
-  const documentos = [...grupos.keys()].filter((d) => !d.startsWith("sem-documento:"))
+  const documentos = [...grupos.values()].flatMap((g) => [...g.documentos])
   const clientes = await db.cliente.findMany({
     where: { cpfCnpj: { in: documentos } },
     select: {
@@ -395,15 +421,23 @@ export async function inadimplentes() {
   const clientePorDocumento = new Map(clientes.map((c) => [c.cpfCnpj, c]))
 
   const hojeMs = hoje.getTime()
-  const linhas = [...grupos.entries()]
-    .map(([documento, grupo]) => {
+  const linhas = [...grupos.values()]
+    .map((grupo) => {
       const boletos = grupo.boletos.sort((a, b) => a.vencimento.getTime() - b.vencimento.getTime())
-      const cliente = clientePorDocumento.get(documento) ?? null
-      const telefone = cliente?.telefone
-        ? `${cliente.ddd ? `(${cliente.ddd}) ` : ""}${cliente.telefone}`
+      // A matriz (estabelecimento 0001) fala pela empresa; sem ela no cadastro,
+      // a primeira filial que estiver. O telefone vem de quem tiver um.
+      const docs = [...grupo.documentos].sort()
+      const representante = docs.find((d) => d.length === 14 && d.slice(8, 12) === "0001") ?? docs[0] ?? null
+      const cadastrados = docs.map((d) => clientePorDocumento.get(d)).filter((c) => c !== undefined)
+      const cliente = (representante && clientePorDocumento.get(representante)) || cadastrados[0] || null
+      const comTelefone = cliente?.telefone ? cliente : cadastrados.find((c) => c.telefone) ?? null
+      const telefone = comTelefone?.telefone
+        ? `${comTelefone.ddd ? `(${comTelefone.ddd}) ` : ""}${comTelefone.telefone}`
         : null
       return {
-        documento: documento.startsWith("sem-documento:") ? null : documento,
+        documento: representante,
+        /** Todos os CPF/CNPJ que devem nesta linha — mais de um é empresa com filiais. */
+        documentos: docs,
         nome: cliente?.nome ?? grupo.nome,
         nomeFantasia: cliente?.nomeFantasia ?? null,
         clienteId: cliente?.id ?? null,
