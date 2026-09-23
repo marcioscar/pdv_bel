@@ -1,11 +1,22 @@
 import { Form, Link, useLocation } from "react-router"
-import { LogOut, Moon, SlidersHorizontal, Store, Sun } from "lucide-react"
+import { ChevronDown, LogOut, Moon, SlidersHorizontal, Store, Sun } from "lucide-react"
 
 import { AvisosDoTopo } from "~/components/pdv/avisos-topo"
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "~/components/ui/dropdown-menu"
 import { Kbd } from "~/components/ui/kbd"
-import { ehGerente, secoesDoPapel } from "~/lib/permissoes"
+import { ehGerente, menusDoTopo, secoesDoPapel } from "~/lib/permissoes"
 import { cn } from "~/lib/utils"
 
 type Props = {
@@ -36,6 +47,12 @@ export function Topo({
   // Trocar a loja do turno é do gerente: move venda, estoque e caixa de lugar.
   const podeTrocar = lojasPermitidas > 1 && ehGerente(papel)
 
+  // Prefixo, não igualdade: /vendas/123/cupom continua sendo Vendas.
+  const estaEm = (para: string) =>
+    pathname === para || (para !== "/" && pathname.startsWith(`${para}/`))
+  const caixa = secoesDoPapel(papel).find((secao) => secao.para === "/")
+  const menus = menusDoTopo(papel)
+
   return (
     <header className="flex items-center justify-between gap-2 border-b border-border px-2.5 py-2 sm:px-5 sm:py-2.5">
       <div className="flex min-w-0 items-center gap-2 sm:gap-4">
@@ -51,35 +68,95 @@ export function Topo({
           />
         </span>
 
-        {/* Rola em vez de estourar: com cinco itens e um celular estreito, o que
-            não cabe fica alcançável pelo dedo em vez de sumir fora da tela. */}
-        <nav className="flex min-w-0 items-center gap-0.5 overflow-x-auto sm:gap-1 [&::-webkit-scrollbar]:hidden">
-          {secoesDoPapel(papel).map((secao) => {
-            // A administração é a única com ícone: ela não é uma seção de turno, e
-            // o ícone marca essa diferença sem precisar de separador.
-            const Icone = secao.para === "/admin" ? SlidersHorizontal : null
-            // Prefixo, não igualdade: /admin/produtos precisa acender "Administração".
-            const ativa =
-              pathname === secao.para ||
-              (secao.para !== "/" && pathname.startsWith(`${secao.para}/`))
+        {/*
+          O Caixa sozinho, um clique: é a tela de quem tem cliente na frente. O
+          resto em três menus, com os grupos da administração como submenus —
+          quatro botões cabem em qualquer monitor, e a barra plana de seis itens
+          rolava para o lado num de 1366, rolagem que o mouse não faz. Os atalhos
+          Ctrl+F continuam valendo e aparecem ao lado de cada item.
+        */}
+        <nav className="flex min-w-0 items-center gap-1">
+          {caixa ? (
+            <Button
+              render={<Link to={caixa.para} />}
+              // O elemento renderizado é um <a>, não um <button>.
+              nativeButton={false}
+              tabIndex={-1}
+              variant={estaEm(caixa.para) ? "secondary" : "ghost"}
+              size="sm"
+              title={caixa.tecla ? `Ctrl ${caixa.tecla}` : undefined}
+              className={cn("rounded-lg", estaEm(caixa.para) && "font-semibold")}
+            >
+              {caixa.rotulo}
+              {caixa.tecla ? (
+                <Kbd className="hidden text-[9px] xl:inline-flex">Ctrl {caixa.tecla}</Kbd>
+              ) : null}
+            </Button>
+          ) : null}
+
+          {menus.map((menu) => {
+            const ativo =
+              menu.secoes.some((secao) => estaEm(secao.para)) ||
+              menu.grupos.some((grupo) => grupo.secoes.some((secao) => estaEm(secao.para)))
             return (
-              <Button
-                key={secao.para}
-                render={<Link to={secao.para} />}
-                // O elemento renderizado é um <a>, não um <button>.
-                nativeButton={false}
-                tabIndex={-1}
-                variant={ativa ? "secondary" : "ghost"}
-                size="sm"
-                className={cn("rounded-lg", ativa && "font-semibold")}
-              >
-                {Icone ? <Icone className="size-3.5" aria-hidden /> : null}
-                {secao.rotulo}
-                {/* Tecla de função em celular é ruído: não há teclado. */}
-                {secao.tecla ? (
-                  <Kbd className="hidden text-[9px] lg:inline-flex">Ctrl {secao.tecla}</Kbd>
-                ) : null}
-              </Button>
+              <DropdownMenu key={menu.id}>
+                <DropdownMenuTrigger
+                  render={
+                    <Button
+                      type="button"
+                      tabIndex={-1}
+                      variant={ativo ? "secondary" : "ghost"}
+                      size="sm"
+                      className={cn("rounded-lg", ativo && "font-semibold")}
+                    />
+                  }
+                >
+                  {menu.id === "adm" ? (
+                    <SlidersHorizontal className="size-3.5" aria-hidden />
+                  ) : null}
+                  {menu.rotulo}
+                  <ChevronDown className="size-3.5 opacity-60" aria-hidden />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="min-w-56">
+                  {menu.secoes.map((secao) => (
+                    <DropdownMenuItem
+                      key={secao.para}
+                      render={<Link to={secao.para} />}
+                      className={cn(estaEm(secao.para) && "font-semibold")}
+                    >
+                      {secao.para === "/admin" ? "Painel" : secao.rotulo}
+                      {secao.tecla ? (
+                        <DropdownMenuShortcut>Ctrl {secao.tecla}</DropdownMenuShortcut>
+                      ) : null}
+                    </DropdownMenuItem>
+                  ))}
+                  {menu.secoes.length > 0 && menu.grupos.length > 0 ? (
+                    <DropdownMenuSeparator />
+                  ) : null}
+                  {menu.grupos.map((grupo) => (
+                    <DropdownMenuSub key={grupo.id}>
+                      <DropdownMenuSubTrigger
+                        className={cn(
+                          grupo.secoes.some((secao) => estaEm(secao.para)) && "font-semibold"
+                        )}
+                      >
+                        {grupo.rotulo}
+                      </DropdownMenuSubTrigger>
+                      <DropdownMenuSubContent className="min-w-56">
+                        {grupo.secoes.map((secao) => (
+                          <DropdownMenuItem
+                            key={secao.para}
+                            render={<Link to={secao.para} />}
+                            className={cn(estaEm(secao.para) && "font-semibold")}
+                          >
+                            {secao.rotulo}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuSubContent>
+                    </DropdownMenuSub>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
             )
           })}
         </nav>

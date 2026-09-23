@@ -69,7 +69,9 @@ export const SECOES = [
   // caixa no carro está de pé no estoque, e mandar essa pessoa procurar a tela
   // dentro da administração significa, na prática, esperar o gerente. Foi por
   // isso que a barra cresceu — o critério continua sendo quem faz, não o que é.
-  { para: "/transferencias", rotulo: "Transf", tecla: "F4", somenteGerente: false },
+  // "Transferências" por extenso: o rótulo curto existia para caber na barra
+  // plana, e agora ele vive dentro de um menu, onde há espaço.
+  { para: "/transferencias", rotulo: "Transferências", tecla: "F4", somenteGerente: false },
   // Fechar o caixa é a última tarefa do turno, feita por quem contou a gaveta.
   // "Fechamento", e não "Caixa": este já é o nome do PDV em F1, e dois itens com
   // o mesmo rótulo na mesma barra é um convite a clicar no errado.
@@ -318,6 +320,55 @@ export function gruposAdminDoPapel(papel: string) {
     ...grupo,
     secoes: grupo.secoes.filter((secao) => !secao.somenteGerente || ehGerente(papel)),
   })).filter((grupo) => grupo.secoes.length > 0)
+}
+
+/**
+ * Os menus da barra de cima: o Caixa sozinho, e o resto em três menus com os
+ * grupos da administração como submenus.
+ *
+ * Foi a barra plana de seis itens, com a etiqueta do atalho em cada um, que não
+ * cabia num monitor de 1366 e rolava para o lado — rolagem que o mouse não faz.
+ * Quatro botões cabem em qualquer tela, e o menu leva a qualquer lugar do
+ * sistema sem passar pela lateral do Adm. Os atalhos Ctrl+F continuam vindo de
+ * SECOES, e não daqui: agrupar é apresentação, a tecla é da seção.
+ *
+ * Só referencia — seções por caminho, grupos por id —, e o papel filtra os
+ * dois pela mesma regra de sempre. Assim uma tela nova entra no menu pelo grupo
+ * em que foi declarada, e nunca aparece para quem a guarda recusaria.
+ */
+export const MENUS_DO_TOPO = [
+  { id: "estoque", rotulo: "Estoque", secoes: ["/estoque", "/transferencias"], grupos: ["produtos", "compras"] },
+  { id: "financeiro", rotulo: "Financeiro", secoes: ["/vendas", "/fechamento"], grupos: ["vendas", "financeiro"] },
+  { id: "adm", rotulo: "Adm", secoes: ["/admin"], grupos: ["relatorios", "cadastros"] },
+] as const
+
+/**
+ * O nome do grupo DENTRO de um menu do topo, quando o da lateral repetiria o que
+ * já está ao lado: no menu Financeiro, "Vendas" ficaria embaixo da tela Vendas
+ * (F3), e "Financeiro" dentro do próprio Financeiro. Aqui eles dizem o que têm.
+ */
+const ROTULO_NO_TOPO: Record<string, string> = {
+  vendas: "Vendas da rede",
+  financeiro: "Contas e caixas",
+}
+
+export function menusDoTopo(papel: string) {
+  const secoes = secoesDoPapel(papel)
+  const grupos = gruposAdminDoPapel(papel)
+  return MENUS_DO_TOPO.map((menu) => ({
+    id: menu.id,
+    rotulo: menu.rotulo,
+    // O painel (/admin) é faturamento: para o operador a rota só redireciona,
+    // e um item que não leva aonde diz é pior que item nenhum.
+    secoes: secoes.filter(
+      (secao) =>
+        (menu.secoes as readonly string[]).includes(secao.para) &&
+        (secao.para !== "/admin" || ehGerente(papel))
+    ),
+    grupos: grupos
+      .filter((grupo) => (menu.grupos as readonly string[]).includes(grupo.id))
+      .map((grupo) => ({ ...grupo, rotulo: ROTULO_NO_TOPO[grupo.id] ?? grupo.rotulo })),
+  })).filter((menu) => menu.secoes.length > 0 || menu.grupos.length > 0)
 }
 
 /** O grupo em que uma seção mora — é o que a sidebar abre ao entrar na tela. */
