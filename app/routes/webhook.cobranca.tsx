@@ -77,7 +77,7 @@ export async function action({ request, params }: Route.ActionArgs) {
     // interessa — e nem daria para consultar, porque não sabemos a conta.
     const nossa = await db.cobranca.findUnique({
       where: { codigoSolicitacao },
-      select: { conta: true, situacao: true },
+      select: { conta: true, situacao: true, baixadoEm: true },
     })
     if (!nossa) {
       /*
@@ -100,6 +100,13 @@ export async function action({ request, params }: Route.ActionArgs) {
           erro instanceof Error ? erro.message : erro
         )
       }
+      continue
+    }
+
+    // Baixado na loja: o aviso é o do cancelamento que a própria baixa pediu, e
+    // a situação que vale é a da baixa, não o CANCELADO do banco.
+    if (nossa.baixadoEm) {
+      console.info(`[webhook cobranca ${rotulo}] ${codigoSolicitacao} baixado na loja, ignorado`)
       continue
     }
 

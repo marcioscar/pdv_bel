@@ -4,6 +4,7 @@ import {
   MORA_MENSAL_PERCENTUAL_BOLETO,
   MULTA_PERCENTUAL_BOLETO,
 } from "~/lib/pdv"
+import { SITUACOES_RECEBIDAS } from "~/lib/recebiveis"
 
 /** Campos do `pagador` como a API de Cobrança espera. */
 export type PagadorInter = {
@@ -495,7 +496,7 @@ const CANCELAVEIS = ["A_RECEBER", "EM_PROCESSAMENTO", "ATRASADO"]
  * afirmaria que o boleto morreu sem ninguém ter verificado. Devolve a situação
  * confirmada, ou null se não deu tempo — e null NÃO é tratado como sucesso.
  */
-async function aguardarCancelamento(
+export async function aguardarCancelamento(
   codigoSolicitacao: string,
   conta: string,
   { tentativas = 4, intervaloMs = 1500 } = {}
@@ -547,6 +548,18 @@ export async function cancelarCobrancasDaVenda(
 
   for (const c of cobrancas) {
     let situacao = c.situacao
+    // Pago na loja é pagamento: não se consulta (o Inter diria CANCELADO) e a
+    // venda não se cancela sem devolução, como qualquer parcela paga.
+    if (c.baixadoEm) {
+      atuais.push({
+        id: c.id,
+        codigoSolicitacao: c.codigoSolicitacao,
+        situacao,
+        parcela: c.parcela,
+        conta: c.conta,
+      })
+      continue
+    }
     try {
       const detalhe = await consultarCobranca(c.codigoSolicitacao, c.conta)
       situacao = detalhe.cobranca?.situacao ?? situacao
@@ -568,7 +581,7 @@ export async function cancelarCobrancasDaVenda(
     })
   }
 
-  const pagas = atuais.filter((c) => c.situacao === "RECEBIDO" || c.situacao === "PAGO")
+  const pagas = atuais.filter((c) => SITUACOES_RECEBIDAS.includes(c.situacao))
   if (pagas.length > 0) {
     const quais = pagas.map((c) => `${c.parcela}ª`).join(", ")
     return {

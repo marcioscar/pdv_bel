@@ -333,6 +333,17 @@ model Cobranca {
   criadaEm          DateTime @default(now())
   atualizadaEm      DateTime @updatedAt
 
+  /// Baixa manual: o cliente pagou na loja, e o boleto foi cancelado no Inter
+  /// para não ser pago de novo. Com a baixa, a situação fica "PAGO_NA_LOJA" e
+  /// nem a busca nem o webhook a sobrescrevem — o Inter passa a dizer
+  /// "CANCELADO", mas aqui o que aconteceu foi um pagamento.
+  baixadoEm         DateTime?
+  baixadoPor        String?
+  /// "dinheiro", "pix", "cartao". Não entra no fechamento do caixa (decisão do
+  /// Marcio em 23/09/2026) — é só o registro de como o cliente pagou.
+  baixaForma        String?
+  baixaValor        Float?
+
   @@unique([vendaId, parcela])
   @@index([vendaNumero])
   @@index([loja])
@@ -370,6 +381,17 @@ model BoletoExterno {
   linhaDigitavel    String?
   /// Quando a busca ou o webhook confirmou esta situação no Inter.
   conferidoEm       DateTime  @default(now())
+
+  /// Baixa manual: o cliente pagou na loja, e o boleto foi cancelado no Inter
+  /// para não ser pago de novo. Com a baixa, a situação fica "PAGO_NA_LOJA" e
+  /// nem a busca nem o webhook a sobrescrevem — o Inter passa a dizer
+  /// "CANCELADO", mas aqui o que aconteceu foi um pagamento.
+  baixadoEm         DateTime?
+  baixadoPor        String?
+  /// "dinheiro", "pix", "cartao". Não entra no fechamento do caixa (decisão do
+  /// Marcio em 23/09/2026) — é só o registro de como o cliente pagou.
+  baixaForma        String?
+  baixaValor        Float?
 
   @@index([pagadorCpfCnpj])
   @@index([situacao, vencimento])

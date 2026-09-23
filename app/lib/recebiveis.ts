@@ -21,7 +21,16 @@ import { PRIMEIRO_DIA, ULTIMO_DIA } from "~/lib/dia"
 // no app do banco; FALHA_EMISSAO nunca virou boleto. As três só aparecem nos
 // boletos emitidos fora daqui, mas a régua é uma só para os dois.
 export const SITUACOES_EM_ABERTO = ["A_RECEBER", "EM_PROCESSAMENTO", "ATRASADO", "PROTESTO"]
-export const SITUACOES_RECEBIDAS = ["RECEBIDO", "PAGO", "MARCADO_RECEBIDO"]
+// PAGO_NA_LOJA é nossa, não do Inter: a baixa manual de quem pagou no balcão.
+export const PAGO_NA_LOJA = "PAGO_NA_LOJA"
+export const SITUACOES_RECEBIDAS = ["RECEBIDO", "PAGO", "MARCADO_RECEBIDO", PAGO_NA_LOJA]
+/** Como o cliente pagou o boleto no balcão — a tela oferece, a baixa confere. */
+export const FORMAS_DA_BAIXA = [
+  { id: "dinheiro", rotulo: "Dinheiro" },
+  { id: "pix", rotulo: "Pix" },
+  { id: "cartao", rotulo: "Cartão" },
+] as const
+
 export const SITUACOES_ENCERRADAS = ["CANCELADO", "EXPIRADO", "FALHA_EMISSAO"]
 
 /**
@@ -43,6 +52,7 @@ const ROTULOS_DE_SITUACAO: Record<string, string> = {
   EXPIRADO: "Expirado",
   PROTESTO: "Em protesto",
   MARCADO_RECEBIDO: "Baixado à mão",
+  PAGO_NA_LOJA: "Pago na loja",
   FALHA_EMISSAO: "Falha na emissão",
 }
 

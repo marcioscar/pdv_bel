@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { data, Form, useNavigation } from "react-router"
+import { data, Form, useFetcher, useNavigation } from "react-router"
 import { ChevronDown, ChevronRight, Loader2, Printer, RefreshCw, UserX } from "lucide-react"
 
 import type { Route } from "./+types/admin.inadimplentes"
@@ -7,6 +7,7 @@ import { Numero } from "~/components/pdv/numero"
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
 import {
+  baixarNaLoja,
   buscarBoletosNoInter,
   inadimplentes,
   pagamentosRecentes,
@@ -14,8 +15,8 @@ import {
 } from "~/lib/boletos-externos.server"
 import { formatarCpfCnpj } from "~/lib/documento"
 import { imprimirDocumento } from "~/lib/impressao"
-import { moeda } from "~/lib/moeda"
-import { rotuloDaSituacao } from "~/lib/recebiveis"
+import { interpretarValor, moeda } from "~/lib/moeda"
+import { FORMAS_DA_BAIXA, rotuloDaSituacao } from "~/lib/recebiveis"
 import { exigirGerente } from "~/lib/sessao.server"
 import { cn } from "~/lib/utils"
 
@@ -43,7 +44,24 @@ export async function loader({ request }: Route.LoaderArgs) {
 }
 
 export async function action({ request }: Route.ActionArgs) {
-  await exigirGerente(request, "verContasAReceber")
+  const eu = await exigirGerente(request, "verContasAReceber")
+  const form = await request.formData()
+
+  // A baixa de quem pagou na loja. Vem por um fetcher, e por isso responde com
+  // `baixa` em vez de `busca`: a faixa do resultado da busca não se confunde.
+  if (form.get("intencao") === "baixar") {
+    const r = await baixarNaLoja({
+      origem: String(form.get("origem") ?? ""),
+      id: String(form.get("id") ?? ""),
+      forma: String(form.get("forma") ?? ""),
+      valor: interpretarValor(String(form.get("valor") ?? "")) ?? 0,
+      gerente: eu.nome,
+    })
+    return r.ok
+      ? { ok: true as const, baixa: r.mensagem }
+      : data({ ok: false as const, erro: r.erro }, { status: 400 })
+  }
+
   try {
     return { ok: true as const, busca: await buscarBoletosNoInter() }
   } catch (erro) {
@@ -64,6 +82,10 @@ export default function Inadimplentes({ loaderData, actionData }: Route.Componen
   const [aberto, setAberto] = useState<string | null>(null)
   const [gerando, setGerando] = useState(false)
   const [erroDaFolha, setErroDaFolha] = useState<string | null>(null)
+  // O boleto com o formulário de baixa aberto — um de cada vez.
+  const [baixando, setBaixando] = useState<string | null>(null)
+  const baixa = useFetcher<typeof action>()
+  const baixandoAgora = baixa.state !== "idle"
 
   // Abre a caixa de impressão do navegador — ali se escolhe a impressora ou
   // "Salvar como PDF".
@@ -116,12 +138,27 @@ export default function Inadimplentes({ loaderData, actionData }: Route.Componen
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
+        {baixa.data && baixa.state === "idle" ? (
+          <div
+            className={cn(
+              "border-b border-border px-4 py-2.5 text-xs sm:px-5",
+              baixa.data.ok ? "bg-muted/40" : "bg-destructive/10 text-destructive"
+            )}
+            role="status"
+          >
+            {baixa.data.ok && "baixa" in baixa.data
+              ? baixa.data.baixa
+              : "erro" in baixa.data
+                ? baixa.data.erro
+                : null}
+          </div>
+        ) : null}
         {erroDaFolha ? (
           <div className="border-b border-border bg-destructive/10 px-4 py-2.5 text-xs text-destructive sm:px-5">
             {erroDaFolha}
           </div>
         ) : null}
-        {actionData ? (
+        {actionData && !("baixa" in actionData) ? (
           <div
             className={cn(
               "border-b border-border px-4 py-2.5 text-xs sm:px-5",
@@ -129,7 +166,7 @@ export default function Inadimplentes({ loaderData, actionData }: Route.Componen
             )}
             role="status"
           >
-            {actionData.ok
+            {actionData.ok && "busca" in actionData
               ? actionData.busca.contas.map((c) => (
                   <span key={c.conta} className="mr-4 inline-block">
                     <b className="font-semibold">{c.conta}</b>:{" "}
@@ -138,8 +175,10 @@ export default function Inadimplentes({ loaderData, actionData }: Route.Componen
                       : `${c.trazidos} boletos · ${c.novos} novos · ${c.atualizados} mudaram de situação`}
                   </span>
                 ))
-              : actionData.erro}
-            {actionData.ok && actionData.busca.contas.length === 0
+              : "erro" in actionData
+                ? actionData.erro
+                : null}
+            {actionData.ok && "busca" in actionData && actionData.busca.contas.length === 0
               ? "Nenhuma conta do Inter configurada neste ambiente."
               : null}
           </div>
@@ -236,8 +275,8 @@ export default function Inadimplentes({ loaderData, actionData }: Route.Componen
                           <td colSpan={5} className="px-2 py-2 pr-4 sm:pr-5">
                             <table className="w-full text-xs">
                               <tbody>
-                                {d.boletos.map((b, i) => (
-                                  <tr key={i}>
+                                {d.boletos.map((b) => [
+                                  <tr key={b.id}>
                                     <td className="py-1 pr-2">
                                       <Badge
                                         variant={b.origem === "antigo" ? "secondary" : "outline"}
@@ -263,8 +302,70 @@ export default function Inadimplentes({ loaderData, actionData }: Route.Componen
                                       {b.linhaDigitavel ?? ""}
                                     </td>
                                     <td className="py-1 text-right font-medium">{moeda(b.valor)}</td>
-                                  </tr>
-                                ))}
+                                    <td className="py-1 pl-3 text-right">
+                                      <Button
+                                        type="button"
+                                        size="xs"
+                                        variant="outline"
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          setBaixando(baixando === b.id ? null : b.id)
+                                        }}
+                                        className="rounded-lg whitespace-nowrap"
+                                      >
+                                        Recebido na loja
+                                      </Button>
+                                    </td>
+                                  </tr>,
+                                  baixando === b.id ? (
+                                    <tr key={`${b.id}-baixa`}>
+                                      <td colSpan={8} className="pb-2">
+                                        <baixa.Form
+                                          method="post"
+                                          onSubmit={() => setBaixando(null)}
+                                          className="flex flex-wrap items-center gap-2 rounded-lg border-2 border-primary/40 bg-background p-2"
+                                        >
+                                          <input type="hidden" name="intencao" value="baixar" />
+                                          <input type="hidden" name="origem" value={b.origem} />
+                                          <input type="hidden" name="id" value={b.id} />
+                                          <span className="text-xs">
+                                            O cliente pagou na loja — o boleto é cancelado no Inter
+                                            para não ser pago de novo.
+                                          </span>
+                                          <select
+                                            name="forma"
+                                            defaultValue="dinheiro"
+                                            className="h-8 rounded-lg border border-border bg-background px-2 text-xs"
+                                          >
+                                            {FORMAS_DA_BAIXA.map((f) => (
+                                              <option key={f.id} value={f.id}>
+                                                {f.rotulo}
+                                              </option>
+                                            ))}
+                                          </select>
+                                          <input
+                                            name="valor"
+                                            defaultValue={b.valor.toFixed(2).replace(".", ",")}
+                                            inputMode="decimal"
+                                            aria-label="Valor recebido"
+                                            className="h-8 w-24 rounded-lg border border-border bg-background px-2 text-right font-mono text-xs"
+                                          />
+                                          <Button type="submit" size="xs" disabled={baixandoAgora}>
+                                            {baixandoAgora ? "Baixando…" : "Confirmar baixa"}
+                                          </Button>
+                                          <Button
+                                            type="button"
+                                            size="xs"
+                                            variant="ghost"
+                                            onClick={() => setBaixando(null)}
+                                          >
+                                            Voltar
+                                          </Button>
+                                        </baixa.Form>
+                                      </td>
+                                    </tr>
+                                  ) : null,
+                                ])}
                               </tbody>
                             </table>
                           </td>

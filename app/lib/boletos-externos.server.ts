@@ -3,7 +3,10 @@ import { diaAdiante, diaAtras, diaDeHoje, emDia, inicioDoDia, meioDiaDe } from "
 import { chamarInter, ErroInter, interConfigurado } from "~/lib/inter.server"
 import { raizDoCnpj } from "~/lib/documento"
 import { arredondar } from "~/lib/moeda"
+import { aguardarCancelamento, cancelarCobranca, consultarCobranca } from "~/lib/cobranca.server"
 import {
+  FORMAS_DA_BAIXA,
+  PAGO_NA_LOJA,
   SITUACOES_EM_ABERTO,
   SITUACOES_RECEBIDAS,
 } from "~/lib/recebiveis"
@@ -217,7 +220,7 @@ async function gravar(boletos: BoletoParaGravar[]) {
     (
       await db.boletoExterno.findMany({
         where: { codigoSolicitacao: { in: boletos.map((b) => b.codigoSolicitacao) } },
-        select: { codigoSolicitacao: true, situacao: true, valorRecebido: true },
+        select: { codigoSolicitacao: true, situacao: true, valorRecebido: true, baixadoEm: true },
       })
     ).map((b) => [b.codigoSolicitacao, b])
   )
@@ -232,9 +235,15 @@ async function gravar(boletos: BoletoParaGravar[]) {
 
   // Os que não mudaram só ganham a data da conferência, numa gravação só: um a
   // um seriam milhares de idas ao banco a cada busca.
+  // Baixado na loja conta como "igual": o Inter vai dizer CANCELADO, e é a
+  // baixa que vale — sobrescrever apagaria o registro do pagamento.
   const iguais = boletos.filter((b) => {
     const antes = existentes.get(b.codigoSolicitacao)
-    return antes && antes.situacao === b.situacao && antes.valorRecebido === b.valorRecebido
+    return (
+      antes &&
+      (antes.baixadoEm ||
+        (antes.situacao === b.situacao && antes.valorRecebido === b.valorRecebido))
+    )
   })
   if (iguais.length > 0) {
     await db.boletoExterno.updateMany({
@@ -246,7 +255,7 @@ async function gravar(boletos: BoletoParaGravar[]) {
   let atualizados = 0
   for (const b of boletos) {
     const antes = existentes.get(b.codigoSolicitacao)
-    if (!antes) continue
+    if (!antes || antes.baixadoEm) continue
     if (antes.situacao === b.situacao && antes.valorRecebido === b.valorRecebido) continue
     await db.boletoExterno.update({
       where: { codigoSolicitacao: b.codigoSolicitacao },
@@ -274,6 +283,8 @@ type CobrancaDetalhada = {
 export async function reconferirBoletoExterno(codigoSolicitacao: string) {
   const guardado = await db.boletoExterno.findUnique({ where: { codigoSolicitacao } })
   if (!guardado) return null
+  // Baixado na loja: o aviso do Inter é o do próprio cancelamento. Nada a mudar.
+  if (guardado.baixadoEm) return { antes: guardado.situacao, depois: guardado.situacao }
 
   const detalhe = await chamarInter<CobrancaDetalhada>(
     `/cobranca/v3/cobrancas/${codigoSolicitacao}`,
@@ -315,6 +326,8 @@ async function reconferirAbertosAntigos(umAnoAtras: string) {
 // ---------------------------------------------------------------------------
 
 export type BoletoDoDevedor = {
+  /** Id na coleção de origem (`cobrancas` ou `boletos_externos`) — é o que a baixa usa. */
+  id: string
   origem: "pdv" | "antigo"
   referencia: string
   conta: string
@@ -378,6 +391,7 @@ export async function inadimplentes() {
   for (const c of doPdv) {
     const venda = vendaPorId.get(c.vendaId)
     juntar(venda?.clienteNome ?? "—", {
+      id: c.id,
       documento: soDocumento(venda?.clienteCpfCnpj ?? ""),
       origem: "pdv",
       referencia: `Venda #${c.vendaNumero}${c.parcelas > 1 ? ` · ${c.parcela}/${c.parcelas}` : ""}`,
@@ -391,6 +405,7 @@ export async function inadimplentes() {
   }
   for (const b of deFora) {
     juntar(b.pagadorNome, {
+      id: b.id,
       documento: b.pagadorCpfCnpj,
       origem: "antigo",
       referencia: b.seuNumero ? `Nº ${b.seuNumero}` : "Sistema antigo",
@@ -540,4 +555,112 @@ export async function pagamentosRecentes(limite = 20) {
   ]
     .sort((a, b) => b.quando.getTime() - a.quando.getTime())
     .slice(0, limite)
+}
+
+// ---------------------------------------------------------------------------
+// Baixa manual: o cliente pagou na loja
+// ---------------------------------------------------------------------------
+
+const OBJECT_ID = /^[0-9a-fA-F]{24}$/
+
+/**
+ * O cliente pagou o boleto no balcão: cancela no Inter e registra o pagamento.
+ *
+ * Cancelar, e não "marcar recebido", porque a API do Inter não tem a baixa que o
+ * app tem — e o boleto vivo seria pago de novo, ou protestado, depois de o
+ * cliente já ter pago. Decisão do Marcio em 23/09/2026, junto com a de NÃO
+ * lançar o valor no fechamento do caixa: fica só o registro de como pagou.
+ *
+ * A ordem protege o dinheiro: primeiro confere no Inter se ele já não foi pago
+ * no banco (aí não há o que baixar), depois cancela, e só com o cancelamento
+ * pedido grava a baixa. Se o Inter recusar o cancelamento, nada é baixado.
+ */
+export async function baixarNaLoja(entrada: {
+  origem: string
+  id: string
+  forma: string
+  valor: number
+  gerente: string
+}): Promise<{ ok: true; mensagem: string } | { ok: false; erro: string }> {
+  if (!FORMAS_DA_BAIXA.some((f) => f.id === entrada.forma)) {
+    return { ok: false, erro: "Escolha como o cliente pagou" }
+  }
+  if (!(entrada.valor > 0)) return { ok: false, erro: "Informe o valor recebido" }
+  if (!OBJECT_ID.test(entrada.id)) return { ok: false, erro: "Boleto inválido" }
+
+  const doPdv = entrada.origem === "pdv"
+  const boleto = doPdv
+    ? await db.cobranca.findUnique({ where: { id: entrada.id } })
+    : await db.boletoExterno.findUnique({ where: { id: entrada.id } })
+  if (!boleto) return { ok: false, erro: "Boleto não encontrado" }
+  if (boleto.baixadoEm) {
+    return { ok: false, erro: `Este boleto já foi baixado por ${boleto.baixadoPor}` }
+  }
+  if (!SITUACOES_EM_ABERTO.includes(boleto.situacao)) {
+    return { ok: false, erro: `Este boleto está ${boleto.situacao} — não há o que baixar` }
+  }
+
+  const atualizar = (situacao: string) =>
+    doPdv
+      ? db.cobranca.update({ where: { id: entrada.id }, data: { situacao } })
+      : db.boletoExterno.update({ where: { id: entrada.id }, data: { situacao } })
+
+  // A nossa cópia pode estar velha: ele pode ter pago no banco hoje de manhã.
+  try {
+    const noInter = (await consultarCobranca(boleto.codigoSolicitacao, boleto.conta)).cobranca?.situacao
+    if (noInter && SITUACOES_RECEBIDAS.includes(noInter)) {
+      await atualizar(noInter)
+      return {
+        ok: false,
+        erro: "Este boleto já foi pago no banco — não precisa baixar. Se o cliente pagou de novo na loja, é devolução.",
+      }
+    }
+  } catch {
+    // Sem resposta da consulta, segue: o próprio cancelamento vai recusar se
+    // o boleto não estiver mais cancelável.
+  }
+
+  try {
+    await cancelarCobranca(boleto.codigoSolicitacao, boleto.conta, "APEDIDODOBENEFICIARIO")
+  } catch (erro) {
+    return {
+      ok: false,
+      erro: `O Inter não cancelou o boleto, e nada foi baixado: ${
+        erro instanceof Error ? erro.message : "erro desconhecido"
+      }`,
+    }
+  }
+
+  const confirmada = await aguardarCancelamento(boleto.codigoSolicitacao, boleto.conta)
+  if (confirmada && SITUACOES_RECEBIDAS.includes(confirmada)) {
+    await atualizar(confirmada)
+    return {
+      ok: false,
+      erro: "O boleto foi pago no banco enquanto era cancelado — não foi baixado. Se o cliente pagou também na loja, é devolução.",
+    }
+  }
+
+  const baixa = {
+    situacao: PAGO_NA_LOJA,
+    baixadoEm: new Date(),
+    baixadoPor: entrada.gerente,
+    baixaForma: entrada.forma,
+    baixaValor: arredondar(entrada.valor),
+  }
+  if (doPdv) {
+    await db.cobranca.update({ where: { id: entrada.id }, data: baixa })
+  } else {
+    await db.boletoExterno.update({
+      where: { id: entrada.id },
+      data: { ...baixa, valorRecebido: baixa.baixaValor, dataSituacao: baixa.baixadoEm },
+    })
+  }
+
+  return {
+    ok: true,
+    mensagem:
+      confirmada === "CANCELADO"
+        ? "Boleto baixado: pago na loja, e cancelado no Inter"
+        : "Boleto baixado: pago na loja. O Inter aceitou o cancelamento e ainda está processando",
+  }
 }
