@@ -1,21 +1,24 @@
-import { curvaAbc as abcCompleta } from "~/lib/abc.server"
+import type { Prisma } from "@prisma/client"
+
+import { curvaAbcDoPdv } from "~/lib/abc.server"
 import { db } from "~/lib/db.server"
 import { arredondar } from "~/lib/moeda"
-import { percentuaisDaOperacao } from "~/lib/precificacao.server"
 import { NAO_CANCELADA, NAO_E_TRANSFERENCIA } from "~/lib/vendas.server"
 
 /**
- * Os números do painel da administração.
+ * Os números do painel da administração — todos das vendas do PDV.
  *
- * Uma observação que atravessa o arquivo inteiro: o faturamento da rede NÃO
- * vem das vendas do PDV. Vem de `receitas`, a coleção do sistema de contas que
- * a rede alimenta há anos — são R$ 3,6 milhões em 2026 contra R$ 1 mil de
- * vendas registradas aqui, porque o PDV entrou em produção agora.
- *
- * Ler faturamento das vendas daria um painel bonito e falso. Os dois convivem:
- * `receitas` responde "quanto a rede fatura", e as vendas do PDV respondem o
- * que só elas sabem — quem vendeu, para quem, e o que saiu.
+ * Já leu o faturamento de `receitas`, o sistema de contas, porque o PDV tinha
+ * acabado de entrar e as vendas dele não diziam nada da rede. Foi decisão do
+ * Marcio (23/09/2026) que o painel mostre SÓ o que o PDV registrou, mesmo vazio
+ * no começo: um painel com duas fontes misturadas não deixa saber qual número
+ * é do caixa e qual é de outro sistema, e o do caixa é o que se confere.
  */
+
+/** Venda que conta: da loja pedida, não cancelada, e não transferência da rede. */
+function vendasValendo(lojas: string[], criadaEm: Prisma.DateTimeFilter): Prisma.VendaWhereInput {
+  return { AND: [{ loja: { in: lojas }, criadaEm }, NAO_CANCELADA, NAO_E_TRANSFERENCIA] }
+}
 
 const DIA_MS = 86_400_000
 
@@ -26,27 +29,21 @@ function diaLocal(d: Date) {
 
 export type PontoDiario = { dia: string; porLoja: Record<string, number>; total: number }
 
-/**
- * O faturamento dia a dia, por loja, no período pedido.
- *
- * Vem de `receitas`, somada por dia e loja. São ~7 lançamentos por dia, não uma
- * linha por venda — então a série é do FATURAMENTO do dia, não da contagem de
- * vendas. É por isso que o painel não promete "vendas por dia".
- */
+/** O faturamento dia a dia, por loja, no período pedido: a soma das vendas. */
 export async function faturamentoDiario(dias: number, lojas: string[]) {
   const inicio = new Date(Date.now() - dias * DIA_MS)
 
-  const linhas = await db.receita.findMany({
-    where: { data: { gte: inicio }, loja: { in: lojas } },
-    select: { data: true, loja: true, valor: true },
+  const vendas = await db.venda.findMany({
+    where: vendasValendo(lojas, { gte: inicio }),
+    select: { criadaEm: true, loja: true, total: true },
   })
 
   const porDia = new Map<string, Map<string, number>>()
-  for (const l of linhas) {
-    const dia = diaLocal(l.data)
+  for (const v of vendas) {
+    const dia = diaLocal(v.criadaEm)
     if (!porDia.has(dia)) porDia.set(dia, new Map())
     const m = porDia.get(dia)!
-    m.set(l.loja ?? "—", (m.get(l.loja ?? "—") ?? 0) + l.valor)
+    m.set(v.loja, (m.get(v.loja) ?? 0) + v.total)
   }
 
   /*
@@ -69,14 +66,11 @@ export async function faturamentoDiario(dias: number, lojas: string[]) {
 }
 
 /**
- * A curva ABC do painel: os maiores, e o resumo da curva inteira.
- *
- * O cálculo mora em `abc.server`, que o relatório também usa. Duas cópias
- * divergiriam no dia em que alguém mexesse no corte das faixas — e a tela
- * continuaria bonita mostrando faixa A com outro critério que a do relatório.
+ * A curva ABC do painel: os maiores das vendas do PDV no período, e o resumo
+ * da curva inteira. As faixas saem de `abc.server`, as mesmas do relatório.
  */
-export async function curvaAbc(limite = 10) {
-  const curva = await abcCompleta()
+export async function curvaAbc(dias: number, lojas: string[], limite = 10) {
+  const curva = await curvaAbcDoPdv(new Date(Date.now() - dias * DIA_MS), lojas)
   if (!curva) return null
   return { ...curva, linhas: curva.linhas.slice(0, limite) }
 }
@@ -91,13 +85,7 @@ export async function rankingsDoPdv(dias: number, lojas: string[]) {
   const inicio = new Date(Date.now() - dias * DIA_MS)
 
   const vendas = await db.venda.findMany({
-    where: {
-      AND: [
-        { loja: { in: lojas }, criadaEm: { gte: inicio } },
-        NAO_CANCELADA,
-        NAO_E_TRANSFERENCIA,
-      ],
-    },
+    where: vendasValendo(lojas, { gte: inicio }),
     select: { vendedorId: true, vendedorNome: true, clienteId: true, clienteNome: true, total: true },
   })
 
@@ -139,21 +127,21 @@ export async function resumoDoMes(lojas: string[]) {
   const inicioMes = new Date(agora.getFullYear(), agora.getMonth(), 1)
   const inicioAnterior = new Date(agora.getFullYear(), agora.getMonth() - 1, 1)
 
-  const [mes, anterior, percentuais] = await Promise.all([
-    db.receita.aggregate({
-      where: { data: { gte: inicioMes }, loja: { in: lojas } },
-      _sum: { valor: true },
+  const [mes, anterior] = await Promise.all([
+    db.venda.aggregate({
+      where: vendasValendo(lojas, { gte: inicioMes }),
+      _sum: { total: true },
       _count: { _all: true },
     }),
-    db.receita.aggregate({
-      where: { data: { gte: inicioAnterior, lt: inicioMes }, loja: { in: lojas } },
-      _sum: { valor: true },
+    db.venda.aggregate({
+      where: vendasValendo(lojas, { gte: inicioAnterior, lt: inicioMes }),
+      _sum: { total: true },
     }),
-    percentuaisDaOperacao(),
   ])
 
-  const faturamento = arredondar(mes._sum.valor ?? 0)
-  const faturamentoAnterior = arredondar(anterior._sum.valor ?? 0)
+  const faturamento = arredondar(mes._sum.total ?? 0)
+  const faturamentoAnterior = arredondar(anterior._sum.total ?? 0)
+  const vendas = mes._count._all
 
   /*
    * O mês corrente está pela metade, então comparar o total dele com o total do
@@ -166,9 +154,6 @@ export async function resumoDoMes(lojas: string[]) {
   const porDiaAnterior = faturamentoAnterior / diasNoAnterior
   const variacao = porDiaAnterior > 0 ? ((porDia - porDiaAnterior) / porDiaAnterior) * 100 : null
 
-  /** O que sobra depois dos custos da operação, na régua da precificação. */
-  const margem = 100 - percentuais.pctFixas - percentuais.pctVariaveis
-
   return {
     faturamento,
     faturamentoAnterior,
@@ -176,10 +161,7 @@ export async function resumoDoMes(lojas: string[]) {
     porDiaAnterior: arredondar(porDiaAnterior),
     variacao: variacao === null ? null : arredondar(variacao),
     diaDoMes,
-    lancamentos: mes._count._all,
-    pctFixas: percentuais.pctFixas,
-    pctVariaveis: percentuais.pctVariaveis,
-    margem: arredondar(margem),
-    periodoDosCustos: { de: percentuais.de, ate: percentuais.ate },
+    vendas,
+    ticketMedio: vendas > 0 ? arredondar(faturamento / vendas) : 0,
   }
 }

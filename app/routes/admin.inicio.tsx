@@ -63,7 +63,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   const [resumo, diario, abc, rankings] = await Promise.all([
     resumoDoMes(lojas),
     faturamentoDiario(dias, lojas),
-    curvaAbc(10),
+    curvaAbc(dias, lojas),
     rankingsDoPdv(dias, lojas),
   ])
 
@@ -98,8 +98,8 @@ export default function AdminInicio({ loaderData }: Route.ComponentProps) {
         <TrendingUp className="size-4 shrink-0 text-muted-foreground" aria-hidden />
         <h1 className="shrink-0 text-base font-semibold">Painel</h1>
         <span className="text-xs text-muted-foreground">
-          {lojas.length === 1 ? `loja ${lojas[0]}` : `${lojas.length} lojas`} · faturamento
-          da rede, do sistema de contas
+          {lojas.length === 1 ? `loja ${lojas[0]}` : `${lojas.length} lojas`} · só as vendas
+          registradas neste PDV
         </span>
 
         <div className="ml-auto flex gap-1">
@@ -128,7 +128,7 @@ export default function AdminInicio({ loaderData }: Route.ComponentProps) {
           <Ficha
             rotulo="Faturamento do mês"
             valor={moeda(resumo.faturamento)}
-            apoio={`${resumo.diaDoMes} ${resumo.diaDoMes === 1 ? "dia" : "dias"} corridos · ${resumo.lancamentos} lançamentos`}
+            apoio={`${resumo.diaDoMes} ${resumo.diaDoMes === 1 ? "dia" : "dias"} corridos · ${resumo.vendas} ${resumo.vendas === 1 ? "venda" : "vendas"}`}
           />
           <Ficha
             rotulo="Ritmo por dia"
@@ -137,9 +137,9 @@ export default function AdminInicio({ loaderData }: Route.ComponentProps) {
             variacao={resumo.variacao}
           />
           <Ficha
-            rotulo="Margem da operação"
-            valor={`${resumo.margem.toFixed(1)}%`}
-            apoio={`depois de ${resumo.pctFixas.toFixed(1)}% fixas e ${resumo.pctVariaveis.toFixed(1)}% variáveis`}
+            rotulo="Ticket médio do mês"
+            valor={moeda(resumo.ticketMedio)}
+            apoio="faturamento ÷ vendas do PDV"
           />
           <Ficha
             rotulo={`Faturamento em ${dias} dias`}
@@ -172,6 +172,11 @@ export default function AdminInicio({ loaderData }: Route.ComponentProps) {
         </div>
 
         {/* ---- Curva ABC ---- */}
+        {!abc ? (
+          <Cartao className="mt-4" titulo="Curva ABC" apoio={`vendas do PDV, ${dias} dias`}>
+            <Vazio>Nenhum produto vendido no PDV neste período.</Vazio>
+          </Cartao>
+        ) : null}
         {abc ? (
           <Cartao
             className="mt-4"
@@ -196,18 +201,14 @@ export default function AdminInicio({ loaderData }: Route.ComponentProps) {
               <GraficoAbc linhas={abc.linhas} />
             )}
 
-            {/*
-              De onde vem e de quando é. Sem isto o painel passaria a impressão
-              de série viva, e alguém tomaria decisão de compra em cima de um
-              retrato de meses atrás sem saber.
-            */}
             <p className="mt-3 border-t border-border pt-2 text-[11px] leading-relaxed text-muted-foreground">
-              Retrato do histórico de vendas do sistema antigo —{" "}
-              {abc.diasAnalisados} dias, calculado em{" "}
-              {new Date(abc.calculadoEm).toLocaleDateString("pt-BR")}. Não muda sozinho:
-              só quando a política de compra é recalculada. O valor é estimativa —
-              quantidade vendida × preço de hoje, porque o preço praticado então não
-              foi guardado.
+              {abc.vendas} {abc.vendas === 1 ? "venda" : "vendas"} do PDV nos últimos {dias}{" "}
+              dias, pelo valor que cada item realmente saiu. A curva do histórico do
+              sistema antigo continua no{" "}
+              <Link to="/admin/relatorios/abc" className="underline underline-offset-2">
+                relatório Curva ABC
+              </Link>
+              .
               {abc.foraPorGrupo > 0 ? (
                 <>
                   {" "}
@@ -267,10 +268,9 @@ export default function AdminInicio({ loaderData }: Route.ComponentProps) {
         </div>
 
         <p className="mt-4 text-[11px] leading-relaxed text-muted-foreground">
-          Faturamento e margem vêm de <b>receitas e despesas</b>, o sistema de contas que a
-          rede alimenta — são os números do negócio inteiro. Vendedor e clientes vêm das
-          vendas registradas <b>neste PDV</b>, que entrou em produção há pouco: enchem
-          conforme ele chega às lojas.{" "}
+          Tudo aqui vem das vendas registradas <b>neste PDV</b> — sem cancelada e sem
+          transferência entre lojas. Enquanto o caixa novo não estiver em todas as lojas,
+          os números são só do que passou por ele.{" "}
           <Link to="/admin/relatorios/comissao" className="underline underline-offset-2">
             Comissão
           </Link>{" "}
