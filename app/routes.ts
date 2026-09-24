@@ -33,6 +33,8 @@ export default [
   route("orcamento/impressao", "routes/orcamento.impressao.tsx"),
   // O cupom diz o que o cliente levou; este diz que o dinheiro entrou.
   route("vendas/:vendaId/comprovante-pix", "routes/comprovante.pix.tsx"),
+  // O QR do Pix no papel, para o cliente escanear quando não alcança o monitor.
+  route("pix/:txid/qrcode", "routes/pix.qrcode.tsx"),
 
   // Escritório: o layout de admin cobra a permissão declarada em lib/permissoes.
   ...prefix("admin", [

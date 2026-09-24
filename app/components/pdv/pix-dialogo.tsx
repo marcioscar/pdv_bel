@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { Check, Copy, Loader2, QrCode, RefreshCw } from "lucide-react"
+import { Check, Copy, Loader2, Printer, QrCode, RefreshCw } from "lucide-react"
 
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
@@ -28,6 +28,11 @@ type Props = {
   conferindo: boolean
   onCancelar: () => void
   onConcluir: () => void
+  /**
+   * Manda o QR e o valor para a térmica — para o cliente que não alcança o
+   * monitor com o celular. Devolve o erro, se houver, para aparecer aqui.
+   */
+  onImprimir: () => Promise<string | null>
 }
 
 export function PixDialogo({
@@ -40,8 +45,11 @@ export function PixDialogo({
   conferindo,
   onCancelar,
   onConcluir,
+  onImprimir,
 }: Props) {
   const [copiado, setCopiado] = useState(false)
+  const [imprimindo, setImprimindo] = useState(false)
+  const [erroDaImpressao, setErroDaImpressao] = useState<string | null>(null)
   const [restante, setRestante] = useState<number | null>(null)
 
   // Conta o tempo de vida da cobrança: passado disso, o cliente precisa de outra.
@@ -172,6 +180,27 @@ export function PixDialogo({
                   {copiado ? "Copiado" : "Copiar copia e cola"}
                 </Button>
               ) : null}
+              <Button
+                type="button"
+                tabIndex={-1}
+                variant="outline"
+                size="sm"
+                className="rounded-lg"
+                disabled={imprimindo || restante === 0}
+                onClick={async () => {
+                  setImprimindo(true)
+                  setErroDaImpressao(null)
+                  setErroDaImpressao(await onImprimir())
+                  setImprimindo(false)
+                }}
+              >
+                {imprimindo ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Printer className="size-4" />
+                )}
+                Imprimir QR Code
+              </Button>
               {restante !== null ? (
                 <Badge
                   variant={restante > 60 ? "secondary" : "destructive"}
@@ -190,6 +219,12 @@ export function PixDialogo({
                   : "Aguardando o pagamento do cliente…"}
               </span>
             </div>
+
+            {erroDaImpressao ? (
+              <p className="mt-2 text-center text-xs font-medium text-destructive" role="alert">
+                {erroDaImpressao}
+              </p>
+            ) : null}
 
             {motivoPendente ? (
               <p className={cn("mt-3 text-center text-xs text-muted-foreground")}>

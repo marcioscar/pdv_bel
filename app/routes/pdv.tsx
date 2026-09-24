@@ -2296,6 +2296,11 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
             if (pix.concluida) avisar(`Venda #${pix.concluida.numero} paga por Pix`, "sucesso")
             setPix(null)
           }}
+          onImprimir={() =>
+            pix.cobranca
+              ? imprimirDocumento(`/pix/${pix.cobranca.txid}/qrcode`)
+              : Promise.resolve("Ainda não há cobrança para imprimir")
+          }
         />
       ) : null}
 
