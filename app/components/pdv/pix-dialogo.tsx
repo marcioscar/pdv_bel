@@ -26,7 +26,9 @@ type Props = {
   /** Força uma consulta agora. Não confirma nada: o servidor continua decidindo. */
   onConferir: () => void
   conferindo: boolean
+  /** Tira a cobrança do ar no Inter; até a resposta, o QR pode estar valendo. */
   onCancelar: () => void
+  cancelando: boolean
   onConcluir: () => void
   /**
    * Manda o QR e o valor para a térmica — para o cliente que não alcança o
@@ -44,6 +46,7 @@ export function PixDialogo({
   onConferir,
   conferindo,
   onCancelar,
+  cancelando,
   onConcluir,
   onImprimir,
 }: Props) {
@@ -248,7 +251,7 @@ export function PixDialogo({
                 type="button"
                 tabIndex={-1}
                 variant="ghost"
-                disabled={conferindo || !cobranca}
+                disabled={conferindo || cancelando || !cobranca}
                 onClick={onConferir}
                 className="rounded-lg"
               >
@@ -263,10 +266,20 @@ export function PixDialogo({
                 type="button"
                 tabIndex={-1}
                 variant="outline"
+                disabled={cancelando}
                 onClick={onCancelar}
                 className="rounded-lg"
               >
-                <Kbd>Esc</Kbd> Cancelar
+                {cancelando ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" />
+                    Cancelando no Inter…
+                  </>
+                ) : (
+                  <>
+                    <Kbd>Esc</Kbd> Cancelar
+                  </>
+                )}
               </Button>
             </div>
           </>

@@ -115,6 +115,24 @@ export async function consultarPixImediato(
   return paraSaida(resposta)
 }
 
+/**
+ * Tira a cobrança do ar no Inter: o QR deixa de aceitar pagamento.
+ *
+ * Fechar a janela no caixa não basta — a cobrança seguiria valendo até expirar,
+ * e o cliente com o QR impresso na mão pagaria uma venda que não existe mais.
+ * O Inter só remove cobrança ATIVA; a já paga devolve erro, e quem chama
+ * precisa conferir o status para não perder o pagamento.
+ */
+export async function removerPixImediato(txid: string, conta: string): Promise<PixImediato> {
+  const resposta = await chamarInter<CobRespostaInter>(`/pix/v2/cob/${txid}`, {
+    conta,
+    metodo: "PATCH",
+    escopos: ["cob.write"],
+    corpo: { status: "REMOVIDA_PELO_USUARIO_RECEBEDOR" },
+  })
+  return paraSaida(resposta)
+}
+
 export type ConfirmacaoPix =
   | { pago: true; pix: PixImediato }
   | { pago: false; motivo: string; pix: PixImediato }

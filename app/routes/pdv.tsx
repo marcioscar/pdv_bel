@@ -50,6 +50,7 @@ import {
   consultarPixImediato,
   criarPixImediato,
   novoTxid,
+  removerPixImediato,
   type PixImediato,
 } from "~/lib/pix.server"
 import {
@@ -643,8 +644,9 @@ export async function action({ request }: Route.ActionArgs) {
     }
   }
 
-  // --- Pix no balcão: confere e, se pago, grava a venda ---
-  if ((bruto as { intencao?: string })?.intencao === "pixConferir") {
+  // --- Pix no balcão: confere (ou cancela) e, se pago, grava a venda ---
+  const intencaoPix = (bruto as { intencao?: string })?.intencao
+  if (intencaoPix === "pixConferir" || intencaoPix === "pixCancelar") {
     const pedido = lerPedido(bruto)
     const txid = String((bruto as { txid?: string }).txid ?? "")
     if (!pedido || !/^[a-zA-Z0-9]{26,35}$/.test(txid)) {
@@ -658,7 +660,49 @@ export async function action({ request }: Route.ActionArgs) {
       return data({ ok: false as const, tipo: "pixStatus" as const, erro: preco.erro }, { status: 400 })
     }
 
-    const pix = await consultarPixImediato(txid, await contaDaLoja(eu.loja))
+    const conta = await contaDaLoja(eu.loja)
+
+    /**
+     * Cancelar tira a cobrança do ar no Inter, e não só fecha a janela: senão o
+     * QR seguiria valendo até expirar, e o cliente que pagasse depois deixaria
+     * dinheiro na conta sem venda nenhuma.
+     *
+     * O Inter só remove cobrança ATIVA. Se a remoção falha, o motivo mais comum
+     * é o cliente ter pago no mesmo instante — aí segue para a conferência
+     * abaixo e a venda é gravada, como seria se ninguém tivesse cancelado.
+     */
+    if (intencaoPix === "pixCancelar") {
+      const cancelada = {
+        ok: true as const,
+        tipo: "pixStatus" as const,
+        pago: false as const,
+        cancelada: true as const,
+        status: "REMOVIDA_PELO_USUARIO_RECEBEDOR",
+        motivo: "Cobrança cancelada no Inter",
+      }
+      try {
+        await removerPixImediato(txid, conta)
+        return cancelada
+      } catch (erro) {
+        const agora = await consultarPixImediato(txid, conta)
+        if (agora.status === "ATIVA") {
+          return data(
+            {
+              ok: false as const,
+              tipo: "pixStatus" as const,
+              erro: `Não foi possível cancelar no Inter — o QR continua valendo. ${
+                erro instanceof Error ? erro.message : ""
+              }`.trim(),
+            },
+            { status: 400 }
+          )
+        }
+        // Já expirada ou removida: não aceita mais pagamento, é o que se queria.
+        if (agora.status !== "CONCLUIDA") return cancelada
+      }
+    }
+
+    const pix = await consultarPixImediato(txid, conta)
     const confirmacao = confirmarPagamento(pix, preco.total)
 
     if (!confirmacao.pago) {
@@ -666,8 +710,33 @@ export async function action({ request }: Route.ActionArgs) {
         ok: true as const,
         tipo: "pixStatus" as const,
         pago: false as const,
+        cancelada: false as const,
         status: pix.status,
         motivo: confirmacao.motivo,
+      }
+    }
+
+    /**
+     * Venda já gravada com este txid: devolve ela em vez de recusar.
+     *
+     * Acontece quando uma consulta grava a venda e a resposta se perde — o
+     * cancelar interrompe a consulta em voo, por exemplo. Recusar ali diria ao
+     * operador que deu erro num Pix que pagou e virou venda.
+     */
+    const jaGravada = await db.venda.findFirst({
+      where: { pixTxid: txid, loja: eu.loja },
+      select: { id: true, numero: true },
+    })
+    if (jaGravada) {
+      return {
+        ok: true as const,
+        tipo: "pixStatus" as const,
+        pago: true as const,
+        numero: jaGravada.numero,
+        vendaId: jaGravada.id,
+        pagoEm: pix.pagoEm,
+        endToEndId: pix.endToEndId,
+        nota: null,
       }
     }
 
@@ -996,6 +1065,12 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   // Fetcher separado para o Pix: a consulta a cada 5s não pode interferir no
   // fetcher que grava venda e cadastra cliente.
   const fetcherPix = useFetcher<typeof action>()
+  // Cancelar vai ao Inter e volta: até a resposta, o QR ainda pode estar valendo.
+  const [cancelandoPix, setCancelandoPix] = useState(false)
+  // Resposta do Pix já tratada. O efeito que as trata re-executa quando
+  // `cancelandoPix` muda, e sem isto leria de novo a última consulta pendente
+  // como se fosse a resposta do cancelamento — e o cancelar se perderia.
+  const respostaPixTratada = useRef<unknown>(null)
 
   const todosClientes = useMemo(
     () => [...clientes, ...novosClientes].sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR")),
@@ -1567,24 +1642,71 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     )
   }, [])
 
+  /**
+   * Cancela a cobrança no Inter, e não só na tela.
+   *
+   * Pelo mesmo fetcher da consulta de propósito: o envio interrompe a consulta
+   * em voo, e a resposta — cancelada, ou paga no último instante — chega pelo
+   * mesmo caminho que já trata o pagamento.
+   */
+  const cancelarPix = useCallback(() => {
+    const txid = pix?.cobranca?.txid
+    // Sem cobrança criada (deu erro ao gerar), não há o que tirar do ar.
+    if (!txid) {
+      setPix(null)
+      avisar("Pagamento por Pix cancelado — nada foi gravado", "erro")
+      return
+    }
+    const { fetcher: f, itens, desconto, vendedorCodigo } = dadosDaConsulta.current
+    setCancelandoPix(true)
+    f.submit(
+      {
+        intencao: "pixCancelar",
+        emitirNota,
+        cpfNaNota,
+        txid,
+        itens: itens.map((i) => ({ produtoId: i.produtoId, quantidade: i.quantidade })),
+        desconto,
+        forma: "pix",
+        recebido: null,
+        vendedorCodigo,
+      },
+      { method: "post", encType: "application/json" }
+    )
+  }, [pix?.cobranca?.txid, emitirNota, cpfNaNota, avisar])
+
   const txidEmCobranca = pix?.cobranca?.txid ?? null
   const pixConcluido = Boolean(pix?.concluida)
 
   useEffect(() => {
-    if (!txidEmCobranca || pixConcluido) return
+    if (!txidEmCobranca || pixConcluido || cancelandoPix) return
 
     const id = setInterval(() => conferirPix(txidEmCobranca), 5000)
     return () => clearInterval(id)
-  }, [txidEmCobranca, pixConcluido, conferirPix])
+  }, [txidEmCobranca, pixConcluido, cancelandoPix, conferirPix])
 
   // Resposta da consulta: confirmou ou segue pendente.
   useEffect(() => {
     if (fetcherPix.state !== "idle" || !fetcherPix.data) return
     const r = fetcherPix.data
-    if (r.tipo !== "pixStatus") return
+    if (r.tipo !== "pixStatus" || r === respostaPixTratada.current) return
+    respostaPixTratada.current = r
+    const eraCancelamento = cancelandoPix
+    setCancelandoPix(false)
 
     if (!r.ok) {
+      // Cancelamento que falhou mantém o QR na tela: ele segue valendo, e
+      // trocar pela tela de erro faria parecer que não há mais o que pagar.
+      if (eraCancelamento) {
+        setPix((atual) => (atual ? { ...atual, motivoPendente: r.erro } : atual))
+        return
+      }
       setPix((atual) => (atual ? { ...atual, erro: r.erro, criando: false } : atual))
+      return
+    }
+    if (!r.pago && r.cancelada) {
+      setPix(null)
+      avisar("Pix cancelado no Inter — nada foi gravado", "erro")
       return
     }
     if (!r.pago) {
@@ -1626,7 +1748,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     setPix((atual) =>
       atual ? { ...atual, concluida: { numero: r.numero, pagoEm: r.pagoEm }, motivoPendente: null } : atual
     )
-  }, [fetcherPix.state, fetcherPix.data, imprimirCupom, avisar])
+  }, [fetcherPix.state, fetcherPix.data, imprimirCupom, avisar, cancelandoPix])
 
   /**
    * A prazo o comprovante é o boleto, que o próprio comprovante manda imprimir —
@@ -1884,8 +2006,9 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       if (pix) {
         if (key === "Escape" && !pix.concluida) {
           evento.preventDefault()
-          setPix(null)
-          avisar("Pagamento por Pix cancelado — nada foi gravado", "erro")
+          // Gerando: a cobrança pode nascer depois do Esc e ficar no ar sem
+          // ninguém para cancelar. Espera o QR aparecer.
+          if (!pix.criando && !cancelandoPix) cancelarPix()
         } else if (key === "Enter" && pix.concluida) {
           evento.preventDefault()
           avisar(`Venda #${pix.concluida.numero} paga por Pix`, "sucesso")
@@ -2034,6 +2157,8 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     comprovante,
     finalizando,
     pix,
+    cancelandoPix,
+    cancelarPix,
     abrirFinalizacao,
     alternarTema,
     avisarSemEstoque,
@@ -2288,10 +2413,8 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
             if (pix.cobranca) conferirPix(pix.cobranca.txid)
           }}
           conferindo={fetcherPix.state !== "idle"}
-          onCancelar={() => {
-            setPix(null)
-            avisar("Pagamento por Pix cancelado — nada foi gravado", "erro")
-          }}
+          onCancelar={cancelarPix}
+          cancelando={cancelandoPix}
           onConcluir={() => {
             if (pix.concluida) avisar(`Venda #${pix.concluida.numero} paga por Pix`, "sucesso")
             setPix(null)
