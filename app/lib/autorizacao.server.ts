@@ -131,41 +131,6 @@ export async function avaliarVenda(entrada: {
   }
 }
 
-/**
- * O corpo da recusa por falta de liberação, ou `null` quando a venda pode seguir.
- *
- * Mora aqui, e não na rota do caixa, por uma razão do empacotador: o React
- * Router só arranca `loader` e `action` do pacote do navegador, então uma função
- * auxiliar no arquivo da rota levaria junto o módulo `.server` inteiro — e o
- * build quebra. A rota só embrulha o que sai daqui num `data(..., 400)`.
- *
- * Existe para o Pix e a venda comum darem a MESMA resposta: são dois caminhos
- * até a mesma regra, e um deles respondendo diferente faria o diálogo abrir num
- * e não no outro.
- */
-export async function recusaPorFaltaDeLiberacao(entrada: {
-  clienteId: string | null
-  desconto: number
-  forma: string
-  subtotal: number
-}) {
-  const avaliacao = await avaliarVenda(entrada)
-  if (avaliacao.motivos.length === 0) return null
-
-  return {
-    ok: false as const,
-    tipo: "bloqueio" as const,
-    erro: "Esta venda precisa da liberação do gerente",
-    motivos: avaliacao.motivos as string[],
-    divida: {
-      valor: avaliacao.divida.valor,
-      parcelas: avaliacao.divida.parcelas,
-      diasAtraso: avaliacao.divida.diasAtraso,
-    },
-    descontoPercentual: avaliacao.descontoPercentual,
-  }
-}
-
 export type ItemDoPedido = {
   produtoId: string
   codigo: string

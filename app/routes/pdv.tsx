@@ -25,7 +25,6 @@ import {
   decidirAutorizacao,
   dividaDoCliente,
   pedirAutorizacao,
-  recusaPorFaltaDeLiberacao,
 } from "~/lib/autorizacao.server"
 import { db } from "~/lib/db.server"
 import { enderecoDoApp } from "~/lib/env.server"
@@ -41,6 +40,7 @@ import { emitirDaVenda } from "~/lib/nota-fiscal.server"
 import { SOMENTE_ATIVOS } from "~/lib/produtos.server"
 import { autenticar, exigirUsuario } from "~/lib/sessao.server"
 import {
+  conferirVenda,
   lerPedido,
   precificar,
   recusaPorFaltaDeEstoque,
@@ -580,54 +580,53 @@ export async function action({ request }: Route.ActionArgs) {
       return data({ ok: false as const, tipo: "pix" as const, erro: "Dados inválidos" }, { status: 400 })
     }
 
-    const preco = await precificar(pedido.itens, pedido.desconto)
-    if (!preco.ok) {
-      return data({ ok: false as const, tipo: "pix" as const, erro: preco.erro }, { status: 400 })
+    /**
+     * TODAS as regras da gravação são cobradas AQUI, antes de existir um QR.
+     *
+     * No Pix a venda só é gravada depois de o banco confirmar o pagamento. Uma
+     * regra cobrada só lá — caixa fechado, estoque, liberação do gerente,
+     * cliente da rede, crédito que não existe, vendedor errado — faria o
+     * cliente pagar e a venda ser recusada em seguida: dinheiro recebido sem
+     * venda, o pior desfecho possível no balcão. Recusar antes do QR custa uma
+     * consulta; recusar depois custa um estorno.
+     *
+     * Antes cada regra era repetida aqui à mão, e as que ficaram de fora
+     * (cliente, liberação, crédito) simplesmente não existiam no Pix.
+     */
+    const conferida = await conferirVenda(
+      { ...pedido, forma: "pix", loja: eu.loja, caixa: CAIXA, operador: eu.nome },
+      { antesDoQr: true }
+    )
+    if (!conferida.ok) {
+      // A recusa com saída abre o pedido ao gerente, como na venda comum.
+      if ("precisaAutorizacao" in conferida) {
+        return data(
+          {
+            ok: false as const,
+            tipo: "bloqueio" as const,
+            erro: conferida.erro,
+            motivos: conferida.motivos,
+            divida: conferida.divida,
+            descontoPercentual: conferida.descontoPercentual,
+          },
+          { status: 400 }
+        )
+      }
+      return data({ ok: false as const, tipo: "pix" as const, erro: conferida.erro }, { status: 400 })
     }
 
-    /**
-     * A trava do gerente entra AQUI, antes de existir um QR na tela.
-     *
-     * No Pix a venda só é gravada depois de o banco confirmar o pagamento. Se a
-     * regra fosse cobrada lá, o cliente pagaria e a venda seria recusada em
-     * seguida — dinheiro recebido sem venda, que é o pior desfecho possível no
-     * balcão. Recusar antes do QR custa uma consulta; recusar depois custa um
-     * estorno.
-     */
-    /**
-     * Caixa fechado barra ANTES de existir QR na tela, pelo mesmo motivo da
-     * liberação do gerente: a venda em Pix só é gravada depois de o banco
-     * confirmar, e recusar lá deixaria o cliente pagando uma venda que não
-     * entra.
-     */
-    if (!(await caixaAberto(eu.loja, diaDeHoje()))) {
+    // O Pix cobra o que falta depois do crédito a favor, não o total.
+    const valorDoPix = conferida.aPagar
+    if (valorDoPix <= 0) {
       return data(
         {
           ok: false as const,
           tipo: "pix" as const,
-          erro: `O caixa de ${eu.loja} não foi aberto hoje — lance o troco da gaveta antes de vender`,
+          erro: "O crédito do cliente cobre a venda toda — não há o que cobrar por Pix",
         },
         { status: 400 }
       )
     }
-
-    /**
-     * Estoque também barra ANTES do QR, pelo mesmo motivo: a venda em Pix só é
-     * gravada depois de o banco confirmar, e recusar lá deixaria o cliente
-     * tendo pago por mercadoria que a loja não tem.
-     */
-    const semEstoque = await recusaPorFaltaDeEstoque(preco.itens, eu.loja)
-    if (semEstoque) {
-      return data({ ok: false as const, tipo: "pix" as const, erro: semEstoque }, { status: 400 })
-    }
-
-    const recusa = await recusaPorFaltaDeLiberacao({
-      clienteId: pedido.clienteId,
-      desconto: pedido.desconto,
-      forma: pedido.forma,
-      subtotal: preco.subtotal,
-    })
-    if (recusa) return data(recusa, { status: 400 })
 
     try {
       // A chave Pix é da conta da loja: cobrar na conta errada põe o dinheiro
@@ -636,7 +635,7 @@ export async function action({ request }: Route.ActionArgs) {
       const cobranca = await criarPixImediato({
         conta,
         txid: novoTxid(),
-        valor: preco.total,
+        valor: valorDoPix,
         expiracaoSegundos: 900,
         solicitacao: `${eu.loja} caixa ${CAIXA} - BrasSaco Embalagens`,
       })
@@ -653,7 +652,7 @@ export async function action({ request }: Route.ActionArgs) {
           caixa: CAIXA,
           conta,
           operador: eu.nome,
-          total: preco.total,
+          total: valorDoPix,
           pedido: { ...pedido, emitirNota: Boolean((bruto as { emitirNota?: unknown }).emitirNota) },
           expiracaoSegundos: cobranca.expiracaoSegundos || 900,
         })
@@ -662,7 +661,7 @@ export async function action({ request }: Route.ActionArgs) {
         throw erro
       }
 
-      return { ok: true as const, tipo: "pix" as const, cobranca, total: preco.total }
+      return { ok: true as const, tipo: "pix" as const, cobranca, total: valorDoPix }
     } catch (erro) {
       return data(
         {
@@ -1507,6 +1506,11 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           emitirNota,
           cpfNaNota,
           vendedorCodigo,
+          clienteId: cliente?.id ?? null,
+          creditoUsado,
+          // A liberação que o gerente acabou de dar: sem ela, o Pix esbarrava
+          // na mesma trava de novo e nunca saía.
+          autorizacaoId,
         },
         { method: "post", encType: "application/json" }
       )
@@ -1514,7 +1518,10 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     }
 
     concluir(tentativa.current?.recebido ?? null, tentativa.current?.condicao ?? null)
-  }, [autorizacaoId, concluir, fetcher, forma, totais.desconto, venda.itens, emitirNota, cpfNaNota, vendedorCodigo])
+  }, [
+    autorizacaoId, concluir, fetcher, forma, totais.desconto, venda.itens, emitirNota, cpfNaNota,
+    vendedorCodigo, cliente, creditoUsado,
+  ])
 
   /**
    * Pergunta a situação do cliente assim que ele entra na venda.
@@ -1869,6 +1876,11 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           emitirNota,
           cpfNaNota,
           vendedorCodigo,
+          clienteId: cliente?.id ?? null,
+          // O Pix cobra o que sobra depois do crédito; o servidor confere o
+          // saldo contra o livro antes de gerar o QR.
+          creditoUsado,
+          autorizacaoId,
         },
         { method: "post", encType: "application/json" }
       )
@@ -1892,15 +1904,19 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     }
     concluir(null)
   }, [
+    autorizacaoId,
     cliente,
     concluir,
+    cpfNaNota,
     creditoUsado,
+    emitirNota,
     fetcher,
     forma,
     gravando,
     recebidoTexto,
     totais.desconto,
     totais.total,
+    vendedorCodigo,
     venda.itens,
   ])
 

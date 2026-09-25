@@ -8,7 +8,7 @@ import {
   removerPixImediato,
   type PixImediato,
 } from "~/lib/pix.server"
-import { precificar, registrarVenda, type PedidoRecebido } from "~/lib/vendas.server"
+import { conferirVenda, registrarVenda, type PedidoRecebido } from "~/lib/vendas.server"
 
 /**
  * A fila dos Pix do balcão que esperam pagamento.
@@ -179,21 +179,7 @@ async function gravar(p: PixPendente, pix: PixImediato): Promise<PixPendente> {
 
     const { emitirNota, ...pedido } = p.pedido as unknown as PedidoDoPix
 
-    /*
-     * O preço pode ter mudado entre o QR e o pagamento. `registrarVenda`
-     * recalcula pelo cadastro, e a venda diria um total diferente do que
-     * entrou na conta. Melhor parar e mostrar do que gravar a conta errada.
-     */
-    const preco = await precificar(pedido.itens, pedido.desconto)
-    if (!preco.ok) return concluir({ situacao: "falhou", erro: preco.erro })
-    if (Math.round(preco.total * 100) !== Math.round(p.total * 100)) {
-      return concluir({
-        situacao: "falhou",
-        erro: `O preço mudou depois do QR: cobrado ${p.total.toFixed(2)}, hoje daria ${preco.total.toFixed(2)}`,
-      })
-    }
-
-    const resultado = await registrarVenda({
+    const pedidoDaVenda = {
       ...pedido,
       forma: "pix",
       recebido: p.total,
@@ -202,7 +188,24 @@ async function gravar(p: PixPendente, pix: PixImediato): Promise<PixPendente> {
       loja: p.loja,
       caixa: p.caixa,
       operador: p.operador,
-    })
+    }
+
+    /*
+     * O preço (ou o crédito do cliente) pode ter mudado entre o QR e o
+     * pagamento. `registrarVenda` recalcula pelo cadastro, e a venda diria um
+     * "a pagar" diferente do que entrou na conta. Melhor parar e mostrar do que
+     * gravar a conta errada.
+     */
+    const conferida = await conferirVenda(pedidoDaVenda)
+    if (!conferida.ok) return concluir({ situacao: "falhou", erro: conferida.erro })
+    if (Math.round(conferida.aPagar * 100) !== Math.round(p.total * 100)) {
+      return concluir({
+        situacao: "falhou",
+        erro: `O valor mudou depois do QR: cobrado ${p.total.toFixed(2)}, hoje daria ${conferida.aPagar.toFixed(2)}`,
+      })
+    }
+
+    const resultado = await registrarVenda(pedidoDaVenda)
     if (!resultado.ok) return concluir({ situacao: "falhou", erro: resultado.erro })
 
     const paga = await concluir({

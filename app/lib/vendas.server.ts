@@ -348,9 +348,59 @@ const SEM_MOTIVOS = {
   descontoPercentual: 0,
 }
 
-export async function registrarVenda(
-  recebidoDaTela: PedidoVenda
-): Promise<ResultadoVenda> {
+type Recusa = Exclude<ResultadoVenda, { ok: true }>
+
+/** A venda que passou por todas as regras, pronta para `gravar`. */
+type VendaValidada = {
+  ok: true
+  total: number
+  /** O que falta pagar depois do crédito abatido — é o valor do Pix. */
+  aPagar: number
+  troco: number
+  argumentos: Parameters<typeof gravar>
+}
+
+export async function registrarVenda(recebidoDaTela: PedidoVenda): Promise<ResultadoVenda> {
+  const validada = await validarVenda(recebidoDaTela)
+  if (!validada.ok) return validada
+
+  try {
+    return {
+      ok: true,
+      ...(await gravar(...validada.argumentos)),
+      total: validada.total,
+      troco: validada.troco,
+    }
+  } catch (erro) {
+    if (erro instanceof Error && erro.message.includes(SEQUENCIA_ESGOTADA)) {
+      return { ok: false, erro: "Sequência de numeração fora de sincronia" }
+    }
+    throw erro
+  }
+}
+
+/**
+ * Passa a venda por TODAS as regras de `registrarVenda`, sem gravar nada.
+ *
+ * Existe para o Pix: lá a venda só é gravada depois de o dinheiro entrar, e
+ * qualquer recusa nessa hora (cliente da rede, liberação que não cobre, crédito
+ * que não existe, vendedor errado) vira dinheiro na conta sem venda. Conferindo
+ * com as mesmas regras antes do QR, a recusa acontece com o cliente ainda sem
+ * ter pago. `antesDoQr` dispensa só o que ainda não pode existir: o txid.
+ */
+export async function conferirVenda(
+  pedido: PedidoVenda,
+  opcoes: { antesDoQr?: boolean } = {}
+): Promise<Recusa | { ok: true; total: number; aPagar: number }> {
+  const validada = await validarVenda(pedido, opcoes)
+  if (!validada.ok) return validada
+  return { ok: true, total: validada.total, aPagar: validada.aPagar }
+}
+
+async function validarVenda(
+  recebidoDaTela: PedidoVenda,
+  { antesDoQr = false }: { antesDoQr?: boolean } = {}
+): Promise<Recusa | VendaValidada> {
   let pedido = recebidoDaTela
   if (!FORMAS_PAGAMENTO.some((f) => f.id === pedido.forma)) {
     return { ok: false, erro: "Forma de pagamento inválida" }
@@ -366,7 +416,7 @@ export async function registrarVenda(
    * E um txid já pago, reapresentado numa segunda venda de mesmo total, passava
    * na conferência — o Inter diz que ele foi pago, e foi, uma vez.
    */
-  if (pedido.forma === "pix") {
+  if (pedido.forma === "pix" && !antesDoQr) {
     if (!pedido.pixTxid) {
       return { ok: false, erro: "Pix só fecha pela cobrança conferida no Inter" }
     }
@@ -617,21 +667,15 @@ export async function registrarVenda(
   const troco =
     pedido.recebido === null ? 0 : arredondar(Math.max(0, pedido.recebido - aPagar))
 
-  try {
-    return {
-      ok: true,
-      ...(await gravar(
-        pedido, itens, subtotal, total, troco, cliente, vencimento, condicaoId, autorizacaoAUsar,
-        vendedor, creditoUsado
-      )),
-      total,
-      troco,
-    }
-  } catch (erro) {
-    if (erro instanceof Error && erro.message.includes(SEQUENCIA_ESGOTADA)) {
-      return { ok: false, erro: "Sequência de numeração fora de sincronia" }
-    }
-    throw erro
+  return {
+    ok: true,
+    total,
+    aPagar,
+    troco,
+    argumentos: [
+      pedido, itens, subtotal, total, troco, cliente, vencimento, condicaoId, autorizacaoAUsar,
+      vendedor, creditoUsado,
+    ],
   }
 }
 
