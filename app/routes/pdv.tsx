@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "r
 import { data, redirect, useFetcher } from "react-router"
 
 import type { Route } from "./+types/pdv"
+import type { loader as loaderPixPendentes } from "./pix.pendentes"
 import { AjudaAtalhos } from "~/components/pdv/ajuda-atalhos"
 import { ClienteDialogo, type ClienteResumo } from "~/components/pdv/cliente-dialogo"
 import { CobrancaDialogo } from "~/components/pdv/cobranca-dialogo"
@@ -10,6 +11,7 @@ import { BarraAtalhos, type Atalho } from "~/components/pdv/barra-atalhos"
 import { BarraComando, type ModoComando } from "~/components/pdv/barra-comando"
 import { ListaItens } from "~/components/pdv/lista-itens"
 import { PixDialogo, type PixNoBalcao } from "~/components/pdv/pix-dialogo"
+import { PixEmEspera } from "~/components/pdv/pix-em-espera"
 import { AutorizacaoDialogo, type Bloqueio } from "~/components/pdv/autorizacao-dialogo"
 import { FinalizarDialogo } from "~/components/pdv/finalizar-dialogo"
 import { PainelPagamento } from "~/components/pdv/painel-pagamento"
@@ -46,13 +48,18 @@ import {
 } from "~/lib/vendas.server"
 import { vendedoresDaLoja } from "~/lib/vendedores.server"
 import {
-  confirmarPagamento,
-  consultarPixImediato,
   criarPixImediato,
   novoTxid,
   removerPixImediato,
-  type PixImediato,
 } from "~/lib/pix.server"
+import {
+  cancelarPixPendente,
+  criarPixPendente,
+  ligarVigiaDoPix,
+  marcarVisto,
+  pixPendenteDaLoja,
+  resolverPixPendente,
+} from "~/lib/pix-pendente.server"
 import {
   arredondar,
   interpretarValor,
@@ -134,6 +141,7 @@ async function imprimirEmSequencia(urls: string[]): Promise<string | null> {
 
 export async function loader({ request }: Route.LoaderArgs) {
   const eu = await exigirUsuario(request)
+  ligarVigiaDoPix()
 
   /**
    * Abrir o caixa é a primeira coisa do dia, antes de qualquer venda.
@@ -622,15 +630,38 @@ export async function action({ request }: Route.ActionArgs) {
     if (recusa) return data(recusa, { status: 400 })
 
     try {
+      // A chave Pix é da conta da loja: cobrar na conta errada põe o dinheiro
+      // no CNPJ errado.
+      const conta = await contaDaLoja(eu.loja)
       const cobranca = await criarPixImediato({
-        // A chave Pix é da conta da loja: cobrar na conta errada põe o dinheiro
-        // no CNPJ errado.
-        conta: await contaDaLoja(eu.loja),
+        conta,
         txid: novoTxid(),
         valor: preco.total,
         expiracaoSegundos: 900,
         solicitacao: `${eu.loja} caixa ${CAIXA} - BrasSaco Embalagens`,
       })
+
+      /*
+       * O pedido fica guardado junto da cobrança: é dele que a venda nasce
+       * quando o Pix entrar, esteja a tela onde estiver. Sem conseguir guardar,
+       * a cobrança sai do ar — um QR sem pedido seria dinheiro sem venda.
+       */
+      try {
+        await criarPixPendente({
+          txid: cobranca.txid,
+          loja: eu.loja,
+          caixa: CAIXA,
+          conta,
+          operador: eu.nome,
+          total: preco.total,
+          pedido: { ...pedido, emitirNota: Boolean((bruto as { emitirNota?: unknown }).emitirNota) },
+          expiracaoSegundos: cobranca.expiracaoSegundos || 900,
+        })
+      } catch (erro) {
+        await removerPixImediato(cobranca.txid, conta).catch(() => null)
+        throw erro
+      }
+
       return { ok: true as const, tipo: "pix" as const, cobranca, total: preco.total }
     } catch (erro) {
       return data(
@@ -644,134 +675,91 @@ export async function action({ request }: Route.ActionArgs) {
     }
   }
 
-  // --- Pix no balcão: confere (ou cancela) e, se pago, grava a venda ---
+  // --- Pix no balcão: confere ou cancela. Quem grava a venda é o servidor ---
   const intencaoPix = (bruto as { intencao?: string })?.intencao
   if (intencaoPix === "pixConferir" || intencaoPix === "pixCancelar") {
-    const pedido = lerPedido(bruto)
     const txid = String((bruto as { txid?: string }).txid ?? "")
-    if (!pedido || !/^[a-zA-Z0-9]{26,35}$/.test(txid)) {
+    if (!/^[a-zA-Z0-9]{26,35}$/.test(txid)) {
       return data({ ok: false as const, tipo: "pixStatus" as const, erro: "Dados inválidos" }, { status: 400 })
     }
 
-    // O total é recalculado agora, e não o que foi criado antes: se o carrinho
-    // mudou no meio, o valor pago não bate e a venda não é liberada.
-    const preco = await precificar(pedido.itens, pedido.desconto)
-    if (!preco.ok) {
-      return data({ ok: false as const, tipo: "pixStatus" as const, erro: preco.erro }, { status: 400 })
-    }
-
-    const conta = await contaDaLoja(eu.loja)
-
-    /**
-     * Cancelar tira a cobrança do ar no Inter, e não só fecha a janela: senão o
-     * QR seguiria valendo até expirar, e o cliente que pagasse depois deixaria
-     * dinheiro na conta sem venda nenhuma.
-     *
-     * O Inter só remove cobrança ATIVA. Se a remoção falha, o motivo mais comum
-     * é o cliente ter pago no mesmo instante — aí segue para a conferência
-     * abaixo e a venda é gravada, como seria se ninguém tivesse cancelado.
+    /*
+     * Só o txid vem da tela. O pedido é o que foi guardado quando a cobrança
+     * nasceu — o carrinho da tela pode já ser o do próximo cliente. E a loja
+     * vem da sessão: não se confere nem se cancela o Pix de outra loja.
      */
-    if (intencaoPix === "pixCancelar") {
-      const cancelada = {
-        ok: true as const,
-        tipo: "pixStatus" as const,
-        pago: false as const,
-        cancelada: true as const,
-        status: "REMOVIDA_PELO_USUARIO_RECEBEDOR",
-        motivo: "Cobrança cancelada no Inter",
-      }
-      try {
-        await removerPixImediato(txid, conta)
-        return cancelada
-      } catch (erro) {
-        const agora = await consultarPixImediato(txid, conta)
-        if (agora.status === "ATIVA") {
-          return data(
-            {
-              ok: false as const,
-              tipo: "pixStatus" as const,
-              erro: `Não foi possível cancelar no Inter — o QR continua valendo. ${
-                erro instanceof Error ? erro.message : ""
-              }`.trim(),
-            },
-            { status: 400 }
-          )
-        }
-        // Já expirada ou removida: não aceita mais pagamento, é o que se queria.
-        if (agora.status !== "CONCLUIDA") return cancelada
-      }
-    }
-
-    const pix = await consultarPixImediato(txid, conta)
-    const confirmacao = confirmarPagamento(pix, preco.total)
-
-    if (!confirmacao.pago) {
-      return {
-        ok: true as const,
-        tipo: "pixStatus" as const,
-        pago: false as const,
-        cancelada: false as const,
-        status: pix.status,
-        motivo: confirmacao.motivo,
-      }
-    }
-
-    /**
-     * Venda já gravada com este txid: devolve ela em vez de recusar.
-     *
-     * Acontece quando uma consulta grava a venda e a resposta se perde — o
-     * cancelar interrompe a consulta em voo, por exemplo. Recusar ali diria ao
-     * operador que deu erro num Pix que pagou e virou venda.
-     */
-    const jaGravada = await db.venda.findFirst({
-      where: { pixTxid: txid, loja: eu.loja },
-      select: { id: true, numero: true },
-    })
-    if (jaGravada) {
-      return {
-        ok: true as const,
-        tipo: "pixStatus" as const,
-        pago: true as const,
-        numero: jaGravada.numero,
-        vendaId: jaGravada.id,
-        pagoEm: pix.pagoEm,
-        endToEndId: pix.endToEndId,
-        nota: null,
-      }
-    }
-
-    const resultado = await registrarVenda({
-      ...pedido,
-      forma: "pix",
-      recebido: preco.total,
-      pixTxid: txid,
-      pixPagoEm: pix.pagoEm ? new Date(pix.pagoEm) : new Date(),
-      loja: eu.loja,
-      caixa: CAIXA,
-      operador: eu.nome,
-    })
-
-    if (!resultado.ok) {
+    const pendente = await pixPendenteDaLoja(txid, eu.loja)
+    if (!pendente) {
       return data(
-        { ok: false as const, tipo: "pixStatus" as const, erro: resultado.erro },
+        { ok: false as const, tipo: "pixStatus" as const, erro: "Cobrança não encontrada nesta loja" },
         { status: 400 }
       )
     }
 
-    // Mesma regra do fechamento comum: emite se quem fechou pediu.
-    const querNota = Boolean((bruto as { emitirNota?: unknown }).emitirNota)
-    const nota = querNota ? await emitirNaVenda(resultado.vendaId, eu.nome) : null
+    let resolvido
+    try {
+      if (intencaoPix === "pixCancelar") {
+        const cancelamento = await cancelarPixPendente(pendente)
+        if (cancelamento.aindaAtiva) {
+          return data(
+            { ok: false as const, tipo: "pixStatus" as const, erro: cancelamento.erro },
+            { status: 400 }
+          )
+        }
+        resolvido = cancelamento.pendente
+      } else {
+        resolvido = await resolverPixPendente(pendente)
+      }
+    } catch (erro) {
+      return data(
+        {
+          ok: false as const,
+          tipo: "pixStatus" as const,
+          erro: erro instanceof Error ? erro.message : "Falha ao consultar o Pix no Inter",
+        },
+        { status: 400 }
+      )
+    }
+
+    // Quem está com a janela aberta está vendo o desfecho: o aviso do canto
+    // não precisa repetir. "falhou" fica sem visto — precisa de alguém olhando.
+    if (["paga", "cancelada", "expirada"].includes(resolvido.situacao)) {
+      await marcarVisto(resolvido.id, eu.loja)
+    }
+
+    if (resolvido.situacao === "paga" && resolvido.vendaId && resolvido.vendaNumero) {
+      return {
+        ok: true as const,
+        tipo: "pixStatus" as const,
+        pago: true as const,
+        numero: resolvido.vendaNumero,
+        vendaId: resolvido.vendaId,
+        pagoEm: resolvido.pagoEm?.toISOString() ?? null,
+      }
+    }
 
     return {
       ok: true as const,
       tipo: "pixStatus" as const,
-      pago: true as const,
-      numero: resultado.numero,
-      vendaId: resultado.vendaId,
-      pagoEm: pix.pagoEm,
-      endToEndId: pix.endToEndId,
-      nota,
+      pago: false as const,
+      situacao: resolvido.situacao,
+      cancelada: resolvido.situacao === "cancelada" || resolvido.situacao === "expirada",
+      motivo:
+        resolvido.situacao === "falhou"
+          ? `Pix pago, mas a venda NÃO foi gravada: ${resolvido.erro ?? "motivo desconhecido"}`
+          : resolvido.situacao === "gravando"
+            ? "Pagamento confirmado — gravando a venda…"
+            : resolvido.situacao === "expirada"
+              ? "A cobrança expirou sem pagamento"
+              : "Aguardando o pagamento do cliente",
     }
+  }
+
+  // --- Aviso do canto: o operador viu o desfecho de um Pix em segundo plano ---
+  if (intencaoPix === "pixVisto") {
+    const id = String((bruto as { id?: string }).id ?? "")
+    if (/^[0-9a-fA-F]{24}$/.test(id)) await marcarVisto(id, eu.loja)
+    return { ok: true as const, tipo: "pixVisto" as const }
   }
 
   const pedido = lerPedido(bruto)
@@ -1045,6 +1033,8 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     erro: string | null
     concluida: { numero: number; pagoEm: string | null } | null
     motivoPendente: string | null
+    /** Pix pago que não virou venda: o dinheiro pode estar na conta. */
+    pagoSemVenda?: boolean
   } | null>(null)
   const [comprovante, setComprovante] = useState<{
     vendaNumero: number
@@ -1071,6 +1061,23 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   // `cancelandoPix` muda, e sem isto leria de novo a última consulta pendente
   // como se fosse a resposta do cancelamento — e o cancelar se perderia.
   const respostaPixTratada = useRef<unknown>(null)
+
+  /**
+   * Os Pix que seguem esperando com o caixa já livre. A lista vem do banco — a
+   * vigia do servidor é quem pergunta ao Inter —, então consultar a cada
+   * poucos segundos é barato.
+   */
+  const fetcherEspera = useFetcher<typeof loaderPixPendentes>()
+  const fetcherEsperaRef = useRef(fetcherEspera)
+  fetcherEsperaRef.current = fetcherEspera
+  const atualizarPixEmEspera = useCallback(() => {
+    if (fetcherEsperaRef.current.state === "idle") fetcherEsperaRef.current.load("/pix/pendentes")
+  }, [])
+  // Cancelar e "OK" do aviso: fetcher próprio, para não cruzar com o do QR.
+  const fetcherAcaoEspera = useFetcher<typeof action>()
+  const [cancelandoEspera, setCancelandoEspera] = useState<string | null>(null)
+  // Some da tela na hora do "OK"; o banco confirma na próxima consulta.
+  const [vistosAgora, setVistosAgora] = useState<string[]>([])
 
   const todosClientes = useMemo(
     () => [...clientes, ...novosClientes].sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR")),
@@ -1499,6 +1506,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           recebido: null,
           emitirNota,
           cpfNaNota,
+          vendedorCodigo,
         },
         { method: "post", encType: "application/json" }
       )
@@ -1506,7 +1514,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     }
 
     concluir(tentativa.current?.recebido ?? null, tentativa.current?.condicao ?? null)
-  }, [autorizacaoId, concluir, fetcher, forma, totais.desconto, venda.itens])
+  }, [autorizacaoId, concluir, fetcher, forma, totais.desconto, venda.itens, emitirNota, cpfNaNota, vendedorCodigo])
 
   /**
    * Pergunta a situação do cliente assim que ele entra na venda.
@@ -1603,43 +1611,23 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   /**
    * Consulta o pagamento enquanto o QR está na tela.
    *
+   * Só o txid vai: o pedido foi guardado com a cobrança, e quem grava a venda
+   * é o servidor. A mesma conferência roda lá sozinha — esta só apressa a
+   * resposta para quem está olhando o QR.
+   *
    * `setInterval` com ref, e não um `setTimeout` reagendado pelo próprio efeito:
    * o reagendamento dependia de a identidade do objeto do fetcher mudar a cada
    * resposta. Quando ela não muda, o efeito não re-executa e o polling morre
    * depois da primeira consulta — foi o que aconteceu, e a venda paga nunca era
    * registrada. O intervalo dispara independente de re-render.
    */
-  const dadosDaConsulta = useRef({
-    fetcher: fetcherPix,
-    itens: venda.itens,
-    desconto: 0,
-    vendedorCodigo: "",
-  })
-  dadosDaConsulta.current = {
-    fetcher: fetcherPix,
-    itens: venda.itens,
-    desconto: totais.desconto,
-    vendedorCodigo,
-  }
+  const fetcherPixRef = useRef(fetcherPix)
+  fetcherPixRef.current = fetcherPix
 
   const conferirPix = useCallback((txid: string) => {
-    const { fetcher: f, itens, desconto, vendedorCodigo } = dadosDaConsulta.current
+    const f = fetcherPixRef.current
     if (f.state !== "idle") return
-
-    f.submit(
-      {
-        intencao: "pixConferir",
-        emitirNota,
-        cpfNaNota,
-        txid,
-        itens: itens.map((i) => ({ produtoId: i.produtoId, quantidade: i.quantidade })),
-        desconto,
-        forma: "pix",
-        recebido: null,
-        vendedorCodigo,
-      },
-      { method: "post", encType: "application/json" }
-    )
+    f.submit({ intencao: "pixConferir", txid }, { method: "post", encType: "application/json" })
   }, [])
 
   /**
@@ -1651,32 +1639,92 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
    */
   const cancelarPix = useCallback(() => {
     const txid = pix?.cobranca?.txid
+    // Pago sem venda: não há cobrança a cancelar. Fecha, e o caso segue no
+    // aviso do canto até alguém dar OK.
+    if (pix?.pagoSemVenda) {
+      setPix(null)
+      atualizarPixEmEspera()
+      return
+    }
     // Sem cobrança criada (deu erro ao gerar), não há o que tirar do ar.
     if (!txid) {
       setPix(null)
       avisar("Pagamento por Pix cancelado — nada foi gravado", "erro")
       return
     }
-    const { fetcher: f, itens, desconto, vendedorCodigo } = dadosDaConsulta.current
     setCancelandoPix(true)
-    f.submit(
-      {
-        intencao: "pixCancelar",
-        emitirNota,
-        cpfNaNota,
-        txid,
-        itens: itens.map((i) => ({ produtoId: i.produtoId, quantidade: i.quantidade })),
-        desconto,
-        forma: "pix",
-        recebido: null,
-        vendedorCodigo,
-      },
+    fetcherPixRef.current.submit(
+      { intencao: "pixCancelar", txid },
       { method: "post", encType: "application/json" }
     )
-  }, [pix?.cobranca?.txid, emitirNota, cpfNaNota, avisar])
+  }, [pix?.cobranca?.txid, pix?.pagoSemVenda, avisar, atualizarPixEmEspera])
+
+  /** Deixa a tela pronta para o próximo cliente, em qualquer desfecho. */
+  const limparParaProximaVenda = useCallback(() => {
+    despachar({ tipo: "limpar" })
+    setModo("busca")
+    setEntrada("")
+    setFinalizando(false)
+    setRecebidoTexto("")
+    // O cliente sai junto, como nas outras formas: cada venda começa em
+    // Consumidor Final. Só este caminho não limpava, e o cliente da venda
+    // anterior seguia grudado na próxima sem ninguém notar.
+    setCliente(null)
+    setForma("pix")
+  }, [])
+
+  /**
+   * Libera o caixa enquanto o cliente paga: a cobrança segue no ar, o servidor
+   * segue conferindo, e o desfecho aparece no aviso do canto.
+   */
+  const liberarCaixaDoPix = useCallback(() => {
+    if (!pix?.cobranca || pix.concluida) return
+    avisar(`Pix de ${moeda(pix.cobranca.valor)} aguardando — o aviso aparece no canto`, "sucesso")
+    setPix(null)
+    limparParaProximaVenda()
+    atualizarPixEmEspera()
+  }, [pix, avisar, limparParaProximaVenda, atualizarPixEmEspera])
+
+  useEffect(() => {
+    atualizarPixEmEspera()
+    const id = setInterval(atualizarPixEmEspera, 5000)
+    return () => clearInterval(id)
+  }, [atualizarPixEmEspera])
+
+  // O Pix da janela aberta não aparece também no canto.
+  const pixEmEspera = (fetcherEspera.data?.pendentes ?? []).filter(
+    (p) => p.txid !== pix?.cobranca?.txid && !vistosAgora.includes(p.id)
+  )
+
+  /**
+   * Avisa na barra quando um Pix de segundo plano se resolve — o operador está
+   * no meio de outra venda e pode não estar olhando para o canto.
+   */
+  const situacoesVistas = useRef(new Map<string, string>())
+  useEffect(() => {
+    for (const p of fetcherEspera.data?.pendentes ?? []) {
+      const antes = situacoesVistas.current.get(p.txid)
+      situacoesVistas.current.set(p.txid, p.situacao)
+      if (!antes || antes === p.situacao || p.txid === pix?.cobranca?.txid) continue
+      if (p.situacao === "paga") {
+        avisar(`Pix de ${moeda(p.total)} pago — venda #${p.vendaNumero}`, "sucesso")
+      } else if (p.situacao === "falhou") {
+        avisar(`Pix de ${moeda(p.total)} pago SEM venda gravada — veja o aviso no canto`, "erro")
+      }
+    }
+  }, [fetcherEspera.data, pix?.cobranca?.txid, avisar])
+
+  // Resposta do cancelar pelo canto.
+  useEffect(() => {
+    if (fetcherAcaoEspera.state !== "idle" || !fetcherAcaoEspera.data) return
+    const r = fetcherAcaoEspera.data
+    setCancelandoEspera(null)
+    if (r.tipo === "pixStatus" && !r.ok) avisar(r.erro, "erro")
+    atualizarPixEmEspera()
+  }, [fetcherAcaoEspera.state, fetcherAcaoEspera.data, avisar, atualizarPixEmEspera])
 
   const txidEmCobranca = pix?.cobranca?.txid ?? null
-  const pixConcluido = Boolean(pix?.concluida)
+  const pixConcluido = Boolean(pix?.concluida || pix?.pagoSemVenda)
 
   useEffect(() => {
     if (!txidEmCobranca || pixConcluido || cancelandoPix) return
@@ -1709,22 +1757,20 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       avisar("Pix cancelado no Inter — nada foi gravado", "erro")
       return
     }
+    // Pago sem venda: o dinheiro pode estar na conta. Não é "tente de novo".
+    if (!r.pago && r.situacao === "falhou") {
+      setPix((atual) =>
+        atual ? { ...atual, erro: r.motivo, pagoSemVenda: true, criando: false } : atual
+      )
+      return
+    }
     if (!r.pago) {
       setPix((atual) => (atual ? { ...atual, motivoPendente: r.motivo } : atual))
       return
     }
 
     // Pago: a venda já foi gravada no servidor. Limpa o carrinho.
-    despachar({ tipo: "limpar" })
-    setModo("busca")
-    setEntrada("")
-    setFinalizando(false)
-    setRecebidoTexto("")
-    // O cliente sai junto, como nas outras formas: cada venda começa em
-    // Consumidor Final. Só este caminho não limpava, e o cliente da venda
-    // anterior seguia grudado na próxima sem ninguém notar.
-    setCliente(null)
-    setForma("pix")
+    limparParaProximaVenda()
 
     /**
      * Pix pago sai com DOIS papéis: o comprovante do recebimento e o cupom.
@@ -1748,7 +1794,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     setPix((atual) =>
       atual ? { ...atual, concluida: { numero: r.numero, pagoEm: r.pagoEm }, motivoPendente: null } : atual
     )
-  }, [fetcherPix.state, fetcherPix.data, imprimirCupom, avisar, cancelandoPix])
+  }, [fetcherPix.state, fetcherPix.data, imprimirCupom, avisar, cancelandoPix, limparParaProximaVenda])
 
   /**
    * A prazo o comprovante é o boleto, que o próprio comprovante manda imprimir —
@@ -1818,6 +1864,11 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           desconto: totais.desconto,
           forma: "pix",
           recebido: null,
+          // A venda nasce deste pedido, guardado com a cobrança: o que for
+          // decidido na conferência precisa ir agora, e não na confirmação.
+          emitirNota,
+          cpfNaNota,
+          vendedorCodigo,
         },
         { method: "post", encType: "application/json" }
       )
@@ -2009,6 +2060,9 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           // Gerando: a cobrança pode nascer depois do Esc e ficar no ar sem
           // ninguém para cancelar. Espera o QR aparecer.
           if (!pix.criando && !cancelandoPix) cancelarPix()
+        } else if (key === "F2" && pix.cobranca && !pix.concluida && !pix.erro) {
+          evento.preventDefault()
+          liberarCaixaDoPix()
         } else if (key === "Enter" && pix.concluida) {
           evento.preventDefault()
           avisar(`Venda #${pix.concluida.numero} paga por Pix`, "sucesso")
@@ -2159,6 +2213,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     pix,
     cancelandoPix,
     cancelarPix,
+    liberarCaixaDoPix,
     abrirFinalizacao,
     alternarTema,
     avisarSemEstoque,
@@ -2415,6 +2470,8 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           conferindo={fetcherPix.state !== "idle"}
           onCancelar={cancelarPix}
           cancelando={cancelandoPix}
+          onLiberar={liberarCaixaDoPix}
+          pagoSemVenda={Boolean(pix.pagoSemVenda)}
           onConcluir={() => {
             if (pix.concluida) avisar(`Venda #${pix.concluida.numero} paga por Pix`, "sucesso")
             setPix(null)
@@ -2426,6 +2483,33 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           }
         />
       ) : null}
+
+      <PixEmEspera
+        pendentes={pixEmEspera}
+        cancelando={cancelandoEspera}
+        onCancelar={(txid) => {
+          setCancelandoEspera(txid)
+          fetcherAcaoEspera.submit(
+            { intencao: "pixCancelar", txid },
+            { method: "post", encType: "application/json" }
+          )
+        }}
+        onImprimir={(vendaId) => {
+          imprimirEmSequencia([
+            `/vendas/${vendaId}/comprovante-pix`,
+            `/vendas/${vendaId}/cupom`,
+          ]).then((erro) => {
+            if (erro) avisar(erro, "erro")
+          })
+        }}
+        onVisto={(id) => {
+          setVistosAgora((atual) => [...atual, id])
+          fetcherAcaoEspera.submit(
+            { intencao: "pixVisto", id },
+            { method: "post", encType: "application/json" }
+          )
+        }}
+      />
 
       {comprovante ? (
         <CobrancaDialogo

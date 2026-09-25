@@ -29,6 +29,13 @@ type Props = {
   /** Tira a cobrança do ar no Inter; até a resposta, o QR pode estar valendo. */
   onCancelar: () => void
   cancelando: boolean
+  /**
+   * Libera o caixa para o próximo cliente: a cobrança segue no ar e o servidor
+   * segue conferindo. O desfecho aparece no aviso do canto.
+   */
+  onLiberar: () => void
+  /** Pix pago que não virou venda: muda o texto, que não é "tente de novo". */
+  pagoSemVenda: boolean
   onConcluir: () => void
   /**
    * Manda o QR e o valor para a térmica — para o cliente que não alcança o
@@ -47,6 +54,8 @@ export function PixDialogo({
   conferindo,
   onCancelar,
   cancelando,
+  onLiberar,
+  pagoSemVenda,
   onConcluir,
   onImprimir,
 }: Props) {
@@ -106,8 +115,9 @@ export function PixDialogo({
           <div className="py-10 text-center">
             <p className="text-sm font-medium text-destructive">{erro}</p>
             <p className="mt-2 text-xs text-muted-foreground">
-              Nenhuma venda foi gravada. Tente de novo ou escolha outra forma de
-              pagamento.
+              {pagoSemVenda
+                ? "O dinheiro pode já estar na conta. Confira o extrato do Inter e chame o gerente antes de cobrar de novo — o caso fica no aviso do canto."
+                : "Nenhuma venda foi gravada. Tente de novo ou escolha outra forma de pagamento."}
             </p>
           </div>
         ) : concluida ? (
@@ -235,7 +245,18 @@ export function PixDialogo({
               </p>
             ) : null}
 
-            <p className="mt-4 text-center text-[11px] text-muted-foreground">
+            <Button
+              type="button"
+              tabIndex={-1}
+              variant="secondary"
+              disabled={cancelando || restante === 0}
+              onClick={onLiberar}
+              className="mt-4 w-full rounded-lg"
+            >
+              <Kbd>F2</Kbd> Liberar o caixa e aguardar em segundo plano
+            </Button>
+
+            <p className="mt-3 text-center text-[11px] text-muted-foreground">
               A venda só é gravada depois de o pagamento ser confirmado pelo banco.
             </p>
           </>

@@ -518,14 +518,12 @@ export function chavePix(conta: string) {
 // ---------------------------------------------------------------------------
 
 /**
- * Registra APENAS o webhook de Cobrança (boleto).
+ * Registra o webhook de Cobrança (boleto). O de Pix é `registrarWebhookPix`.
  *
- * O de Pix ficou de fora de propósito: o Inter aceita **um** destino por chave
- * Pix, e a chave desta conta já é usada por outro sistema da empresa. Registrar
- * aqui desviaria as notificações de pagamento dele — foi o que aconteceu uma vez,
- * e por sorte nenhum Pix caiu na janela. O PDV confirma Pix consultando
- * `GET /pix/v2/cob/{txid}`, que é o certo para o balcão: o cliente está na frente
- * e a resposta precisa ser imediata.
+ * Os dois são separados de propósito: o Inter aceita **um** destino por chave
+ * Pix, e a chave antiga (a do CNPJ) é usada por outro sistema da empresa.
+ * Registrar nela desviaria as notificações de pagamento dele — foi o que
+ * aconteceu uma vez, e por sorte nenhum Pix caiu na janela.
  *
  * Antes de gravar, consulta o destino atual e **recusa** sobrescrever URL de
  * terceiro. `sobrescrever: true` é a única forma de forçar, e deve ser decisão
@@ -566,6 +564,60 @@ export async function registrarWebhookCobranca(
   return { webhookUrl: desejada, anterior: atual?.webhookUrl ?? null }
 }
 
+/** Chave aleatória (EVP) do Pix: um UUID. CNPJ, e-mail e telefone não são. */
+const CHAVE_ALEATORIA = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * Registra o webhook de Pix na chave que o PDV usa para cobrar.
+ *
+ * Só aceita chave ALEATÓRIA, e isso é a trava, não um detalhe: a chave antiga
+ * (a do CNPJ) é compartilhada com outro sistema da empresa, e o Inter aceita um
+ * destino por chave — registrar nela desviaria os avisos dele. As chaves
+ * aleatórias foram criadas só para o caixa; enquanto `INTER_<CONTA>_CHAVE_PIX`
+ * ainda apontar para a antiga, este registro recusa em vez de estragar.
+ *
+ * E, como o de cobrança, recusa sobrescrever destino de terceiro.
+ */
+export async function registrarWebhookPix(
+  conta: string,
+  baseUrlPublica: string,
+  { sobrescrever = false } = {}
+) {
+  const raiz = baseUrlPublica.replace(/\/$/, "")
+  if (!raiz.startsWith("https://")) {
+    throw new Error("A URL do webhook precisa ser HTTPS")
+  }
+  const chave = chavePix(conta)
+  if (!CHAVE_ALEATORIA.test(chave)) {
+    throw new Error(
+      `A chave Pix da conta ${conta} não é aleatória (${chave}). O webhook só vai na ` +
+        "chave criada para o PDV — troque INTER_" + conta + "_CHAVE_PIX por ela antes."
+    )
+  }
+  const desejada = `${raiz}/webhooks/inter/pix/${conta}`
+
+  const atual = await chamarInter<{ webhookUrl?: string }>(`/pix/v2/webhook/${chave}`, {
+    conta,
+    escopos: ["webhook.read"],
+  }).catch(() => null)
+
+  if (atual?.webhookUrl && atual.webhookUrl !== desejada && !sobrescrever) {
+    throw new Error(
+      `A chave ${chave} já tem webhook apontando para ${atual.webhookUrl}. ` +
+        "Se substituir é intencional, chame com { sobrescrever: true }."
+    )
+  }
+
+  await chamarInter(`/pix/v2/webhook/${chave}`, {
+    conta,
+    metodo: "PUT",
+    escopos: ["webhook.write"],
+    corpo: { webhookUrl: desejada },
+  })
+
+  return { webhookUrl: desejada, chave, anterior: atual?.webhookUrl ?? null }
+}
+
 /** Só leitura: útil para conferir sem risco de sobrescrever nada. */
 export async function consultarWebhooks(conta: string) {
   const cobranca = await chamarInter("/cobranca/v3/cobrancas/webhook", {
@@ -578,6 +630,8 @@ export async function consultarWebhooks(conta: string) {
     { conta, escopos: ["webhook.read"] }
   ).catch((e) => ({ erro: String(e?.message ?? e) }))
 
-  // O de Pix aparece só para conferência — o PDV não o gerencia.
-  return { cobranca, pix, pixGerenciadoPeloPdv: false }
+  // O de Pix é gerenciado pelo PDV só quando a chave é a aleatória dele.
+  return { cobranca, pix, pixGerenciadoPeloPdv:
+      chavePixConfigurada(conta) && CHAVE_ALEATORIA.test(chavePix(conta)),
+  }
 }

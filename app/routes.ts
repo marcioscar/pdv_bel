@@ -35,6 +35,8 @@ export default [
   route("vendas/:vendaId/comprovante-pix", "routes/comprovante.pix.tsx"),
   // O QR do Pix no papel, para o cliente escanear quando não alcança o monitor.
   route("pix/:txid/qrcode", "routes/pix.qrcode.tsx"),
+  // Dados, não tela: o aviso do canto do caixa pergunta por aqui.
+  route("pix/pendentes", "routes/pix.pendentes.tsx"),
 
   // Escritório: o layout de admin cobra a permissão declarada em lib/permissoes.
   ...prefix("admin", [
@@ -117,5 +119,7 @@ export default [
   route("webhooks/inter/cobranca/:conta", "routes/webhook.cobranca.tsx", {
     id: "webhook-cobranca-conta",
   }),
+  // Pix do caixa: só a chave aleatória do PDV aponta para cá.
+  route("webhooks/inter/pix/:conta", "routes/webhook.pix.tsx"),
   route("welcome", "routes/home.tsx"),
 ] satisfies RouteConfig

@@ -519,7 +519,14 @@ export async function registrarVenda(
    * despacho. Cobrar de novo recusaria a nota justamente por causa da baixa que
    * a própria carga fez — e a nota é o papel que acompanha essa carga.
    */
-  if (!paraARede) {
+  /*
+   * Nem no Pix confirmado: o estoque foi cobrado antes de o QR existir, e com
+   * o caixa livre durante a espera outra venda pode ter levado a última peça.
+   * Recusar ali deixaria o dinheiro recebido sem venda, com a mercadoria já
+   * fora da loja — o saldo negativo é o registro certo do que aconteceu.
+   * `pixTxid` só chega aqui pelo servidor, depois de o Inter confirmar.
+   */
+  if (!paraARede && !pedido.pixTxid) {
     const semEstoque = await recusaPorFaltaDeEstoque(itens, pedido.loja)
     if (semEstoque) return { ok: false, erro: semEstoque }
   }

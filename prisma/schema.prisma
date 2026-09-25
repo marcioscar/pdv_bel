@@ -585,6 +585,48 @@ model Venda {
   @@map("vendas")
 }
 
+/// Pix do balcão esperando o pagamento — a venda que ainda não nasceu.
+///
+/// O carrinho vivia só na tela: se o operador saísse dela, ninguém mais
+/// perguntava ao Inter, e o Pix pago depois virava dinheiro sem venda. Guardado
+/// aqui, o servidor confere sozinho (e pelo webhook) e grava a venda com o
+/// pedido que gerou a cobrança, e o caixa fica livre para o próximo cliente.
+///
+/// Sem @unique no txid, pelo mesmo motivo de `Venda.pixTxid`: a unicidade vem
+/// de ele ser aleatório, e a gravação é travada pela troca de `situacao`.
+model PixPendente {
+  id       String   @id @default(auto()) @map("_id") @db.ObjectId
+  txid     String
+  loja     String
+  caixa    String
+  /// Conta do Inter que emitiu a cobrança — é nela que se consulta.
+  conta    String
+  operador String
+  /// O valor cobrado. A venda só é gravada se o pago bater com ele.
+  total    Float
+  /// O pedido como `lerPedido` o validou, mais `emitirNota`. É dele que a venda
+  /// nasce: o carrinho da tela a essa altura já é o do próximo cliente.
+  pedido   Json
+  criadoEm DateTime @default(now())
+  expiraEm DateTime
+  /// "aguardando" | "gravando" | "paga" | "cancelada" | "expirada" | "falhou".
+  /// "falhou" é Pix PAGO sem venda gravada: precisa de gente olhando.
+  situacao String   @default("aguardando")
+  /// Quando entrou em "gravando" — para destravar se o processo cair no meio.
+  gravandoDesde DateTime?
+  resolvidoEm   DateTime?
+  pagoEm        DateTime?
+  vendaId       String?   @db.ObjectId
+  vendaNumero   Int?
+  erro          String?
+  /// O operador viu o desfecho no caixa. Até lá, o aviso fica na tela.
+  vistoEm       DateTime?
+
+  @@index([txid])
+  @@index([loja, situacao])
+  @@map("pix_pendentes")
+}
+
 /// Itens ficam embutidos na venda: são imutáveis depois do fechamento e nunca
 /// consultados fora dela. Preço e descrição são copiados para o histórico não
 /// mudar quando o cadastro do produto mudar.
