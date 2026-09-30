@@ -6,11 +6,13 @@ import { arredondar } from "~/lib/moeda"
 import { aguardarCancelamento, cancelarCobranca, consultarCobranca } from "~/lib/cobranca.server"
 import {
   clausulaEmAberto,
+  clausulaExpiradoQueConta,
   estaEmAberto,
   EXPIRADO,
   EXPIRADO_CONTA_DESDE,
   FORMAS_DA_BAIXA,
   PAGO_NA_LOJA,
+  SITUACOES_EM_ABERTO,
   SITUACOES_RECEBIDAS,
 } from "~/lib/recebiveis"
 
@@ -381,9 +383,27 @@ async function daLoja(loja: string | null | undefined) {
   }
 }
 
-export async function inadimplentes({ loja }: { loja?: string | null } = {}) {
+/**
+ * Os dois grupos de devedores. Somados são toda a dívida — é o que a trava do
+ * caixa cobra —, mas a lista os mostra separados para não confundir: o vencido
+ * ainda se paga no boleto; o expirado não aceita mais pagamento, e a cobrança
+ * é por outro meio (Pix, boleto novo).
+ */
+export type GrupoDeInadimplentes = "vencidos" | "expirados"
+
+export async function inadimplentes({
+  loja,
+  grupo = "vencidos",
+}: { loja?: string | null; grupo?: GrupoDeInadimplentes } = {}) {
   const hoje = inicioDoDia(diaDeHoje())
-  const abertoVencido = { AND: [clausulaEmAberto(), { vencimento: { lt: hoje } }] }
+  const abertoVencido = {
+    AND: [
+      grupo === "expirados"
+        ? clausulaExpiradoQueConta()
+        : { situacao: { in: SITUACOES_EM_ABERTO } },
+      { vencimento: { lt: hoje } },
+    ],
+  }
   const recorte = await daLoja(loja)
 
   const [doPdv, deFora] = await Promise.all([
@@ -521,13 +541,20 @@ export async function resumoDosBoletos({ loja }: { loja?: string | null } = {}) 
   }
 
   const recorte = await daLoja(loja)
-  const vencido = { AND: [clausulaEmAberto(), { vencimento: { lt: hoje } }] }
+  // Vencido e expirado em cartões separados, como na lista de devedores.
+  const vencido = { situacao: { in: SITUACOES_EM_ABERTO }, vencimento: { lt: hoje } }
+  const expirado = { AND: [clausulaExpiradoQueConta(), { vencimento: { lt: hoje } }] }
   const aVencer = { AND: [clausulaEmAberto(), { vencimento: { gte: hoje } }] }
 
-  const [vencidoPdv, vencidoAntigo, aVencerPdv, aVencerAntigo, recebidoPdv, recebidoAntigo, ultima] =
+  const [
+    vencidoPdv, vencidoAntigo, expiradoPdv, expiradoAntigo, aVencerPdv, aVencerAntigo,
+    recebidoPdv, recebidoAntigo, ultima,
+  ] =
     await Promise.all([
       soma("cobranca", { ...vencido, ...recorte.pdv }),
       soma("boletoExterno", { ...vencido, ...recorte.fora }),
+      soma("cobranca", { ...expirado, ...recorte.pdv }),
+      soma("boletoExterno", { ...expirado, ...recorte.fora }),
       soma("cobranca", { ...aVencer, ...recorte.pdv }),
       soma("boletoExterno", { ...aVencer, ...recorte.fora }),
       // O boleto do PDV não guarda a data do pagamento; a última mudança dele
@@ -547,6 +574,7 @@ export async function resumoDosBoletos({ loja }: { loja?: string | null } = {}) 
 
   return {
     vencido: { pdv: vencidoPdv, antigo: vencidoAntigo },
+    expirado: { pdv: expiradoPdv, antigo: expiradoAntigo },
     aVencer: { pdv: aVencerPdv, antigo: aVencerAntigo },
     recebido30: { pdv: recebidoPdv, antigo: recebidoAntigo },
     ultimaBusca: ultima?.conferidoEm ?? null,

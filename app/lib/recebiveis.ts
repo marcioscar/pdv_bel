@@ -60,12 +60,15 @@ export function estaEmAberto(situacao: string, vencimento: Date | string) {
  * espalhar só num objeto que não tenha outro `OR`.
  */
 export function clausulaEmAberto() {
-  return {
-    OR: [
-      { situacao: { in: SITUACOES_EM_ABERTO } },
-      { situacao: EXPIRADO, vencimento: { gte: inicioDoDia(EXPIRADO_CONTA_DESDE) } },
-    ],
-  }
+  return { OR: [{ situacao: { in: SITUACOES_EM_ABERTO } }, clausulaExpiradoQueConta()] }
+}
+
+/**
+ * Só o expirado que conta como dívida. Inadimplentes o mostra à parte: o
+ * boleto não aceita mais pagamento, e a cobrança é por outro meio.
+ */
+export function clausulaExpiradoQueConta() {
+  return { situacao: EXPIRADO, vencimento: { gte: inicioDoDia(EXPIRADO_CONTA_DESDE) } }
 }
 
 /**

@@ -17,7 +17,8 @@ import {
 import { formatarCpfCnpj } from "~/lib/documento"
 import { imprimirDocumento } from "~/lib/impressao"
 import { interpretarValor, moeda } from "~/lib/moeda"
-import { rotuloDaSituacao } from "~/lib/recebiveis"
+import { EXPIRADO_CONTA_DESDE, rotuloDaSituacao } from "~/lib/recebiveis"
+import { inicioDoDia } from "~/lib/dia"
 import { listarLojas } from "~/lib/lojas.server"
 import { ehGerente } from "~/lib/permissoes"
 import { exigirGerente, exigirUsuario } from "~/lib/sessao.server"
@@ -43,14 +44,16 @@ export async function loader({ request }: Route.LoaderArgs) {
   const pedida = new URL(request.url).searchParams.get("loja") ?? ""
   const loja = eu.lojasPermitidas.includes(pedida) ? pedida : null
 
-  const [devedores, resumo, pagamentos, lojas] = await Promise.all([
+  const [devedores, expirados, resumo, pagamentos, lojas] = await Promise.all([
     inadimplentes({ loja }),
+    inadimplentes({ loja, grupo: "expirados" }),
     resumoDosBoletos({ loja }),
     pagamentosRecentes({ loja }),
     listarLojas(),
   ])
   return {
     devedores,
+    expirados,
     resumo,
     pagamentos,
     loja,
@@ -94,14 +97,11 @@ function dataCurta(d: Date | string) {
 }
 
 export default function Inadimplentes({ loaderData, actionData }: Route.ComponentProps) {
-  const { devedores, resumo, pagamentos, loja, lojas, gerente } = loaderData
+  const { devedores, expirados, resumo, pagamentos, loja, lojas, gerente } = loaderData
   const [, setParametros] = useSearchParams()
   const buscando = useNavigation().state === "submitting"
-  const [aberto, setAberto] = useState<string | null>(null)
   const [gerando, setGerando] = useState(false)
   const [erroDaFolha, setErroDaFolha] = useState<string | null>(null)
-  // O boleto com o formulário de baixa aberto — um de cada vez.
-  const [baixando, setBaixando] = useState<string | null>(null)
   const [baixado, setBaixado] = useState<string | null>(null)
 
   // Abre a caixa de impressão do navegador — ali se escolhe a impressora ou
@@ -117,6 +117,7 @@ export default function Inadimplentes({ loaderData, actionData }: Route.Componen
   }
 
   const vencidoTotal = resumo.vencido.pdv.valor + resumo.vencido.antigo.valor
+  const expiradoTotal = resumo.expirado.pdv.valor + resumo.expirado.antigo.valor
   const aVencerTotal = resumo.aVencer.pdv.valor + resumo.aVencer.antigo.valor
   const recebidoTotal = resumo.recebido30.pdv.valor + resumo.recebido30.antigo.valor
 
@@ -154,7 +155,7 @@ export default function Inadimplentes({ loaderData, actionData }: Route.Componen
             type="button"
             size="sm"
             variant="outline"
-            disabled={gerando || devedores.length === 0}
+            disabled={gerando || (devedores.length === 0 && expirados.length === 0)}
             onClick={imprimir}
             className="rounded-lg"
           >
@@ -211,13 +212,19 @@ export default function Inadimplentes({ loaderData, actionData }: Route.Componen
           </div>
         ) : null}
 
-        <div className="grid gap-3 border-b border-border px-4 py-4 sm:grid-cols-3 sm:px-5">
+        <div className="grid gap-3 border-b border-border px-4 py-4 sm:grid-cols-2 sm:px-5 lg:grid-cols-4">
           <Numero
             rotulo="Vencido"
             valor={moeda(vencidoTotal)}
             detalhe={`PDV ${moeda(resumo.vencido.pdv.valor)} · antigo ${moeda(resumo.vencido.antigo.valor)} · ${devedores.length} ${devedores.length === 1 ? "devedor" : "devedores"}`}
             destaque
             alerta={vencidoTotal > 0}
+          />
+          <Numero
+            rotulo="Expirado no Inter"
+            valor={moeda(expiradoTotal)}
+            detalhe={`desde ${dataCurta(inicioDoDia(EXPIRADO_CONTA_DESDE))} · ${expirados.length} ${expirados.length === 1 ? "devedor" : "devedores"} · não aceita mais pagamento`}
+            alerta={expiradoTotal > 0}
           />
           <Numero
             rotulo="A vencer"
@@ -231,172 +238,27 @@ export default function Inadimplentes({ loaderData, actionData }: Route.Componen
           />
         </div>
 
-        <section className="border-b border-border">
-          <h2 className="px-4 pt-4 pb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground sm:px-5">
-            Quem está devendo — do maior para o menor
-          </h2>
-          {devedores.length === 0 ? (
-            <p className="px-4 pb-6 text-sm text-muted-foreground sm:px-5">
-              Nenhum boleto vencido em aberto.
-              {!resumo.ultimaBusca ? " Os do sistema antigo ainda não foram trazidos — use Atualizar do Inter." : ""}
-            </p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm tabular-nums">
-                <thead>
-                  <tr className="border-b border-border text-left text-[10px] uppercase tracking-wider text-muted-foreground">
-                    <th className="w-8 px-2 py-2" />
-                    <th className="px-2 py-2 font-semibold">Cliente</th>
-                    <th className="px-2 py-2 font-semibold">Contato</th>
-                    <th className="w-36 px-2 py-2 font-semibold">Situação</th>
-                    <th className="w-20 px-2 py-2 text-right font-semibold">Boletos</th>
-                    <th className="w-24 px-2 py-2 text-right font-semibold">Atraso</th>
-                    <th className="w-32 px-4 py-2 text-right font-semibold sm:px-5">Devendo</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {devedores.map((d) => {
-                    const chave = d.documento ?? d.nome
-                    const expandido = aberto === chave
-                    return [
-                      <tr
-                        key={chave}
-                        className="cursor-pointer hover:bg-accent/40"
-                        onClick={() => setAberto(expandido ? null : chave)}
-                      >
-                        <td className="px-2 py-2 text-muted-foreground">
-                          {expandido ? (
-                            <ChevronDown className="size-4" aria-hidden />
-                          ) : (
-                            <ChevronRight className="size-4" aria-hidden />
-                          )}
-                        </td>
-                        <td className="px-2 py-2">
-                          <span className="font-medium">{d.nome}</span>
-                          {d.nomeFantasia ? (
-                            <span className="ml-2 text-xs text-muted-foreground">{d.nomeFantasia}</span>
-                          ) : null}
-                          <span className="block font-mono text-[11px] text-muted-foreground">
-                            {d.documento ? formatarCpfCnpj(d.documento) : "sem documento"}
-                            {d.documentos.length > 1 ? ` · ${d.documentos.length} filiais` : null}
-                            {d.clienteId ? null : " · sem cadastro aqui"}
-                          </span>
-                        </td>
-                        <td className="px-2 py-2 text-xs text-muted-foreground">
-                          {d.telefone ?? "—"}
-                          {d.contato ? <span className="block">{d.contato}</span> : null}
-                        </td>
-                        <td className="px-2 py-2">
-                          <div className="flex flex-wrap gap-1">
-                            {[...new Set(d.boletos.map((b) => b.situacao))].map((situacao) => (
-                              <Badge
-                                key={situacao}
-                                variant="destructive"
-                                className="font-mono text-[10px]"
-                                title={rotuloDaSituacao(situacao)}
-                              >
-                                {situacao}
-                              </Badge>
-                            ))}
-                          </div>
-                        </td>
-                        <td className="px-2 py-2 text-right text-muted-foreground">{d.boletos.length}</td>
-                        <td
-                          className={cn(
-                            "px-2 py-2 text-right",
-                            d.diasAtraso > 30 ? "font-semibold text-destructive" : "text-muted-foreground"
-                          )}
-                        >
-                          {d.diasAtraso} {d.diasAtraso === 1 ? "dia" : "dias"}
-                        </td>
-                        <td className="px-4 py-2 text-right font-semibold sm:px-5">{moeda(d.total)}</td>
-                      </tr>,
-                      expandido ? (
-                        <tr key={`${chave}-boletos`} className="bg-muted/30">
-                          <td />
-                          <td colSpan={6} className="px-2 py-2 pr-4 sm:pr-5">
-                            <table className="w-full text-xs">
-                              <tbody>
-                                {d.boletos.map((b) => [
-                                  <tr key={b.id}>
-                                    <td className="py-1 pr-2">
-                                      <Badge
-                                        variant={b.origem === "antigo" ? "secondary" : "outline"}
-                                        className="text-[9px]"
-                                      >
-                                        {b.origem === "antigo" ? "sistema antigo" : "PDV"}
-                                      </Badge>
-                                    </td>
-                                    <td className="py-1 pr-2">
-                                      {b.referencia}
-                                      {d.documentos.length > 1 ? (
-                                        <span className="ml-2 font-mono text-[10px] text-muted-foreground">
-                                          {formatarCpfCnpj(b.documento)}
-                                        </span>
-                                      ) : null}
-                                    </td>
-                                    <td className="py-1 pr-2 font-mono text-muted-foreground">{b.conta}</td>
-                                    <td className="py-1 pr-2">venceu {dataCurta(b.vencimento)}</td>
-                                    <td className="py-1 pr-2">
-                                      {/* Como em Contas a receber: o código do Inter, que é o
-                                          que se procura no extrato, com o rótulo no título. */}
-                                      <Badge
-                                        variant="destructive"
-                                        className="font-mono text-[10px]"
-                                        title={rotuloDaSituacao(b.situacao)}
-                                      >
-                                        {b.situacao}
-                                      </Badge>
-                                    </td>
-                                    <td className="max-w-56 truncate py-1 pr-2 font-mono text-[10px] text-muted-foreground">
-                                      {b.linhaDigitavel ?? ""}
-                                    </td>
-                                    <td className="py-1 text-right font-medium">{moeda(b.valor)}</td>
-                                    <td className="py-1 pl-3 text-right">
-                                      {/* Baixar cancela a cobrança no Inter: é do gerente. */}
-                                      {gerente ? (
-                                      <Button
-                                        type="button"
-                                        size="xs"
-                                        variant="outline"
-                                        onClick={(e) => {
-                                          e.stopPropagation()
-                                          setBaixando(baixando === b.id ? null : b.id)
-                                        }}
-                                        className="rounded-lg whitespace-nowrap"
-                                      >
-                                        Recebido na loja
-                                      </Button>
-                                      ) : null}
-                                    </td>
-                                  </tr>,
-                                  gerente && baixando === b.id ? (
-                                    <tr key={`${b.id}-baixa`}>
-                                      <td colSpan={8} className="pb-2">
-                                        <BaixaNaLoja
-                                          boleto={b}
-                                          onFechar={() => setBaixando(null)}
-                                          onBaixado={(mensagem) => {
-                                            setBaixando(null)
-                                            setBaixado(`${d.nome}: ${mensagem}`)
-                                          }}
-                                        />
-                                      </td>
-                                    </tr>
-                                  ) : null,
-                                ])}
-                              </tbody>
-                            </table>
-                          </td>
-                        </tr>
-                      ) : null,
-                    ]
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
+        <Devedores
+          titulo="Quem está devendo — do maior para o menor"
+          devedores={devedores}
+          gerente={gerente}
+          onBaixado={setBaixado}
+          vazio={
+            "Nenhum boleto vencido em aberto." +
+            (!resumo.ultimaBusca ? " Os do sistema antigo ainda não foram trazidos — use Atualizar do Inter." : "")
+          }
+        />
+
+        {expirados.length > 0 ? (
+          <Devedores
+            titulo="Expirados no Inter — o boleto não aceita mais pagamento"
+            explicacao={`Vencidos desde ${dataCurta(inicioDoDia(EXPIRADO_CONTA_DESDE))} que passaram do prazo do banco sem pagamento. A dívida continua e também trava a venda a prazo, mas a cobrança é por outro meio: Pix ou boleto novo. Se o cliente já pagou por fora, dê a baixa na loja.`}
+            devedores={expirados}
+            gerente={gerente}
+            onBaixado={setBaixado}
+            vazio=""
+          />
+        ) : null}
 
         <section>
           <h2 className="px-4 pt-4 pb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground sm:px-5">
@@ -440,5 +302,197 @@ export default function Inadimplentes({ loaderData, actionData }: Route.Componen
         </p>
       </div>
     </div>
+  )
+}
+
+type Devedor = Route.ComponentProps["loaderData"]["devedores"][number]
+
+/** A tabela de quem deve: clicar abre os boletos, e o gerente dá a baixa ali. */
+function Devedores({
+  titulo,
+  explicacao,
+  devedores,
+  gerente,
+  vazio,
+  onBaixado,
+}: {
+  titulo: string
+  explicacao?: string
+  devedores: Devedor[]
+  gerente: boolean
+  vazio: string
+  onBaixado: (mensagem: string) => void
+}) {
+  const [aberto, setAberto] = useState<string | null>(null)
+  // O boleto com o formulário de baixa aberto — um de cada vez.
+  const [baixando, setBaixando] = useState<string | null>(null)
+
+  return (
+    <section className="border-b border-border">
+      <h2 className="px-4 pt-4 pb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground sm:px-5">
+        {titulo}
+      </h2>
+      {explicacao ? (
+        <p className="px-4 pb-2 text-xs text-muted-foreground sm:px-5">{explicacao}</p>
+      ) : null}
+      {devedores.length === 0 ? (
+        <p className="px-4 pb-6 text-sm text-muted-foreground sm:px-5">{vazio}</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm tabular-nums">
+            <thead>
+              <tr className="border-b border-border text-left text-[10px] uppercase tracking-wider text-muted-foreground">
+                <th className="w-8 px-2 py-2" />
+                <th className="px-2 py-2 font-semibold">Cliente</th>
+                <th className="px-2 py-2 font-semibold">Contato</th>
+                <th className="w-36 px-2 py-2 font-semibold">Situação</th>
+                <th className="w-20 px-2 py-2 text-right font-semibold">Boletos</th>
+                <th className="w-24 px-2 py-2 text-right font-semibold">Atraso</th>
+                <th className="w-32 px-4 py-2 text-right font-semibold sm:px-5">Devendo</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {devedores.map((d) => {
+                const chave = d.documento ?? d.nome
+                const expandido = aberto === chave
+                return [
+                  <tr
+                    key={chave}
+                    className="cursor-pointer hover:bg-accent/40"
+                    onClick={() => setAberto(expandido ? null : chave)}
+                  >
+                    <td className="px-2 py-2 text-muted-foreground">
+                      {expandido ? (
+                        <ChevronDown className="size-4" aria-hidden />
+                      ) : (
+                        <ChevronRight className="size-4" aria-hidden />
+                      )}
+                    </td>
+                    <td className="px-2 py-2">
+                      <span className="font-medium">{d.nome}</span>
+                      {d.nomeFantasia ? (
+                        <span className="ml-2 text-xs text-muted-foreground">{d.nomeFantasia}</span>
+                      ) : null}
+                      <span className="block font-mono text-[11px] text-muted-foreground">
+                        {d.documento ? formatarCpfCnpj(d.documento) : "sem documento"}
+                        {d.documentos.length > 1 ? ` · ${d.documentos.length} filiais` : null}
+                        {d.clienteId ? null : " · sem cadastro aqui"}
+                      </span>
+                    </td>
+                    <td className="px-2 py-2 text-xs text-muted-foreground">
+                      {d.telefone ?? "—"}
+                      {d.contato ? <span className="block">{d.contato}</span> : null}
+                    </td>
+                    <td className="px-2 py-2">
+                      <div className="flex flex-wrap gap-1">
+                        {[...new Set(d.boletos.map((b) => b.situacao))].map((situacao) => (
+                          <Badge
+                            key={situacao}
+                            variant="destructive"
+                            className="font-mono text-[10px]"
+                            title={rotuloDaSituacao(situacao)}
+                          >
+                            {situacao}
+                          </Badge>
+                        ))}
+                      </div>
+                    </td>
+                    <td className="px-2 py-2 text-right text-muted-foreground">{d.boletos.length}</td>
+                    <td
+                      className={cn(
+                        "px-2 py-2 text-right",
+                        d.diasAtraso > 30 ? "font-semibold text-destructive" : "text-muted-foreground"
+                      )}
+                    >
+                      {d.diasAtraso} {d.diasAtraso === 1 ? "dia" : "dias"}
+                    </td>
+                    <td className="px-4 py-2 text-right font-semibold sm:px-5">{moeda(d.total)}</td>
+                  </tr>,
+                  expandido ? (
+                    <tr key={`${chave}-boletos`} className="bg-muted/30">
+                      <td />
+                      <td colSpan={6} className="px-2 py-2 pr-4 sm:pr-5">
+                        <table className="w-full text-xs">
+                          <tbody>
+                            {d.boletos.map((b) => [
+                              <tr key={b.id}>
+                                <td className="py-1 pr-2">
+                                  <Badge
+                                    variant={b.origem === "antigo" ? "secondary" : "outline"}
+                                    className="text-[9px]"
+                                  >
+                                    {b.origem === "antigo" ? "sistema antigo" : "PDV"}
+                                  </Badge>
+                                </td>
+                                <td className="py-1 pr-2">
+                                  {b.referencia}
+                                  {d.documentos.length > 1 ? (
+                                    <span className="ml-2 font-mono text-[10px] text-muted-foreground">
+                                      {formatarCpfCnpj(b.documento)}
+                                    </span>
+                                  ) : null}
+                                </td>
+                                <td className="py-1 pr-2 font-mono text-muted-foreground">{b.conta}</td>
+                                <td className="py-1 pr-2">venceu {dataCurta(b.vencimento)}</td>
+                                <td className="py-1 pr-2">
+                                  {/* Como em Contas a receber: o código do Inter, que é o
+                                      que se procura no extrato, com o rótulo no título. */}
+                                  <Badge
+                                    variant="destructive"
+                                    className="font-mono text-[10px]"
+                                    title={rotuloDaSituacao(b.situacao)}
+                                  >
+                                    {b.situacao}
+                                  </Badge>
+                                </td>
+                                <td className="max-w-56 truncate py-1 pr-2 font-mono text-[10px] text-muted-foreground">
+                                  {b.linhaDigitavel ?? ""}
+                                </td>
+                                <td className="py-1 text-right font-medium">{moeda(b.valor)}</td>
+                                <td className="py-1 pl-3 text-right">
+                                  {/* Baixar cancela a cobrança no Inter: é do gerente. */}
+                                  {gerente ? (
+                                  <Button
+                                    type="button"
+                                    size="xs"
+                                    variant="outline"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      setBaixando(baixando === b.id ? null : b.id)
+                                    }}
+                                    className="rounded-lg whitespace-nowrap"
+                                  >
+                                    Recebido na loja
+                                  </Button>
+                                  ) : null}
+                                </td>
+                              </tr>,
+                              gerente && baixando === b.id ? (
+                                <tr key={`${b.id}-baixa`}>
+                                  <td colSpan={8} className="pb-2">
+                                    <BaixaNaLoja
+                                      boleto={b}
+                                      onFechar={() => setBaixando(null)}
+                                      onBaixado={(mensagem) => {
+                                        setBaixando(null)
+                                        onBaixado(`${d.nome}: ${mensagem}`)
+                                      }}
+                                    />
+                                  </td>
+                                </tr>
+                              ) : null,
+                            ])}
+                          </tbody>
+                        </table>
+                      </td>
+                    </tr>
+                  ) : null,
+                ]
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   )
 }

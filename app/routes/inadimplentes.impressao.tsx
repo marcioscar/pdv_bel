@@ -4,6 +4,7 @@ import { emDia, inicioDoDia, diaDeHoje } from "~/lib/dia"
 import { formatarCpfCnpj } from "~/lib/documento"
 import { escapar } from "~/lib/html"
 import { moeda } from "~/lib/moeda"
+import { EXPIRADO_CONTA_DESDE } from "~/lib/recebiveis"
 import { exigirUsuario } from "~/lib/sessao.server"
 
 /**
@@ -26,9 +27,12 @@ export async function loader({ request }: Route.LoaderArgs) {
   const eu = await exigirUsuario(request)
   const pedida = new URL(request.url).searchParams.get("loja") ?? ""
   const loja = eu.lojasPermitidas.includes(pedida) ? pedida : null
-  const devedores = await inadimplentes({ loja })
+  const [devedores, expirados] = await Promise.all([
+    inadimplentes({ loja }),
+    inadimplentes({ loja, grupo: "expirados" }),
+  ])
 
-  return new Response(folha(devedores, eu.nome, loja), {
+  return new Response(folha(devedores, expirados, eu.nome, loja), {
     headers: {
       "content-type": "text/html; charset=utf-8",
       // Retrato de agora: em cache, cobraria quem acabou de pagar.
@@ -113,8 +117,8 @@ function linhaDoDevedor(
   return cabeca + linhas
 }
 
-function folha(devedores: Devedor[], emitidoPor: string, loja: string | null) {
-  const hoje = inicioDoDia(diaDeHoje()).getTime()
+/** As seções por loja de um grupo, com a linha de total do grupo no fim. */
+function blocoPorLoja(devedores: Devedor[], hoje: number, rotuloDoTotal: string) {
   const secoes = porLoja(devedores)
   const totalGeral = secoes.reduce((s, x) => s + x.total, 0)
   const boletosGeral = secoes.reduce((s, x) => s + x.boletos, 0)
@@ -142,6 +146,20 @@ function folha(devedores: Devedor[], emitidoPor: string, loja: string | null) {
   </section>`
     )
     .join("")
+
+  const total = `<div class="total">
+    <span>${rotuloDoTotal}: ${devedores.length} ${devedores.length === 1 ? "cliente" : "clientes"} · ${boletosGeral} ${boletosGeral === 1 ? "boleto" : "boletos"}</span>
+    <span>${moeda(totalGeral)}</span>
+  </div>`
+
+  return { vazio: secoes.length === 0, html: corpo + total, total: totalGeral }
+}
+
+function folha(devedores: Devedor[], expirados: Devedor[], emitidoPor: string, loja: string | null) {
+  const hoje = inicioDoDia(diaDeHoje()).getTime()
+  const vencidos = blocoPorLoja(devedores, hoje, "Vencidos")
+  const doExpirado = blocoPorLoja(expirados, hoje, "Expirados")
+  const desde = inicioDoDia(EXPIRADO_CONTA_DESDE).toLocaleDateString("pt-BR")
 
   const agora = new Date().toLocaleString("pt-BR", {
     day: "2-digit",
@@ -211,6 +229,13 @@ function folha(devedores: Devedor[], emitidoPor: string, loja: string | null) {
     break-inside: avoid;
   }
   .rodape { margin-top: 6px; font-size: 8.5px; color: #444; }
+
+  /* Os dois grupos em partes com título: o expirado começa em página nova para
+     a folha de cobrança de um não se misturar com a do outro. */
+  .parte { font-size: 13px; margin: 12px 0 0; text-transform: uppercase; letter-spacing: .04em; }
+  .parte.expirados { break-before: page; }
+  .nota { margin: 3px 0 0; font-size: 9.5px; color: #333; }
+  .total.geral { border-top: 3px double #000; margin-top: 14px; }
 </style>
 </head>
 <body>
@@ -224,14 +249,21 @@ function folha(devedores: Devedor[], emitidoPor: string, loja: string | null) {
     </div>
   </header>
 
-  ${secoes.length === 0 ? `<p class="vazia">Nenhum boleto vencido em aberto.</p>` : corpo}
+  <h2 class="parte">Vencidos — ainda se pagam no boleto</h2>
+  ${vencidos.vazio ? `<p class="vazia">Nenhum boleto vencido em aberto.</p>` : vencidos.html}
 
   ${
-    secoes.length > 0
-      ? `<div class="total">
-    <span>${devedores.length} ${devedores.length === 1 ? "cliente" : "clientes"} · ${boletosGeral} ${boletosGeral === 1 ? "boleto" : "boletos"}</span>
-    <span>${moeda(totalGeral)}</span>
-  </div>`
+    doExpirado.vazio
+      ? ""
+      : `<h2 class="parte expirados">Expirados no Inter — o boleto não aceita mais pagamento</h2>
+  <p class="nota">Vencidos desde ${escapar(desde)} que passaram do prazo do banco sem pagamento. A dívida continua,
+  mas a cobrança é por outro meio (Pix ou boleto novo). Se o cliente já pagou por fora, dê a baixa na loja.</p>
+  ${doExpirado.html}`
+  }
+
+  ${
+    !vencidos.vazio && !doExpirado.vazio
+      ? `<div class="total geral"><span>Total devido (vencidos + expirados)</span><span>${moeda(vencidos.total + doExpirado.total)}</span></div>`
       : ""
   }
   <p class="rodape">Emitido por ${escapar(emitidoPor)} em ${escapar(agora)}. Os pagamentos só aparecem aqui depois de conferidos no Inter — use "Atualizar do Inter" antes de imprimir.</p>
