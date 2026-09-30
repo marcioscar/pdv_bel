@@ -4,7 +4,7 @@ import { emDia, inicioDoDia, diaDeHoje } from "~/lib/dia"
 import { formatarCpfCnpj } from "~/lib/documento"
 import { escapar } from "~/lib/html"
 import { moeda } from "~/lib/moeda"
-import { EXPIRADO_CONTA_DESDE } from "~/lib/recebiveis"
+import { EXPIRADO_CONTA_DESDE, rotuloDaSituacao } from "~/lib/recebiveis"
 import { exigirUsuario } from "~/lib/sessao.server"
 
 /**
@@ -83,7 +83,7 @@ function linhaDoDevedor(
   hoje: number
 ) {
   const cabeca = `<tr class="devedor">
-    <td colspan="4">
+    <td colspan="5">
       <span class="nome">${escapar(devedor.nome)}</span>
       ${devedor.nomeFantasia ? `<span class="fraco"> ${escapar(devedor.nomeFantasia)}</span>` : ""}
       <span class="doc">${devedor.documento ? escapar(formatarCpfCnpj(devedor.documento)) : "sem documento"}${
@@ -108,6 +108,7 @@ function linhaDoDevedor(
             ? ` <span class="doc">${escapar(formatarCpfCnpj(b.documento))}</span>`
             : ""
         }</td>
+        <td class="situacao">${escapar(rotuloDaSituacao(b.situacao))}</td>
         <td class="origem">${b.origem === "antigo" ? "sistema antigo" : "PDV"}</td>
         <td class="valor">${moeda(b.valor)}</td>
       </tr>`
@@ -137,6 +138,7 @@ function blocoPorLoja(devedores: Devedor[], hoje: number, rotuloDoTotal: string)
           <th class="venc">Vencimento</th>
           <th class="atraso">Atraso</th>
           <th>Documento</th>
+          <th class="situacao">Situação</th>
           <th class="origem">Origem</th>
           <th class="valor">Valor</th>
         </tr>
@@ -219,6 +221,7 @@ function folha(devedores: Devedor[], expirados: Devedor[], emitidoPor: string, l
   .venc { width: 22mm; font-variant-numeric: tabular-nums; }
   .atraso { width: 18mm; font-variant-numeric: tabular-nums; }
   .origem { width: 26mm; font-size: 9px; }
+  .situacao { width: 22mm; font-size: 9px; }
   .valor { width: 26mm; text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
   .fraco { color: #555; font-size: 9px; }
   .vazia { margin: 20px 0; font-style: italic; }
