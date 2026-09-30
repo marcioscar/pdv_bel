@@ -13,7 +13,7 @@ import {
 import { db } from "~/lib/db.server"
 import { diaAtras, diaDeHoje, emDia, inicioDoDia } from "~/lib/dia"
 import { arredondar, moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
-import { SITUACOES_EM_ABERTO } from "~/lib/recebiveis"
+import { clausulaEmAberto } from "~/lib/recebiveis"
 import { enviarTelegramEmSegundoPlano, texto } from "~/lib/telegram.server"
 
 /**
@@ -49,7 +49,7 @@ export async function dividaDoCliente(clienteId: string | null): Promise<Divida>
   ])
 
   const limite = inicioDoDia(diaAtras(DIAS_DE_CARENCIA))
-  const vencidoEmAberto = { situacao: { in: SITUACOES_EM_ABERTO }, vencimento: { lt: limite } }
+  const vencidoEmAberto = { AND: [clausulaEmAberto(), { vencimento: { lt: limite } }] }
 
   /*
    * Os boletos emitidos FORA daqui (sistema antigo, app do banco) entram pela

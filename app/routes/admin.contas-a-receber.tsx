@@ -22,8 +22,8 @@ import { listarLojas } from "~/lib/lojas.server"
 import { baixarNaLoja } from "~/lib/boletos-externos.server"
 import { interpretarValor, moeda } from "~/lib/moeda"
 import {
+  estaEmAberto,
   PERIODO_TODO,
-  SITUACOES_EM_ABERTO,
   SITUACOES_RECEBIDAS,
   SITUACOES_RECEBIVEIS,
   type FiltroRecebiveis,
@@ -412,7 +412,7 @@ function Linha({ conta, hoje }: { conta: RecebivelConsultado; hoje: string }) {
   const vencimento = new Date(conta.vencimento)
   const dia = `${vencimento.getFullYear()}-${String(vencimento.getMonth() + 1).padStart(2, "0")}-${String(vencimento.getDate()).padStart(2, "0")}`
 
-  const emAberto = SITUACOES_EM_ABERTO.includes(conta.situacao)
+  const emAberto = estaEmAberto(conta.situacao, conta.vencimento)
   const recebida = SITUACOES_RECEBIDAS.includes(conta.situacao)
   const atraso = emAberto ? diasEntre(dia, hoje) : 0
 

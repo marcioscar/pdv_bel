@@ -11,7 +11,7 @@ import {
   ULTIMO_DIA,
 } from "~/lib/dia"
 import {
-  SITUACOES_EM_ABERTO,
+  clausulaEmAberto,
   SITUACOES_ENCERRADAS,
   SITUACOES_RECEBIDAS,
   SITUACOES_RECEBIVEIS,
@@ -109,15 +109,16 @@ function condicaoDaSituacao(
 ): (Prisma.CobrancaWhereInput & Prisma.BoletoExternoWhereInput) | null {
   switch (situacao) {
     case "abertas":
-      return { situacao: { in: SITUACOES_EM_ABERTO } }
+      return clausulaEmAberto()
     // Vencida é situação MAIS data: o Inter só marca "ATRASADO" quando quer, e
     // esperar por essa marca deixaria a parcela de ontem parecendo em dia.
     case "vencidas":
-      return { situacao: { in: SITUACOES_EM_ABERTO }, vencimento: { lt: hoje } }
+      return { AND: [clausulaEmAberto(), { vencimento: { lt: hoje } }] }
     case "recebidas":
       return { situacao: { in: SITUACOES_RECEBIDAS } }
+    // O expirado que ainda conta como dívida está em "abertas", não aqui.
     case "canceladas":
-      return { situacao: { in: SITUACOES_ENCERRADAS } }
+      return { situacao: { in: SITUACOES_ENCERRADAS }, NOT: clausulaEmAberto() }
     default:
       return null
   }
@@ -305,8 +306,8 @@ export async function consultarRecebiveis(filtro: FiltroRecebiveis) {
     condicoesExternas(filtro, hoje),
   ])
 
-  const abertoPdv = { AND: [pdv.base, { situacao: { in: SITUACOES_EM_ABERTO } }] }
-  const abertoFora = { AND: [fora.base, { situacao: { in: SITUACOES_EM_ABERTO } }] }
+  const abertoPdv = { AND: [pdv.base, clausulaEmAberto()] }
+  const abertoFora = { AND: [fora.base, clausulaEmAberto()] }
   const recebidoPdv = { AND: [pdv.base, { situacao: { in: SITUACOES_RECEBIDAS } }] }
   const recebidoFora = { AND: [fora.base, { situacao: { in: SITUACOES_RECEBIDAS } }] }
 

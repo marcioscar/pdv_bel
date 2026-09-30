@@ -3,8 +3,8 @@ import { diaEmTexto, emDia, inicioDoDia } from "~/lib/dia"
 import { escapar } from "~/lib/html"
 import { moeda } from "~/lib/moeda"
 import {
+  estaEmAberto,
   rotuloDaSituacao,
-  SITUACOES_EM_ABERTO,
   type SituacaoRecebivel,
 } from "~/lib/recebiveis"
 import {
@@ -131,7 +131,7 @@ function faixaDoDia({
   const atraso = Math.round((hoje - data.getTime()) / 86_400_000)
   // Só chama de atrasado o que ainda não foi pago: numa folha de boletos pagos,
   // "venceu há 20 dias" seria cobrança de uma dívida que não existe mais.
-  const temEmAberto = contas.some((conta) => SITUACOES_EM_ABERTO.includes(conta.situacao))
+  const temEmAberto = contas.some((conta) => estaEmAberto(conta.situacao, conta.vencimento))
 
   const soma = contas.reduce((acc, conta) => acc + conta.valor, 0)
   const diaDaSemana = data.toLocaleDateString("pt-BR", { weekday: "long" })

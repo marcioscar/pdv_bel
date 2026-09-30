@@ -5,9 +5,12 @@ import { raizDoCnpj } from "~/lib/documento"
 import { arredondar } from "~/lib/moeda"
 import { aguardarCancelamento, cancelarCobranca, consultarCobranca } from "~/lib/cobranca.server"
 import {
+  clausulaEmAberto,
+  estaEmAberto,
+  EXPIRADO,
+  EXPIRADO_CONTA_DESDE,
   FORMAS_DA_BAIXA,
   PAGO_NA_LOJA,
-  SITUACOES_EM_ABERTO,
   SITUACOES_RECEBIDAS,
 } from "~/lib/recebiveis"
 
@@ -145,10 +148,11 @@ export type ResultadoDaBusca = {
 /**
  * Traz do Inter os boletos que não nasceram aqui, das contas de todas as lojas.
  *
- * Três consultas por conta:
+ * Quatro consultas por conta:
  * - todo boleto com vencimento de 12 meses atrás até 2 anos à frente, em
  *   qualquer situação — o histórico de quem paga em dia e o que ainda vai vencer;
- * - e, antes disso, só os que continuam devendo (ATRASADO e PROTESTO).
+ * - e, antes disso, só os que continuam devendo: ATRASADO e PROTESTO de
+ *   qualquer data, e EXPIRADO desde `EXPIRADO_CONTA_DESDE`.
  *
  * Boleto emitido por este PDV é pulado: esse já mora em `cobrancas`, com a
  * venda dele. Guardar duas vezes contaria a mesma dívida em dobro.
@@ -179,6 +183,8 @@ export async function buscarBoletosNoInter(): Promise<ResultadoDaBusca> {
 
   const umAnoAtras = diaAtras(365)
   const resultado: ResultadoDaBusca = { contas: [], ignoradosDoPdv: 0 }
+  // O que as consultas trouxeram: quem não veio é que precisa ser reconferido.
+  const trazidos = new Set<string>()
 
   for (const conta of contas) {
     try {
@@ -186,7 +192,12 @@ export async function buscarBoletosNoInter(): Promise<ResultadoDaBusca> {
         ...(await buscarJanela(conta, umAnoAtras, diaAdiante(730))),
         ...(await buscarJanela(conta, "2015-01-01", somarDias(umAnoAtras, -1), "ATRASADO")),
         ...(await buscarJanela(conta, "2015-01-01", somarDias(umAnoAtras, -1), "PROTESTO")),
+        // Expirado também é dívida, mas só do corte em diante (ver recebiveis.ts).
+        ...(EXPIRADO_CONTA_DESDE < umAnoAtras
+          ? await buscarJanela(conta, EXPIRADO_CONTA_DESDE, somarDias(umAnoAtras, -1), EXPIRADO)
+          : []),
       ].filter((i) => i.cobranca?.codigoSolicitacao && i.cobranca.dataVencimento)
+      for (const i of itens) trazidos.add(i.cobranca.codigoSolicitacao!)
 
       const deFora = itens.filter((i) => !doPdv.has(i.cobranca.codigoSolicitacao!))
       resultado.ignoradosDoPdv += itens.length - deFora.length
@@ -205,8 +216,9 @@ export async function buscarBoletosNoInter(): Promise<ResultadoDaBusca> {
   }
 
   // O boleto antigo que estava em aberto e foi pago sai da consulta de
-  // ATRASADO — e ficaria "devendo" aqui para sempre. Esses são conferidos um a um.
-  await reconferirAbertosAntigos(umAnoAtras)
+  // ATRASADO — e ficaria "devendo" aqui para sempre. Esses são conferidos um a
+  // um; os que as consultas trouxeram já estão atualizados e são pulados.
+  await reconferirAbertosAntigos(umAnoAtras, trazidos)
 
   return resultado
 }
@@ -303,16 +315,17 @@ export async function reconferirBoletoExterno(codigoSolicitacao: string) {
   return { antes: guardado.situacao, depois: novo.situacao }
 }
 
-async function reconferirAbertosAntigos(umAnoAtras: string) {
+async function reconferirAbertosAntigos(umAnoAtras: string, trazidos: Set<string>) {
   const antigos = await db.boletoExterno.findMany({
     where: {
-      situacao: { in: SITUACOES_EM_ABERTO },
+      ...clausulaEmAberto(),
       vencimento: { lt: inicioDoDia(umAnoAtras) },
       conferidoEm: { lt: new Date(Date.now() - 5 * 60_000) },
     },
     select: { codigoSolicitacao: true },
   })
   for (const b of antigos) {
+    if (trazidos.has(b.codigoSolicitacao)) continue
     try {
       await reconferirBoletoExterno(b.codigoSolicitacao)
     } catch {
@@ -370,7 +383,7 @@ async function daLoja(loja: string | null | undefined) {
 
 export async function inadimplentes({ loja }: { loja?: string | null } = {}) {
   const hoje = inicioDoDia(diaDeHoje())
-  const abertoVencido = { situacao: { in: SITUACOES_EM_ABERTO }, vencimento: { lt: hoje } }
+  const abertoVencido = { AND: [clausulaEmAberto(), { vencimento: { lt: hoje } }] }
   const recorte = await daLoja(loja)
 
   const [doPdv, deFora] = await Promise.all([
@@ -508,8 +521,8 @@ export async function resumoDosBoletos({ loja }: { loja?: string | null } = {}) 
   }
 
   const recorte = await daLoja(loja)
-  const vencido = { situacao: { in: SITUACOES_EM_ABERTO }, vencimento: { lt: hoje } }
-  const aVencer = { situacao: { in: SITUACOES_EM_ABERTO }, vencimento: { gte: hoje } }
+  const vencido = { AND: [clausulaEmAberto(), { vencimento: { lt: hoje } }] }
+  const aVencer = { AND: [clausulaEmAberto(), { vencimento: { gte: hoje } }] }
 
   const [vencidoPdv, vencidoAntigo, aVencerPdv, aVencerAntigo, recebidoPdv, recebidoAntigo, ultima] =
     await Promise.all([
@@ -626,7 +639,7 @@ export async function baixarNaLoja(entrada: {
   if (boleto.baixadoEm) {
     return { ok: false, erro: `Este boleto já foi baixado por ${boleto.baixadoPor}` }
   }
-  if (!SITUACOES_EM_ABERTO.includes(boleto.situacao)) {
+  if (!estaEmAberto(boleto.situacao, boleto.vencimento)) {
     return { ok: false, erro: `Este boleto está ${boleto.situacao} — não há o que baixar` }
   }
 
@@ -636,8 +649,9 @@ export async function baixarNaLoja(entrada: {
       : db.boletoExterno.update({ where: { id: entrada.id }, data: { situacao } })
 
   // A nossa cópia pode estar velha: ele pode ter pago no banco hoje de manhã.
+  let noInter: string | undefined
   try {
-    const noInter = (await consultarCobranca(boleto.codigoSolicitacao, boleto.conta)).cobranca?.situacao
+    noInter = (await consultarCobranca(boleto.codigoSolicitacao, boleto.conta)).cobranca?.situacao
     if (noInter && SITUACOES_RECEBIDAS.includes(noInter)) {
       await atualizar(noInter)
       return {
@@ -650,18 +664,28 @@ export async function baixarNaLoja(entrada: {
     // o boleto não estiver mais cancelável.
   }
 
-  try {
-    await cancelarCobranca(boleto.codigoSolicitacao, boleto.conta, "APEDIDODOBENEFICIARIO")
-  } catch (erro) {
-    return {
-      ok: false,
-      erro: `O Inter não cancelou o boleto, e nada foi baixado: ${
-        erro instanceof Error ? erro.message : "erro desconhecido"
-      }`,
+  /*
+   * Expirado não tem o que cancelar: o banco já não aceita pagamento dele, e o
+   * Inter recusaria o pedido. A baixa é só nossa. Vale a situação de agora no
+   * Inter quando a consulta respondeu, e a guardada quando não.
+   */
+  const jaExpirado = (noInter ?? boleto.situacao) === EXPIRADO
+  let confirmada: string | null = EXPIRADO
+
+  if (!jaExpirado) {
+    try {
+      await cancelarCobranca(boleto.codigoSolicitacao, boleto.conta, "APEDIDODOBENEFICIARIO")
+    } catch (erro) {
+      return {
+        ok: false,
+        erro: `O Inter não cancelou o boleto, e nada foi baixado: ${
+          erro instanceof Error ? erro.message : "erro desconhecido"
+        }`,
+      }
     }
+    confirmada = await aguardarCancelamento(boleto.codigoSolicitacao, boleto.conta)
   }
 
-  const confirmada = await aguardarCancelamento(boleto.codigoSolicitacao, boleto.conta)
   if (confirmada && SITUACOES_RECEBIDAS.includes(confirmada)) {
     await atualizar(confirmada)
     return {
@@ -688,8 +712,9 @@ export async function baixarNaLoja(entrada: {
 
   return {
     ok: true,
-    mensagem:
-      confirmada === "CANCELADO"
+    mensagem: jaExpirado
+      ? "Boleto baixado: pago na loja (já estava expirado no Inter, nada a cancelar)"
+      : confirmada === "CANCELADO"
         ? "Boleto baixado: pago na loja, e cancelado no Inter"
         : "Boleto baixado: pago na loja. O Inter aceitou o cancelamento e ainda está processando",
   }

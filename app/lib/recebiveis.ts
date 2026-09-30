@@ -1,4 +1,4 @@
-import { PRIMEIRO_DIA, ULTIMO_DIA } from "~/lib/dia"
+import { inicioDoDia, PRIMEIRO_DIA, ULTIMO_DIA } from "~/lib/dia"
 
 /**
  * O vocabulário das contas a receber, do lado que as DUAS pontas usam.
@@ -32,6 +32,41 @@ export const FORMAS_DA_BAIXA = [
 ] as const
 
 export const SITUACOES_ENCERRADAS = ["CANCELADO", "EXPIRADO", "FALHA_EMISSAO"]
+
+/**
+ * EXPIRADO é o boleto que venceu, passou do prazo de pagamento do banco e não
+ * foi pago. Para o Inter ele acabou; para quem vendeu, a dívida continua.
+ *
+ * Decisão do Marcio (30/09/2026): conta como dívida quando o vencimento é de
+ * 2025 em diante. O mais antigo é tratado como incobrável e fica de fora.
+ * Antes nenhum contava, e clientes com boletos expirados apareciam como bons
+ * pagadores em Inadimplentes e no caixa.
+ */
+export const EXPIRADO = "EXPIRADO"
+export const EXPIRADO_CONTA_DESDE = "2025-01-01"
+
+/** A régua do "ainda deve": a situação do banco E, no expirado, a data. */
+export function estaEmAberto(situacao: string, vencimento: Date | string) {
+  if (SITUACOES_EM_ABERTO.includes(situacao)) return true
+  return (
+    situacao === EXPIRADO &&
+    new Date(vencimento).getTime() >= inicioDoDia(EXPIRADO_CONTA_DESDE).getTime()
+  )
+}
+
+/**
+ * A mesma régua como cláusula de consulta, para `cobrancas` e
+ * `boletos_externos`. Tem um `OR` próprio: combinar dentro de `AND`, ou
+ * espalhar só num objeto que não tenha outro `OR`.
+ */
+export function clausulaEmAberto() {
+  return {
+    OR: [
+      { situacao: { in: SITUACOES_EM_ABERTO } },
+      { situacao: EXPIRADO, vencimento: { gte: inicioDoDia(EXPIRADO_CONTA_DESDE) } },
+    ],
+  }
+}
 
 /**
  * A situação em português, para o papel que vai à gaveta.
