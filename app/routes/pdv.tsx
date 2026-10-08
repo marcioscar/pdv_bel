@@ -2052,6 +2052,16 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     })
   }, [avisar, totais.desconto, venda.itens])
 
+  /**
+   * Volta a venda para Consumidor Final. O crédito abatido e a forma de
+   * transferência acompanham o cliente sozinhos (efeitos sobre `cliente`).
+   */
+  const desvincularCliente = useCallback(() => {
+    if (!cliente) return
+    setCliente(null)
+    avisar("Cliente desvinculado — a venda segue sem cliente", "erro")
+  }, [cliente, avisar])
+
   const cancelarVenda = useCallback(() => {
     if (venda.itens.length === 0) return
     // A liberação morre com a venda que ela liberava.
@@ -2060,6 +2070,10 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     despachar({ tipo: "limpar" })
     setFinalizando(false)
     voltarParaBusca()
+    // O cliente sai com a venda: ficava grudado na próxima sem ninguém notar.
+    setCliente(null)
+    setCpfNaNota("")
+    setCondicao(null)
     avisar("Venda cancelada", "erro")
   }, [autorizacaoId, avisar, darBaixaNaLiberacao, venda.itens.length, voltarParaBusca])
 
@@ -2175,8 +2189,11 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           evento.preventDefault()
           if (modo !== "busca") {
             voltarParaBusca()
-          } else {
+          } else if (entrada !== "") {
             setEntrada("")
+          } else {
+            // Nada a apagar na busca: o Esc seguinte tira o cliente da venda.
+            desvincularCliente()
           }
           return
       }
@@ -2236,6 +2253,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     cadastrarCliente,
     cancelarVenda,
     confirmar,
+    desvincularCliente,
     entrada,
     imprimirOrcamento,
     modo,
@@ -2435,7 +2453,12 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           gravando={gravando}
           erro={erroFinalizacao}
           onConfirmar={confirmarFinalizacao}
-          onFechar={() => setFinalizando(false)}
+          // Sair da conferência sem fechar a venda desfaz a escolha do cliente:
+          // a venda volta para Consumidor Final, como pedido pelo balcão.
+          onFechar={() => {
+            setFinalizando(false)
+            desvincularCliente()
+          }}
           // Enquanto cliente, condição ou Pix estão por cima, ele não escuta.
           pausado={clienteAberto || condicaoAberta || Boolean(pix) || Boolean(comprovante)}
         />

@@ -9,7 +9,7 @@ const GRUPOS = [
       { tecla: "3*141 ⏎", texto: "adiciona 3 unidades do código 141" },
       { tecla: "3*papel", texto: "busca “papel” e adiciona 3 do escolhido" },
       { tecla: "↑ ↓", texto: "navega os resultados da busca" },
-      { tecla: "Esc", texto: "limpa a entrada / cancela o modo atual" },
+      { tecla: "Esc", texto: "limpa a entrada / cancela o modo atual; com a busca vazia, tira o cliente da venda" },
     ],
   },
   {
