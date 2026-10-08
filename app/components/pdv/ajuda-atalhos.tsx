@@ -19,7 +19,6 @@ const GRUPOS = [
       { tecla: "+ −", texto: "ajusta a quantidade do item ativo" },
       { tecla: "F5", texto: "digita a quantidade exata" },
       { tecla: "F4 / Del", texto: "remove o item ativo" },
-      { tecla: "F3", texto: "desconto em reais sobre o subtotal" },
       { tecla: "F6", texto: "cadastra um cliente novo, sem sair da venda" },
       { tecla: "F7", texto: "imprime um orçamento do carrinho, sem gravar venda" },
       { tecla: "F9", texto: "cancela a venda inteira" },
@@ -30,6 +29,7 @@ const GRUPOS = [
     itens: [
       { tecla: "F10", texto: "abre a conferência: pagamento, cliente e cupom" },
       { tecla: "⇧F1 … ⇧F5", texto: "escolhe a forma — vale no carrinho e na conferência" },
+      { tecla: "F3", texto: "na conferência, desconto em reais (15,50) ou percentual (10%)" },
       { tecla: "F6", texto: "na conferência, escolhe o cliente (F2 cadastra um novo)" },
       { tecla: "F7", texto: "na conferência, liga e desliga o cupom" },
       { tecla: "Enter", texto: "na conferência, fecha a venda" },

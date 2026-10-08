@@ -1975,12 +1975,6 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       return
     }
 
-    // modo === "desconto"
-    if (valor > totais.subtotal) {
-      avisar("Desconto maior que o subtotal", "erro")
-      return
-    }
-    despachar({ tipo: "definirDesconto", valor })
     voltarParaBusca()
   }, [
     adicionar,
@@ -2006,15 +2000,6 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     setModo("quantidade")
     setEntrada("")
   }, [avisar, venda.indiceAtivo])
-
-  const pedirDesconto = useCallback(() => {
-    if (venda.itens.length === 0) {
-      avisar("Nenhum item na venda", "erro")
-      return
-    }
-    setModo("desconto")
-    setEntrada("")
-  }, [avisar, venda.itens.length])
 
   /**
    * O orçamento sai do carrinho como ele está, sem gravar nada.
@@ -2153,10 +2138,6 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           evento.preventDefault()
           voltarParaBusca()
           return
-        case "F3":
-          evento.preventDefault()
-          pedirDesconto()
-          return
         case "F4":
           evento.preventDefault()
           despachar({ tipo: "remover" })
@@ -2257,7 +2238,6 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     entrada,
     imprimirOrcamento,
     modo,
-    pedirDesconto,
     pedirQuantidade,
     resultados.length,
     venda.indiceAtivo,
@@ -2267,12 +2247,6 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
 
   const atalhos: Atalho[] = [
     { tecla: "F1", rotulo: "Ajuda", acao: () => setAjudaAberta(true) },
-    {
-      tecla: "F3",
-      rotulo: "Desconto",
-      acao: pedirDesconto,
-      desabilitado: venda.itens.length === 0,
-    },
     {
       tecla: "F4",
       rotulo: "Remover item",
@@ -2407,6 +2381,12 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
 
       {finalizando ? (
         <FinalizarDialogo
+          subtotal={totais.subtotal}
+          desconto={totais.desconto}
+          onDescontoChange={(valor) => {
+            despachar({ tipo: "definirDesconto", valor })
+            setErroFinalizacao(null)
+          }}
           total={totais.total}
           volumes={totais.volumes}
           itens={venda.itens.length}
@@ -2458,6 +2438,9 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           onFechar={() => {
             setFinalizando(false)
             desvincularCliente()
+            // O desconto é do fechamento: voltar ao carrinho o desfaz, para não
+            // ficar um valor fixo valendo sobre itens que ainda vão mudar.
+            despachar({ tipo: "definirDesconto", valor: 0 })
           }}
           // Enquanto cliente, condição ou Pix estão por cima, ele não escuta.
           pausado={clienteAberto || condicaoAberta || Boolean(pix) || Boolean(comprovante)}

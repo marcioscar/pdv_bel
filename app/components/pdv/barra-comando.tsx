@@ -10,7 +10,6 @@ import { precoAplicado, type ProdutoCatalogo } from "~/lib/pdv";
 export type ModoComando =
 	| "busca"
 	| "quantidade"
-	| "desconto"
 	| "recebido"
 	/** Texto, não número: o para quê da baixa de uso da loja. */
 	| "motivo";
@@ -21,10 +20,6 @@ const PROMPTS: Record<ModoComando, { rotulo: string | null; dica: string }> = {
 		dica: "Digite o código ou a descrição, ou use 3*141 para 3 unidades…",
 	},
 	quantidade: { rotulo: "Quantidade", dica: "Nova quantidade do item ativo" },
-	desconto: {
-		rotulo: "Desconto R$",
-		dica: "Valor de desconto sobre o subtotal",
-	},
 	recebido: { rotulo: "Recebido R$", dica: "Valor entregue pelo cliente" },
 	motivo: {
 		rotulo: "Para quê",

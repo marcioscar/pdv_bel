@@ -46,6 +46,11 @@ const ICONES: Record<
 };
 
 type Props = {
+  /** Soma dos itens, antes do desconto — é sobre ela que o desconto incide. */
+  subtotal: number;
+  /** Desconto em reais. Mora aqui, e não no carrinho: é dado no fechamento. */
+  desconto: number;
+  onDescontoChange: (valor: number) => void;
   total: number;
   volumes: number;
   itens: number;
@@ -96,6 +101,9 @@ type Props = {
  * decidindo o mesmo dado é como se grava venda em dinheiro marcada como cartão.
  */
 export function FinalizarDialogo({
+  subtotal,
+  desconto,
+  onDescontoChange,
   total,
   volumes,
   itens,
@@ -128,6 +136,43 @@ export function FinalizarDialogo({
   const campoRecebido = useRef<HTMLInputElement>(null);
   const campoCliente = useRef<HTMLInputElement>(null);
   const campoVendedor = useRef<HTMLInputElement>(null);
+  const campoDesconto = useRef<HTMLInputElement>(null);
+
+  /*
+   * O texto do campo é local; o valor aplicado sobe a cada tecla, para o total
+   * grande acompanhar enquanto se digita. Aceita reais ("15,50") ou percentual
+   * sobre o subtotal ("10%"). Mais que o subtotal não se aplica — o erro
+   * aparece e o desconto anterior fica.
+   */
+  const [descontoTexto, setDescontoTexto] = useState(() =>
+    desconto > 0 ? desconto.toFixed(2).replace(".", ",") : "",
+  );
+  const [erroDesconto, setErroDesconto] = useState<string | null>(null);
+
+  function digitarDesconto(texto: string) {
+    setDescontoTexto(texto);
+    const limpo = texto.trim();
+    if (limpo === "") {
+      setErroDesconto(null);
+      onDescontoChange(0);
+      return;
+    }
+    const percentual = limpo.endsWith("%");
+    const numero = interpretarValor(percentual ? limpo.slice(0, -1) : limpo);
+    if (numero === null || numero < 0) {
+      setErroDesconto("Desconto inválido");
+      return;
+    }
+    const valor = percentual
+      ? Math.round(subtotal * numero) / 100
+      : Math.round(numero * 100) / 100;
+    if (valor > subtotal) {
+      setErroDesconto(`Maior que o subtotal (${moeda(subtotal)})`);
+      return;
+    }
+    setErroDesconto(null);
+    onDescontoChange(valor);
+  }
 
   /**
    * A saída para outra loja da rede não se escolhe: decorre do cliente ser uma
@@ -338,6 +383,13 @@ export function FinalizarDialogo({
         campoVendedor.current?.select();
         return;
       }
+      // F3 leva ao desconto — a mesma tecla que ele tinha no carrinho.
+      if (key === "F3" && !paraARede) {
+        evento.preventDefault();
+        campoDesconto.current?.focus();
+        campoDesconto.current?.select();
+        return;
+      }
       if (key === "F6") {
         evento.preventDefault();
         setBuscaCliente("");
@@ -379,6 +431,7 @@ export function FinalizarDialogo({
     cliente,
     opcoes,
     pausado,
+    paraARede,
   ]);
 
   /**
@@ -569,6 +622,44 @@ export function FinalizarDialogo({
             {moeda(total)}
           </span>
         </div>
+
+        {/*
+          O desconto é dado AQUI, no fechamento, e não no carrinho: é negociação
+          de quem está cobrando, sobre a venda inteira. Transferência entre
+          lojas sai pelo custo e não tem desconto — o campo nem aparece.
+        */}
+        {paraARede ? null : (
+          <div className="mt-2">
+            <div className="flex items-center justify-end gap-2">
+              <label
+                htmlFor="desconto-da-venda"
+                className="text-xs text-muted-foreground"
+              >
+                Desconto <Kbd>F3</Kbd>
+              </label>
+              <Input
+                ref={campoDesconto}
+                id="desconto-da-venda"
+                inputMode="decimal"
+                autoComplete="off"
+                placeholder="0,00 ou 10%"
+                value={descontoTexto}
+                onChange={(e) => digitarDesconto(e.target.value)}
+                className={cn(
+                  "h-8 w-32 rounded-lg text-right font-mono tabular-nums",
+                  erroDesconto && "border-destructive",
+                )}
+              />
+            </div>
+            {erroDesconto ? (
+              <p className="mt-1 text-right text-xs text-destructive">{erroDesconto}</p>
+            ) : desconto > 0 ? (
+              <p className="mt-1 text-right text-xs text-muted-foreground">
+                subtotal {moeda(subtotal)} − desconto {moeda(desconto)}
+              </p>
+            ) : null}
+          </div>
+        )}
 
         {/*
           O crédito aparece só quando existe, e some quando o saldo é zero: uma
