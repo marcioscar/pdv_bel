@@ -1,3 +1,5 @@
+import { redirect } from "react-router"
+
 import type { Route } from "./+types/boleto"
 import { db } from "~/lib/db.server"
 import { pdfDaCobranca } from "~/lib/cobranca.server"
@@ -22,6 +24,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   if (!podeVerDaLoja(eu, cobranca.loja)) {
     throw new Response(`Boleto da loja ${cobranca.loja}`, { status: 403 })
   }
+  // Pix na entrega não tem PDF de boleto: quem pediu o documento recebe o
+  // papel do QR, e os links de Contas a receber e Vendas servem aos dois.
+  if (cobranca.tipo === "pix") return redirect(`/vendas/${cobranca.vendaId}/pix-entrega`)
 
   let pdf: Buffer
   try {

@@ -9,6 +9,7 @@ import {
   type PixImediato,
 } from "~/lib/pix.server"
 import { conferirVenda, registrarVenda, type PedidoRecebido } from "~/lib/vendas.server"
+import { conferirPixDasEntregas } from "~/lib/pix-entrega.server"
 
 /**
  * A fila dos Pix do balcão que esperam pagamento.
@@ -329,11 +330,18 @@ export function ligarVigiaDoPix() {
   global.__vigiaDoPix = true
 
   let rodando = false
+  let voltas = 0
   setInterval(async () => {
     if (rodando) return
     rodando = true
     try {
       await conferirPendentes()
+      /*
+       * Os Pix na entrega a cada 5 minutos: quem paga está na porta, não no
+       * balcão, e o webhook já avisa na hora. Esta volta é a rede embaixo — e
+       * é ela que move a cobrança para ATRASADO e EXPIRADO com os dias.
+       */
+      if (voltas++ % 60 === 0) await conferirPixDasEntregas()
     } catch (erro) {
       console.error("[pix vigia]", erro instanceof Error ? erro.message : erro)
     } finally {

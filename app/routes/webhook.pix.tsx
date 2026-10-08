@@ -1,4 +1,5 @@
 import type { Route } from "./+types/webhook.pix"
+import { conferirPixDaEntregaPeloTxid } from "~/lib/pix-entrega.server"
 import { conferirPendentes } from "~/lib/pix-pendente.server"
 
 /**
@@ -39,9 +40,20 @@ export async function action({ request, params }: Route.ActionArgs) {
 
   // Pix sem txid do PDV (transferência avulsa para a chave) não é da fila.
   for (const txid of new Set(txids)) {
+    // O balcão (cobrança imediata na fila) ou a entrega (cobrança com
+    // vencimento): o txid é de um só deles. Os dois confirmam no Inter.
     const conferidos = await conferirPendentes({ txid })
+    let entrega: string | null = null
+    try {
+      entrega = conferidos ? null : await conferirPixDaEntregaPeloTxid(txid)
+    } catch (erro) {
+      // A vigia confere de novo em minutos; o aviso não se perde por isso.
+      console.error(`[webhook pix ${rotulo}] ${txid}:`, erro instanceof Error ? erro.message : erro)
+    }
     console.info(
-      `[webhook pix ${rotulo}] ${txid}: ${conferidos ? "conferido" : "não está na fila"}`
+      `[webhook pix ${rotulo}] ${txid}: ${
+        conferidos ? "conferido (balcão)" : entrega ? `entrega ${entrega}` : "não é do PDV"
+      }`
     )
   }
 

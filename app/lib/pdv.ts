@@ -349,6 +349,14 @@ export const FORMAS_PAGAMENTO = [
    */
   { id: "link", rotulo: "Link" },
   /*
+   * Entrega com o cliente pagando em Pix na porta. A venda fecha na hora —
+   * estoque sai, nota sai — e nasce uma cobrança Pix com vencimento, cujo QR
+   * vai impresso com o entregador. É dinheiro A RECEBER, como o boleto: entra
+   * em Contas a receber, em Inadimplentes se vencer, e na trava do caixa.
+   * Depois do link para não mudar o ⇧F das formas que já existiam.
+   */
+  { id: "entrega", rotulo: "Pix na entrega" },
+  /*
    * A saída para outra loja da rede — QNE, NRT, SDS. Não é pagamento nenhum: o
    * dinheiro não entra, o estoque já foi movido pela transferência e a nota sai
    * só para acompanhar a mercadoria na estrada.
@@ -382,6 +390,23 @@ export function ehTransferenciaEntreLojas(forma: string) {
 export const FORMAS_DE_CAIXA = FORMAS_PAGAMENTO.filter(
   (f) => f.id !== FORMA_TRANSFERENCIA
 )
+
+/** A forma do Pix na entrega: venda fechada, Pix com vencimento a receber. */
+export const FORMA_PIX_ENTREGA = "entrega"
+
+/** Dias até o vencimento do Pix na entrega (decisão do Marcio, 08/10/2026). */
+export const DIAS_PIX_ENTREGA = 2
+
+/**
+ * Dias depois do vencimento em que o QR ainda aceita pagamento. Passado isso
+ * o Inter recusa, a cobrança vira EXPIRADO e segue como dívida em Inadimplentes.
+ */
+export const VALIDADE_PIX_ENTREGA_APOS_VENCIMENTO = 7
+
+/** As formas em que o dinheiro fica A RECEBER numa cobrança do Inter. */
+export function formaGeraCobranca(forma: string) {
+  return forma === "prazo" || forma === FORMA_PIX_ENTREGA
+}
 
 /** Venda a prazo vira boleto: exige cliente com endereço e respeita o mínimo do Inter. */
 export const VALOR_MINIMO_BOLETO = 2.5

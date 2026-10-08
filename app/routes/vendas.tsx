@@ -34,7 +34,7 @@ import { diaAtras, diaDeHoje, PRIMEIRO_DIA } from "~/lib/dia"
 import { Input } from "~/components/ui/input"
 import { interpretarValor, moeda } from "~/lib/moeda"
 import { ACOES_DE_GERENTE, ehGerente } from "~/lib/permissoes"
-import { ehTransferenciaEntreLojas, FORMAS_PAGAMENTO } from "~/lib/pdv"
+import { ehTransferenciaEntreLojas, FORMAS_PAGAMENTO, formaGeraCobranca } from "~/lib/pdv"
 import { useAtalhosDeSecao } from "~/lib/navegacao"
 import { useRelogio, useTema } from "~/lib/tema"
 import { cn } from "~/lib/utils"
@@ -430,8 +430,8 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
 
   const verCobranca = useCallback(() => {
     if (!ativa || cancelando) return
-    if (ativa.forma !== "prazo") {
-      avisar("Só venda a prazo tem boleto", "erro")
+    if (!formaGeraCobranca(ativa.forma)) {
+      avisar("Só venda a prazo ou Pix na entrega tem cobrança", "erro")
       return
     }
     // Emitir boleto de venda cancelada cobraria o cliente por algo desfeito.
@@ -889,7 +889,7 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                                 não confirmado
                               </span>
                             )
-                          ) : venda.forma !== "prazo" ? (
+                          ) : !formaGeraCobranca(venda.forma) ? (
                             <span className="text-xs text-muted-foreground">—</span>
                           ) : (
                             <SituacaoCobrancas cobrancas={venda.cobrancas} />
@@ -944,7 +944,7 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                 // Espelha a guarda de verCobranca: não oferecer o que será recusado.
                 disabled={
                   !ativa ||
-                  ativa.forma !== "prazo" ||
+                  !formaGeraCobranca(ativa.forma) ||
                   cancelando ||
                   Boolean(ativa.canceladaEm && ativa.cobrancas.length === 0)
                 }

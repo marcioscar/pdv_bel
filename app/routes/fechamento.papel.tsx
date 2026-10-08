@@ -120,7 +120,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
           ${linha("Pix", fechamento.vendasPix)}
           ${linha("Débito", fechamento.vendasDebito)}
           ${linha("Crédito", fechamento.vendasCredito)}
-          ${linha("A prazo", fechamento.vendasPrazo)}
+          ${linha("A prazo / entrega", fechamento.vendasPrazo)}
           ${fechamento.vendasLink > 0 ? linha("Link de pagamento", fechamento.vendasLink) : ""}
           <tr class="soma">
             <td>Total vendido</td>

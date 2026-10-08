@@ -202,7 +202,8 @@ import QRCode from "qrcode"
 import { db } from "~/lib/db.server"
 import { ErroInter } from "~/lib/inter.server"
 import { contaDaLoja } from "~/lib/lojas.server"
-import { condicaoPorId, parcelasDaCondicao, type Parcela } from "~/lib/pdv"
+import { condicaoPorId, FORMA_PIX_ENTREGA, parcelasDaCondicao, type Parcela } from "~/lib/pdv"
+import { emitirPixDaEntrega, tirarDoArPixDaEntrega } from "~/lib/pix-entrega.server"
 
 export type CobrancaDaVenda = {
   codigoSolicitacao: string
@@ -218,6 +219,8 @@ export type CobrancaDaVenda = {
   pixCopiaECola: string | null
   /** PNG em data URI, gerado a partir do copia-e-cola. */
   pixQrCode: string | null
+  /** "pix" é o Pix na entrega: sem linha digitável, só o QR. */
+  tipo: "boleto" | "pix"
 }
 
 /** O Inter devolve o código da cobrança existente quando recusa uma duplicata. */
@@ -342,6 +345,8 @@ export function seuNumeroDaParcela(
 export async function emitirParaVenda(vendaId: string): Promise<CobrancaDaVenda[]> {
   const venda = await db.venda.findUnique({ where: { id: vendaId } })
   if (!venda) throw new Error("Venda não encontrada")
+  // O Pix na entrega não é boleto: é uma cobrança Pix com vencimento.
+  if (venda.forma === FORMA_PIX_ENTREGA) return emitirPixDaEntrega(vendaId)
   if (venda.forma !== "prazo") throw new Error("Só venda a prazo gera boleto")
   if (venda.canceladaEm) throw new Error("Venda cancelada não gera boleto")
   if (!venda.clienteId) throw new Error("Venda sem cliente")
@@ -462,6 +467,7 @@ function paraSaida(
     nossoNumero: string | null
     txid: string | null
     pixCopiaECola: string | null
+    tipo?: string | null
   },
   /** O total de parcelas do plano vence o gravado: a venda é quem manda. */
   parcelas = c.parcelas
@@ -478,6 +484,7 @@ function paraSaida(
     nossoNumero: c.nossoNumero,
     txid: c.txid,
     pixCopiaECola: c.pixCopiaECola,
+    tipo: c.tipo === "pix" ? "pix" : "boleto",
   }
 }
 
@@ -536,6 +543,23 @@ export async function cancelarCobrancasDaVenda(
   })
   if (cobrancas.length === 0) {
     return { ok: true, canceladas: 0, jaEstavam: 0, emAndamento: 0 }
+  }
+
+  /*
+   * Pix na entrega: uma cobrança só, sem boleto. Tirar do ar tem a mesma
+   * regra — pago (inclusive na loja) não se cancela sem devolução.
+   */
+  const doPix = cobrancas.find((c) => c.tipo === "pix")
+  if (doPix) {
+    if (doPix.baixadoEm || SITUACOES_RECEBIDAS.includes(doPix.situacao)) {
+      return { ok: false, erro: "O Pix desta venda já foi pago — faça a devolução antes de cancelar" }
+    }
+    const r = await tirarDoArPixDaEntrega(doPix)
+    if (!r.ok) return r
+    if (r.pago) {
+      return { ok: false, erro: "O Pix desta venda foi pago — faça a devolução antes de cancelar" }
+    }
+    return { ok: true, canceladas: 1, jaEstavam: 0, emAndamento: 0 }
   }
 
   const atuais: {

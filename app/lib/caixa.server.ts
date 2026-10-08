@@ -122,7 +122,9 @@ export async function resumoDoDia(loja: string, dia: string) {
     vendasPix: por("pix"),
     vendasDebito: por("debito"),
     vendasCredito: por("credito"),
-    vendasPrazo: por("prazo"),
+    // O Pix na entrega é a receber como o boleto, e também não passa pela
+    // gaveta: entra na mesma linha, em vez de um campo novo no fechamento.
+    vendasPrazo: arredondar(por("prazo") + por("entrega")),
     vendasLink: por("link"),
     totalVendido: arredondar(porForma.reduce((a, f) => a + (f._sum.total ?? 0), 0)),
     quantidadeVendas: porForma.reduce((a, f) => a + f._count._all, 0),

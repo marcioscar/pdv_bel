@@ -168,7 +168,7 @@ export default function AdminCaixa({ loaderData }: Route.ComponentProps) {
             <Linha rotulo="Pix" valor={f.vendasPix} />
             <Linha rotulo="Débito" valor={f.vendasDebito} />
             <Linha rotulo="Crédito" valor={f.vendasCredito} />
-            <Linha rotulo="A prazo" valor={f.vendasPrazo} />
+            <Linha rotulo="A prazo / entrega" valor={f.vendasPrazo} />
             <div className="mt-2 flex items-baseline justify-between border-t border-border pt-2">
               <dt className="font-semibold">Total vendido</dt>
               <dd className="font-mono text-lg font-bold tabular-nums">

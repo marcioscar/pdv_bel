@@ -3,7 +3,7 @@ import { db } from "~/lib/db.server"
 import { escapar } from "~/lib/html"
 import { dadosDaLoja } from "~/lib/lojas.server"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
-import { CONDICOES_PAGAMENTO, FORMAS_PAGAMENTO } from "~/lib/pdv"
+import { CONDICOES_PAGAMENTO, FORMAS_PAGAMENTO, formaGeraCobranca } from "~/lib/pdv"
 import { exigirUsuario, podeVerDaLoja } from "~/lib/sessao.server"
 
 const OBJECT_ID = /^[0-9a-fA-F]{24}$/
@@ -41,7 +41,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
   const [loja, cobrancas] = await Promise.all([
     dadosDaLoja(venda.loja),
-    venda.forma === "prazo"
+    formaGeraCobranca(venda.forma)
       ? db.cobranca.findMany({ where: { vendaId: venda.id }, orderBy: { parcela: "asc" } })
       : Promise.resolve([]),
   ])
@@ -75,7 +75,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
   const parcelas = cobrancas
     .map(
-      (c) => `<tr><td>${c.parcela}/${c.parcelas} · vence ${new Date(
+      (c) => `<tr><td>${c.tipo === "pix" ? "Pix na entrega" : `${c.parcela}/${c.parcelas}`} · vence ${new Date(
         c.vencimento
       ).toLocaleDateString("pt-BR")}</td><td class="dir">${moeda(c.valor)}</td></tr>
       ${c.linhaDigitavel ? `<tr><td colspan="2" class="linha">${escapar(c.linhaDigitavel)}</td></tr>` : ""}`

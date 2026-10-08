@@ -21,6 +21,8 @@ export default [
   route("vendas/:vendaId/boleto.pdf", "routes/boleto.tsx"),
   route("pedidos-de-compra/:pedidoId/impressao", "routes/pedido-compra.impressao.tsx"),
   route("vendas/:vendaId/cupom", "routes/cupom.tsx"),
+  // O QR do Pix na entrega, para ir com o entregador.
+  route("vendas/:vendaId/pix-entrega", "routes/pix.entrega.tsx"),
   // A devolução nasce na venda — é dela que vêm os itens, o preço praticado e a
   // chave da nota a referenciar. Fica no turno porque acontece com o cliente na
   // frente; a guarda de gerente é cobrada na própria rota.

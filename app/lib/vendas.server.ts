@@ -24,8 +24,10 @@ import { vendedorPorCodigo, type VendedorDoBalcao } from "~/lib/vendedores.serve
 import {
   condicaoCabeNoTotal,
   condicaoPorId,
+  DIAS_PIX_ENTREGA,
   dividirParcelas,
   ehTransferenciaEntreLojas,
+  FORMA_PIX_ENTREGA,
   FORMA_TRANSFERENCIA,
   FORMAS_PAGAMENTO,
   parcelasDaCondicao,
@@ -660,6 +662,28 @@ async function validarVenda(
 
     condicaoId = condicao.id
     vencimento = parcelasDaCondicao(condicao, total)[0].vencimento
+  }
+
+  /*
+   * Pix na entrega: a cobrança com vencimento exige devedor com CPF ou CNPJ
+   * válido, e não existe Pix de zero — com o crédito cobrindo tudo, é outra
+   * forma. Recusar aqui evita gravar venda cujo QR não pode ser gerado.
+   */
+  if (pedido.forma === FORMA_PIX_ENTREGA) {
+    if (!cliente) {
+      return { ok: false, erro: "Pix na entrega exige cliente (F6 para vincular)" }
+    }
+    const documento = (cliente.cpfCnpj ?? "").replace(/\D/g, "")
+    if (documento.length !== 11 && documento.length !== 14) {
+      return { ok: false, erro: `${cliente.nome} está sem CPF/CNPJ no cadastro — o Pix na entrega precisa dele` }
+    }
+    if (aPagar <= 0) {
+      return { ok: false, erro: "O crédito cobre a venda toda — não há o que cobrar na entrega" }
+    }
+    const dia = new Date()
+    dia.setDate(dia.getDate() + DIAS_PIX_ENTREGA)
+    dia.setHours(12, 0, 0, 0)
+    vencimento = dia
   }
 
   // Sobre o que falta pagar, não sobre o total: com R$ 37 de crédito numa venda

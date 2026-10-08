@@ -31,6 +31,8 @@ export type EscopoInter =
   | "boleto-cobranca.write"
   | "cob.read"
   | "cob.write"
+  | "cobv.read"
+  | "cobv.write"
   | "pix.read"
   | "pix.write"
   | "webhook.read"
@@ -286,6 +288,8 @@ const ESCOPOS_DO_APP: EscopoInter[] = [
   "boleto-cobranca.write",
   "cob.read",
   "cob.write",
+  "cobv.read",
+  "cobv.write",
   "pix.read",
   "pix.write",
   "webhook.read",

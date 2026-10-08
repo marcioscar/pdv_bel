@@ -48,7 +48,8 @@ export const HORAS_DE_VALIDADE = 12
  * informação.
  */
 export function formaEstendeCredito(forma: string) {
-  return forma === "prazo"
+  // O Pix na entrega também é crédito: a mercadoria sai antes do dinheiro.
+  return forma === "prazo" || forma === "entrega"
 }
 
 export const MOTIVOS_DE_AUTORIZACAO = [
@@ -57,7 +58,7 @@ export const MOTIVOS_DE_AUTORIZACAO = [
     rotulo: "Cliente com boleto vencido",
     /** O que o vendedor lê no balcão, com o cliente na frente. */
     aviso:
-      "Este cliente tem boleto vencido — vender A PRAZO precisa da liberação do gerente. À vista (Pix, dinheiro ou cartão) fecha normal.",
+      "Este cliente tem boleto vencido — vender A PRAZO ou com PIX NA ENTREGA precisa da liberação do gerente. À vista (Pix, dinheiro ou cartão) fecha normal.",
   },
   {
     id: "desconto",

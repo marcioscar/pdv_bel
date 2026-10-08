@@ -133,6 +133,106 @@ export async function removerPixImediato(txid: string, conta: string): Promise<P
   return paraSaida(resposta)
 }
 
+// ---------------------------------------------------------------------------
+// Cobrança com vencimento (cobv): o Pix na entrega
+// ---------------------------------------------------------------------------
+
+type CobvRespostaInter = {
+  txid: string
+  status: string
+  valor?: { original?: string }
+  pixCopiaECola?: string
+  calendario?: { dataDeVencimento?: string; validadeAposVencimento?: number }
+  pix?: CobRespostaInter["pix"]
+}
+
+export type PixComVencimento = {
+  txid: string
+  status: string
+  valor: number
+  pixCopiaECola: string | null
+  /** AAAA-MM-DD, como o Inter devolve. */
+  vencimento: string | null
+  validadeAposVencimento: number
+  pagoEm: string | null
+  valorPago: number | null
+  devolucoes: number
+}
+
+function cobvParaSaida(dados: CobvRespostaInter): PixComVencimento {
+  const recebido = dados.pix?.[0]
+  return {
+    txid: dados.txid,
+    status: dados.status,
+    valor: Number(dados.valor?.original ?? 0),
+    pixCopiaECola: dados.pixCopiaECola ?? null,
+    vencimento: dados.calendario?.dataDeVencimento ?? null,
+    validadeAposVencimento: dados.calendario?.validadeAposVencimento ?? 0,
+    pagoEm: recebido?.horario ?? null,
+    valorPago: recebido ? Number(recebido.valor) : null,
+    devolucoes: recebido?.devolucoes?.length ?? 0,
+  }
+}
+
+/**
+ * Cria a cobrança Pix com vencimento — a do Pix na entrega.
+ *
+ * Diferente da imediata do balcão, que expira em minutos: esta vale até o
+ * vencimento e mais `validadeAposVencimento` dias, o tempo de o entregador
+ * chegar. O Banco Central exige o devedor (nome e CPF ou CNPJ) neste tipo.
+ */
+export async function criarPixComVencimento(entrada: {
+  conta: string
+  txid: string
+  valor: number
+  /** AAAA-MM-DD. */
+  vencimento: string
+  validadeAposVencimento: number
+  devedor: { nome: string; cpf?: string; cnpj?: string }
+  solicitacao?: string
+}): Promise<PixComVencimento> {
+  const resposta = await chamarInter<CobvRespostaInter>(`/pix/v2/cobv/${entrada.txid}`, {
+    conta: entrada.conta,
+    metodo: "PUT",
+    escopos: ["cobv.write"],
+    corpo: {
+      calendario: {
+        dataDeVencimento: entrada.vencimento,
+        validadeAposVencimento: entrada.validadeAposVencimento,
+      },
+      devedor: entrada.devedor,
+      valor: { original: entrada.valor.toFixed(2) },
+      chave: chavePix(entrada.conta),
+      ...(entrada.solicitacao
+        ? { solicitacaoPagador: entrada.solicitacao.slice(0, 140) }
+        : {}),
+    },
+  })
+  return cobvParaSaida(resposta)
+}
+
+export async function consultarPixComVencimento(
+  txid: string,
+  conta: string
+): Promise<PixComVencimento> {
+  const resposta = await chamarInter<CobvRespostaInter>(`/pix/v2/cobv/${txid}`, {
+    conta,
+    escopos: ["cobv.read"],
+  })
+  return cobvParaSaida(resposta)
+}
+
+/** Tira do ar: o QR deixa de aceitar pagamento. Só funciona com a cobrança ATIVA. */
+export async function removerPixComVencimento(txid: string, conta: string) {
+  const resposta = await chamarInter<CobvRespostaInter>(`/pix/v2/cobv/${txid}`, {
+    conta,
+    metodo: "PATCH",
+    escopos: ["cobv.write"],
+    corpo: { status: "REMOVIDA_PELO_USUARIO_RECEBEDOR" },
+  })
+  return cobvParaSaida(resposta)
+}
+
 export type ConfirmacaoPix =
   | { pago: true; pix: PixImediato }
   | { pago: false; motivo: string; pix: PixImediato }

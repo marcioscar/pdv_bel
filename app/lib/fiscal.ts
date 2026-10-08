@@ -233,6 +233,8 @@ export const PAGAMENTO_NA_NOTA: Record<string, string> = {
   credito: "03",
   debito: "04",
   pix: "17",
+  // A entrega é paga em Pix, só que depois: na nota, a forma é a mesma.
+  entrega: "17",
   prazo: "15",
   link: "99",
   /*

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Banknote,
+  Bike,
   CalendarClock,
   CreditCard,
   FileText,
@@ -42,6 +43,7 @@ const ICONES: Record<
   pix: QrCode,
   prazo: CalendarClock,
   link: Link2,
+  entrega: Bike,
   transferencia: Truck,
 };
 
@@ -200,7 +202,9 @@ export function FinalizarDialogo({
   const troco = valorRecebido === null ? null : valorRecebido - aPagar;
   const faltaDinheiro =
     emDinheiro && (valorRecebido === null || troco === null || troco < 0);
-  const faltaCliente = aPrazo && cliente === null;
+  // Pix na entrega também: a cobrança com vencimento exige o devedor.
+  const naEntrega = forma === "entrega";
+  const faltaCliente = (aPrazo || naEntrega) && cliente === null;
 
   /**
    * O nome é resolvido aqui na tela, contra a lista que veio pronta, só para o
@@ -942,7 +946,11 @@ export function FinalizarDialogo({
                     faltaCliente ? "text-destructive" : "text-foreground",
                   )}
                 >
-                  {faltaCliente ? "A prazo exige cliente" : "Consumidor Final"}
+                  {faltaCliente
+                    ? naEntrega
+                      ? "Pix na entrega exige cliente"
+                      : "A prazo exige cliente"
+                    : "Consumidor Final"}
                 </div>
               )}
             </div>
@@ -1050,7 +1058,9 @@ export function FinalizarDialogo({
                 ? "ESCOLHER O PRAZO"
                 : forma === "pix"
                   ? "GERAR O PIX"
-                  : "FINALIZAR"}
+                  : naEntrega
+                    ? "FINALIZAR E GERAR O QR"
+                    : "FINALIZAR"}
               <Kbd className="bg-primary-foreground/20 text-primary-foreground">
                 Enter
               </Kbd>

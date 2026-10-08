@@ -28,7 +28,7 @@ const GRUPOS = [
     titulo: "Fechar a venda",
     itens: [
       { tecla: "F10", texto: "abre a conferência: pagamento, cliente e cupom" },
-      { tecla: "⇧F1 … ⇧F5", texto: "escolhe a forma — vale no carrinho e na conferência" },
+      { tecla: "⇧F1 … ⇧F7", texto: "escolhe a forma — vale no carrinho e na conferência (⇧F7 é Pix na entrega)" },
       { tecla: "F3", texto: "na conferência, desconto em reais (15,50) ou percentual (10%)" },
       { tecla: "F6", texto: "na conferência, escolhe o cliente (F2 cadastra um novo)" },
       { tecla: "F7", texto: "na conferência, liga e desliga o cupom" },

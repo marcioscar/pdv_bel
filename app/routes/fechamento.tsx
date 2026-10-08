@@ -490,7 +490,7 @@ export default function Fechamento({ loaderData, actionData }: Route.ComponentPr
               <Cartao rotulo="Pix" valor={resumo.vendasPix} />
               <Cartao rotulo="Débito" valor={resumo.vendasDebito} />
               <Cartao rotulo="Crédito" valor={resumo.vendasCredito} />
-              <Cartao rotulo="A prazo" valor={resumo.vendasPrazo} />
+              <Cartao rotulo="A prazo / entrega" valor={resumo.vendasPrazo} />
               {resumo.vendasLink > 0 ? (
                 <Cartao rotulo="Link" valor={resumo.vendasLink} />
               ) : null}

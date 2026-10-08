@@ -4,6 +4,7 @@ import { chamarInter, ErroInter, interConfigurado } from "~/lib/inter.server"
 import { raizDoCnpj } from "~/lib/documento"
 import { arredondar } from "~/lib/moeda"
 import { aguardarCancelamento, cancelarCobranca, consultarCobranca } from "~/lib/cobranca.server"
+import { tirarDoArPixDaEntrega } from "~/lib/pix-entrega.server"
 import {
   clausulaEmAberto,
   clausulaExpiradoQueConta,
@@ -675,6 +676,33 @@ export async function baixarNaLoja(entrada: {
     doPdv
       ? db.cobranca.update({ where: { id: entrada.id }, data: { situacao } })
       : db.boletoExterno.update({ where: { id: entrada.id }, data: { situacao } })
+
+  /*
+   * Pix na entrega pago em outra coisa na porta (dinheiro, cartão): não há
+   * boleto a cancelar, há um QR a tirar do ar — para o cliente não pagar duas
+   * vezes. Se o Pix entrou no meio do caminho, vale o Pix.
+   */
+  if ("tipo" in boleto && boleto.tipo === "pix") {
+    const r = await tirarDoArPixDaEntrega(boleto)
+    if (!r.ok) return { ok: false, erro: `${r.erro} — nada foi baixado` }
+    if (r.pago) {
+      return {
+        ok: false,
+        erro: "Este Pix já foi pago no banco — não precisa baixar. Se o cliente pagou de novo na loja, é devolução.",
+      }
+    }
+    await db.cobranca.update({
+      where: { id: entrada.id },
+      data: {
+        situacao: PAGO_NA_LOJA,
+        baixadoEm: new Date(),
+        baixadoPor: entrada.gerente,
+        baixaForma: entrada.forma,
+        baixaValor: arredondar(entrada.valor),
+      },
+    })
+    return { ok: true, mensagem: "Pix na entrega baixado: pago na loja, e o QR saiu do ar" }
+  }
 
   // A nossa cópia pode estar velha: ele pode ter pago no banco hoje de manhã.
   let noInter: string | undefined

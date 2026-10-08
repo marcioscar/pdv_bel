@@ -86,6 +86,7 @@ import {
   FORMA_TRANSFERENCIA,
   FORMAS_DE_CAIXA,
   FORMAS_PAGAMENTO,
+  formaGeraCobranca,
   VALOR_MINIMO_BOLETO,
   interpretarComando,
   produtosPorCodigo,
@@ -1408,8 +1409,9 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
 
     const { numero, troco } = resposta
 
-    // Venda a prazo: abre o comprovante e emite os boletos em seguida.
-    if (forma === "prazo") {
+    // A prazo e Pix na entrega: abre o comprovante e emite a cobrança em
+    // seguida — boletos num caso, o Pix com vencimento no outro.
+    if (formaGeraCobranca(forma)) {
       setComprovante({
         vendaNumero: numero,
         vendaId: resposta.vendaId,
@@ -1900,6 +1902,12 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
         return
       }
       setCondicaoAberta(true)
+      return
+    }
+    // Pix na entrega: a cobrança com vencimento precisa do devedor.
+    if (forma === "entrega" && !cliente) {
+      setErroFinalizacao("Pix na entrega exige cliente — F6 escolhe aqui mesmo")
+      setClienteAberto(true)
       return
     }
     concluir(null)

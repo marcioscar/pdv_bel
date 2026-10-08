@@ -309,6 +309,10 @@ model Usuario {
 /// da criação — por isso ficam opcionais e a situação é acompanhada aqui.
 model Cobranca {
   id                String   @id @default(auto()) @map("_id") @db.ObjectId
+  /// "boleto" (boleto com Pix, da venda a prazo) ou "pix" (cobrança Pix com
+  /// vencimento, do Pix na entrega). Ausente é boleto: é o que existia antes.
+  /// No Pix, `codigoSolicitacao` guarda o txid — é por ele que se consulta.
+  tipo              String?
   vendaId           String   @db.ObjectId
   vendaNumero       Int
   /// Loja que vendeu e conta do Inter que emitiu. A conta fica gravada porque

@@ -22,6 +22,8 @@ export type CobrancaExibida = {
   txid: string | null
   pixCopiaECola: string | null
   pixQrCode: string | null
+  /** "pix" é o Pix na entrega: só QR, sem boleto. Ausente é boleto. */
+  tipo?: "boleto" | "pix"
 }
 
 type Props = {
@@ -35,6 +37,9 @@ type Props = {
 
 const urlDoBoleto = (vendaId: string, parcela: number) =>
   `/vendas/${vendaId}/boleto.pdf?parcela=${parcela}`
+
+/** O papel da térmica com o QR, para ir com o entregador. */
+const urlDoPixDaEntrega = (vendaId: string) => `/vendas/${vendaId}/pix-entrega`
 
 /** Agrupa a linha digitável de 47 dígitos como no boleto impresso. */
 function agruparLinha(linha: string) {
@@ -242,11 +247,14 @@ export function CobrancaDialogo({
   useEffect(() => {
     async function aoTeclar(evento: KeyboardEvent) {
       if (evento.key !== "F7" || evento.ctrlKey || evento.altKey || evento.metaKey) return
+      const doPix = cobrancas.find((c) => c.tipo === "pix")
       const alvo = cobrancas.find((c) => c.linhaDigitavel)
-      if (!alvo) return
+      if (!doPix && !alvo) return
 
       evento.preventDefault()
-      const problema = await imprimirDocumento(urlDoBoleto(vendaId, alvo.parcela))
+      const problema = await imprimirDocumento(
+        doPix ? urlDoPixDaEntrega(vendaId) : urlDoBoleto(vendaId, alvo!.parcela)
+      )
       if (problema) setErroImpressao(problema)
     }
     window.addEventListener("keydown", aoTeclar, true)
@@ -264,7 +272,11 @@ export function CobrancaDialogo({
         <div className="flex items-baseline justify-between">
           <h2 className="flex items-baseline gap-2 text-base font-semibold">
             Venda #{vendaNumero} ·{" "}
-            {parcelada ? `${cobrancas.length} boletos` : "cobrança"}
+            {parcelada
+              ? `${cobrancas.length} boletos`
+              : unica?.tipo === "pix"
+                ? "Pix na entrega"
+                : "cobrança"}
             {unica ? <EtiquetaSituacao situacao={unica.situacao} /> : null}
           </h2>
           <span className="text-xs text-muted-foreground">
@@ -308,6 +320,12 @@ export function CobrancaDialogo({
               ))}
             </ul>
           </>
+        ) : unica?.tipo === "pix" ? (
+          <PixDaEntrega
+            cobranca={unica}
+            vendaId={vendaId}
+            onErroImpressao={setErroImpressao}
+          />
         ) : unica ? (
           <div className="grid grid-cols-5 gap-6">
             <div className="col-span-3 space-y-4">
@@ -408,6 +426,10 @@ export function CobrancaDialogo({
               <span className="font-medium text-destructive" role="alert">
                 {erroImpressao}
               </span>
+            ) : unica?.tipo === "pix" ? (
+              <span className="text-muted-foreground">
+                <Kbd>F7</Kbd> imprime o QR para o entregador
+              </span>
             ) : cobrancas.some((c) => c.linhaDigitavel) ? (
               <span className="text-muted-foreground">
                 <Kbd>F7</Kbd> imprime
@@ -420,6 +442,78 @@ export function CobrancaDialogo({
             <Kbd className="bg-primary-foreground/20 text-primary-foreground">Enter</Kbd>
           </Button>
         </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * O Pix na entrega: o QR grande e o papel para o entregador. Sem linha
+ * digitável nem PDF — não é boleto. O pagamento é confirmado sozinho pelo
+ * aviso do Inter; aqui não há o que esperar.
+ */
+function PixDaEntrega({
+  cobranca,
+  vendaId,
+  onErroImpressao,
+}: {
+  cobranca: CobrancaExibida
+  vendaId: string
+  onErroImpressao: (erro: string | null) => void
+}) {
+  const [imprimindo, setImprimindo] = useState(false)
+
+  return (
+    <div className="grid grid-cols-5 gap-6">
+      <div className="col-span-3 space-y-4">
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Valor · vencimento
+          </div>
+          <div className="mt-0.5 font-mono text-2xl font-bold tabular-nums">
+            {moeda(cobranca.valor)}
+            <span className="ml-2 text-sm font-medium text-muted-foreground">
+              vence {new Date(cobranca.vencimento).toLocaleDateString("pt-BR")}
+            </span>
+          </div>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          A venda está fechada. O cliente paga este QR na entrega, e o pagamento
+          dá baixa sozinho quando o Inter avisar. Até lá ele fica em Contas a
+          receber.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            tabIndex={-1}
+            size="sm"
+            disabled={imprimindo}
+            onClick={async () => {
+              setImprimindo(true)
+              onErroImpressao(await imprimirDocumento(urlDoPixDaEntrega(vendaId)))
+              setImprimindo(false)
+            }}
+            className="rounded-lg"
+          >
+            {imprimindo ? <Loader2 className="size-4 animate-spin" /> : <Printer className="size-4" />}
+            Imprimir QR para o entregador
+          </Button>
+          {cobranca.pixCopiaECola ? (
+            <BotaoCopiar texto={cobranca.pixCopiaECola} rotulo="Copiar Pix copia e cola" />
+          ) : null}
+        </div>
+      </div>
+      <div className="col-span-2">
+        {cobranca.pixQrCode ? (
+          <img
+            src={cobranca.pixQrCode}
+            alt="QR Code do Pix na entrega"
+            // Fundo branco sempre: QR escuro sobre fundo escuro não lê.
+            className="w-full rounded-lg border border-border bg-white p-2"
+          />
+        ) : (
+          <p className="text-xs text-muted-foreground">Sem QR nesta cobrança.</p>
+        )}
       </div>
     </div>
   )
