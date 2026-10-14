@@ -5,6 +5,11 @@ import type { Route } from "./+types/admin.afs.$afId"
 import { Badge } from "~/components/ui/badge"
 import { GerarDespesas, type RespostaDespesas } from "~/components/pdv/gerar-despesas"
 import { afPorId } from "~/lib/afs.server"
+import { PrecosDeVenda, type RespostaPrecos } from "~/components/pdv/precos-de-venda"
+import { ultimoCustoPorProduto } from "~/lib/compras.server"
+import { db } from "~/lib/db.server"
+import { percentuaisDaOperacao } from "~/lib/precificacao.server"
+import { alterarPrecos } from "~/lib/produtos.server"
 import { categoriasDeDespesa, gerarDespesas, type LinhaDeDespesa } from "~/lib/despesas.server"
 import { formatarCpfCnpj } from "~/lib/documento"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
@@ -30,14 +35,55 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   const af = await afPorId(params.afId)
   if (!af) throw new Response("AF não encontrada", { status: 404 })
 
-  const categorias = await categoriasDeDespesa()
-  return { af, categorias }
+  const ids = [...new Set(af.itens.map((i) => i.produtoId))]
+  const [categorias, produtos, custoAnterior, percentuais] = await Promise.all([
+    categoriasDeDespesa(),
+    db.produto.findMany({ where: { id: { in: ids } }, select: { id: true, preco: true } }),
+    // O custo de ANTES desta AF: a entrada dela já está no estoque, e o "último
+    // custo" de agora seria o dela mesma — o markup proposto sairia zerado.
+    ultimoCustoPorProduto(ids, new Date(new Date(af.criadoEm).getTime() - 1)),
+    percentuaisDaOperacao(),
+  ])
+  const precoPorId = new Map(produtos.map((p) => [p.id, p.preco]))
+
+  return {
+    af,
+    categorias,
+    percentuais,
+    paraPrecificar: af.itens.map((i) => ({
+      produtoId: i.produtoId,
+      codigo: i.codigo,
+      descricao: i.descricao,
+      unidade: i.unidade,
+      custo: i.custoUnitario,
+      precoHoje: precoPorId.get(i.produtoId) ?? null,
+      custoAnterior: custoAnterior.get(i.produtoId) ?? null,
+    })),
+  }
 }
 
-export async function action({ request }: Route.ActionArgs): Promise<RespostaDespesas> {
+export async function action({
+  request,
+}: Route.ActionArgs): Promise<RespostaDespesas | RespostaPrecos> {
+  const form = await request.formData()
+
+  // O preço de venda novo: permissão de quem mexe no catálogo.
+  if (form.get("intencao") === "atualizarPrecos") {
+    const gerente = await exigirGerente(request, "editarProdutos")
+    let itens: { produtoId: string; preco: number }[] = []
+    try {
+      itens = JSON.parse(String(form.get("itens") ?? "[]"))
+    } catch {
+      return { intencao: "atualizarPrecos", ok: false, erro: "Dados inválidos" }
+    }
+    const r = await alterarPrecos(itens, { nome: gerente.nome, id: gerente.id })
+    return r.ok
+      ? { intencao: "atualizarPrecos", ok: true, alterados: r.alterados }
+      : { intencao: "atualizarPrecos", ok: false, erro: r.erro }
+  }
+
   const eu = await exigirGerente(request, "gerarDespesas")
 
-  const form = await request.formData()
   let linhas: LinhaDeDespesa[] = []
   try {
     linhas = JSON.parse(String(form.get("linhas") ?? "[]"))
@@ -54,7 +100,7 @@ export async function action({ request }: Route.ActionArgs): Promise<RespostaDes
 }
 
 export default function DetalheAf({ loaderData }: Route.ComponentProps) {
-  const { af, categorias } = loaderData
+  const { af, categorias, percentuais, paraPrecificar } = loaderData
 
   return (
     <div className="p-4 sm:p-6">
@@ -136,6 +182,10 @@ export default function DetalheAf({ loaderData }: Route.ComponentProps) {
               ))}
             </tbody>
           </table>
+        </div>
+
+        <div className="rounded-lg border p-4">
+          <PrecosDeVenda itens={paraPrecificar} percentuais={percentuais} />
         </div>
 
         <div className="rounded-lg border p-4">
