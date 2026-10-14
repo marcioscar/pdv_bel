@@ -2005,8 +2005,12 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
    */
   const cadastrarCliente = useCallback(() => {
     setClienteErro(null)
-    // Direto no formulário: quem apertou "novo cliente" não quer a lista de busca.
-    setCadastroDireto(true)
+    /*
+     * A busca, e não o formulário de cadastro: o caso comum é o cliente que já
+     * existe — para o orçamento sair com o nome dele, ou a venda ir no nome
+     * certo. Cliente novo continua a um clique, no "Novo cliente" da lista.
+     */
+    setCadastroDireto(false)
     setClienteAberto(true)
   }, [])
 
@@ -2019,11 +2023,13 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     const params = new URLSearchParams()
     for (const item of venda.itens) params.append("i", `${item.produtoId}:${item.quantidade}`)
     if (totais.desconto > 0) params.set("desconto", String(totais.desconto))
+    // O cliente da venda sai impresso no orçamento, no lugar das linhas em branco.
+    if (cliente) params.set("cliente", cliente.id)
 
     imprimirDocumento(`/orcamento/impressao?${params}`).then((erro) => {
       avisar(erro ?? "Orçamento enviado para a impressora", erro ? "erro" : "sucesso")
     })
-  }, [avisar, totais.desconto, venda.itens])
+  }, [avisar, cliente, totais.desconto, venda.itens])
 
   /**
    * Volta a venda para Consumidor Final. O crédito abatido e a forma de
@@ -2249,7 +2255,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     // Sempre habilitado, ao contrário dos vizinhos: cadastrar cliente não
     // depende de haver venda na tela — muitas vezes é justamente o primeiro
     // passo, com o cliente novo parado na frente do balcão.
-    { tecla: "F6", rotulo: "Novo cliente", acao: cadastrarCliente },
+    { tecla: "F6", rotulo: "Cliente", acao: cadastrarCliente },
     {
       tecla: "F7",
       rotulo: "Orçamento",

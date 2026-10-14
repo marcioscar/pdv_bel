@@ -47,6 +47,15 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   const loja = await db.loja.findUnique({ where: { codigo: eu.loja } })
 
+  /*
+   * O cliente escolhido na venda (F6), quando há: sai impresso no lugar das
+   * linhas em branco. Sem ele, as linhas continuam para preencher à mão.
+   */
+  const clienteId = url.searchParams.get("cliente") ?? ""
+  const cliente = /^[0-9a-fA-F]{24}$/.test(clienteId)
+    ? await db.cliente.findUnique({ where: { id: clienteId } })
+    : null
+
   // URL absoluta: caminho relativo não resolve quando a página é impressa a
   // partir de um contexto sem origem (o cupom já apanhou disso).
   const logo = loja?.logo ? new URL(loja.logo, request.url).href : null
@@ -132,6 +141,9 @@ export async function loader({ request }: Route.LoaderArgs) {
     white-space: nowrap;
   }
   .cliente .risco { flex: 1; border-bottom: 1px dotted #999; height: 4.5mm; }
+  .cliente.preenchido { display: block; }
+  .cliente .nome { font-size: 12px; font-weight: 700; margin-top: 1mm; }
+  .cliente .fraco { font-size: 9.5px; color: #444; margin-top: .6mm; }
 
   table { width: 100%; border-collapse: collapse; margin-top: 4mm; }
   th, td { text-align: left; padding: 1.6mm 2mm; vertical-align: top; }
@@ -205,12 +217,44 @@ export async function loader({ request }: Route.LoaderArgs) {
     </div>
   </div>
 
-  <div class="cliente">
+  ${
+    cliente
+      ? `<div class="cliente preenchido">
+    <div>
+      <span class="titulo">Cliente</span>
+      <div class="nome">${escapar(cliente.nome)}${
+        cliente.nomeFantasia ? ` <span class="fraco">(${escapar(cliente.nomeFantasia)})</span>` : ""
+      }</div>
+      <div class="fraco">${[
+        cliente.cpfCnpj ? escapar(formatarCpfCnpj(cliente.cpfCnpj)) : "",
+        cliente.telefone ? `Tel. ${escapar(`${cliente.ddd ? `(${cliente.ddd}) ` : ""}${cliente.telefone}`)}` : "",
+        cliente.email ? escapar(cliente.email) : "",
+      ]
+        .filter(Boolean)
+        .join(" · ")}</div>
+      ${
+        cliente.endereco
+          ? `<div class="fraco">${escapar(
+              [
+                [cliente.endereco, cliente.numero, cliente.complemento].filter(Boolean).join(", "),
+                cliente.bairro,
+                [cliente.cidade, cliente.uf].filter(Boolean).join("/"),
+                cliente.cep ? `CEP ${cliente.cep}` : "",
+              ]
+                .filter(Boolean)
+                .join(" — ")
+            )}</div>`
+          : ""
+      }
+    </div>
+  </div>`
+      : `<div class="cliente">
     <span class="titulo">Cliente</span>
     <span class="risco"></span>
     <span class="titulo">Telefone</span>
     <span class="risco" style="flex:0 0 40mm"></span>
-  </div>
+  </div>`
+  }
 
   <table>
     <thead>
