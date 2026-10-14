@@ -14,6 +14,14 @@ import { ReceberPedido } from "~/components/pdv/pedido-compra"
 import type { ItemDaNotaParaConciliar, ItemReconciliado } from "~/lib/conciliacao.server"
 import { interpretarValor, moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { conferirPrecoVenda } from "~/lib/precificacao"
+import {
+  centavos,
+  markupPorPreco,
+  precoPorMarkup,
+  propostaDeMarkup,
+  textoDeMarkup,
+  textoDePreco,
+} from "~/lib/markup"
 import type { PercentuaisDaOperacao } from "~/lib/precificacao.server"
 import { buscarProdutos, criarIndice, type EntradaIndice } from "~/lib/pdv"
 import { cn } from "~/lib/utils"
@@ -246,26 +254,14 @@ export function EntradaDeNota({
 
   const nadaPareado = linhasDaComparacao.every((l) => quantidadeAReceber(l.produtoId) <= 0)
 
-  const centavos = (v: number) => Math.round(v * 100) / 100
-  const texto2 = (v: number) => v.toFixed(2).replace(".", ",")
-  const texto1 = (v: number) => v.toFixed(1).replace(".", ",")
-
-  /**
-   * O ponto de partida de cada linha: MANTER o markup que o produto tinha.
-   *
-   * O preço de hoje foi feito sobre o custo anterior; esse markup, aplicado ao
-   * custo novo, dá o preço que conserva a margem — se o custo subiu 10%, o
-   * preço sobe 10%. Sem custo anterior conhecido, parte do preço de hoje sobre
-   * o custo novo (nada muda até o gerente mexer). Sem preço, começa vazio.
-   */
+  /** O ponto de partida de cada linha: manter o markup que o produto tinha. */
   function propostaDe(produtoId: string): { markup: string; preco: string } {
-    const custo = custoUnitarioDe(produtoId)
     const produto = catalogoPorId.get(produtoId)
-    const hoje = produto?.preco ?? 0
-    if (!(custo > 0) || !(hoje > 0)) return { markup: "", preco: "" }
-    const base = produto?.custoAnterior && produto.custoAnterior > 0 ? produto.custoAnterior : custo
-    const markup = (hoje / base - 1) * 100
-    return { markup: texto1(markup), preco: texto2(centavos(custo * (1 + markup / 100))) }
+    return propostaDeMarkup({
+      custo: custoUnitarioDe(produtoId),
+      precoHoje: produto?.preco,
+      custoAnterior: produto?.custoAnterior,
+    })
   }
 
   function precoDaLinha(produtoId: string) {
@@ -279,7 +275,7 @@ export function EntradaDeNota({
       ...atual,
       [produtoId]: {
         markup: texto,
-        preco: markup != null && custo > 0 ? texto2(centavos(custo * (1 + markup / 100))) : "",
+        preco: markup != null && custo > 0 ? textoDePreco(precoPorMarkup(custo, markup)) : "",
       },
     }))
   }
@@ -291,7 +287,8 @@ export function EntradaDeNota({
       ...atual,
       [produtoId]: {
         preco: texto,
-        markup: preco != null && preco > 0 && custo > 0 ? texto1((preco / custo - 1) * 100) : "",
+        markup:
+          preco != null && preco > 0 && custo > 0 ? textoDeMarkup(markupPorPreco(custo, preco)) : "",
       },
     }))
   }

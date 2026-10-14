@@ -16,8 +16,19 @@ import { listarFornecedores } from "~/lib/fornecedores.server"
 import { listarLojas } from "~/lib/lojas.server"
 import { interpretarValor, moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { criarIndice } from "~/lib/pdv"
+import {
+  centavos,
+  markupPorPreco,
+  precoPorMarkup,
+  propostaDeMarkup,
+  textoDeMarkup,
+  textoDePreco,
+} from "~/lib/markup"
+import { conferirPrecoVenda } from "~/lib/precificacao"
 import { recebidoPorProduto } from "~/lib/pedidos-compra.server"
-import { SOMENTE_ATIVOS } from "~/lib/produtos.server"
+import { alterarPrecos, SOMENTE_ATIVOS } from "~/lib/produtos.server"
+import { ultimoCustoPorProduto } from "~/lib/compras.server"
+import { percentuaisDaOperacao } from "~/lib/precificacao.server"
 import { exigirGerente } from "~/lib/sessao.server"
 import { cn } from "~/lib/utils"
 
@@ -46,7 +57,8 @@ export async function loader({ request }: Route.LoaderArgs) {
     db.produto.findMany({
       where: SOMENTE_ATIVOS,
       orderBy: { descricao: "asc" },
-      select: { id: true, codigo: true, descricao: true, unidade: true },
+      // Preço junto: a AF propõe o preço de venda novo ao lado do de hoje.
+      select: { id: true, codigo: true, descricao: true, unidade: true, preco: true },
     }),
   ])
 
@@ -65,9 +77,13 @@ export async function loader({ request }: Route.LoaderArgs) {
     ? (pedidos.find((p) => p.id === pedidoId) ?? null)
     : (pedidos.length === 1 ? pedidos[0] : null)
 
-  const [ultimoCusto, recebidoAntes] = await Promise.all([
+  const [ultimoCusto, recebidoAntes, custoAnterior, percentuais] = await Promise.all([
     fornecedorId ? ultimoCustoDoFornecedor(fornecedorId) : new Map<string, number>(),
     pedidoEscolhido ? recebidoPorProduto(pedidoEscolhido.id) : new Map<string, number>(),
+    // O custo de antes desta AF, de qualquer fornecedor: é sobre ele que o
+    // preço de hoje foi formado — daí o markup que a tela propõe manter.
+    fornecedorId ? ultimoCustoPorProduto(catalogo.map((p) => p.id)) : new Map<string, number>(),
+    fornecedorId ? percentuaisDaOperacao() : null,
   ])
 
   return {
@@ -78,7 +94,8 @@ export async function loader({ request }: Route.LoaderArgs) {
     })),
     fornecedorId,
     lojas: lojas.map((l) => ({ codigo: l.codigo, nome: l.nome })),
-    catalogo,
+    catalogo: catalogo.map((p) => ({ ...p, custoAnterior: custoAnterior.get(p.id) ?? null })),
+    percentuais,
     pedidos: pedidos.map((p) => ({ id: p.id, numero: p.numero, situacao: p.situacao })),
     pedidoEscolhido: pedidoEscolhido
       ? {
@@ -109,6 +126,22 @@ export async function action({ request }: Route.ActionArgs) {
   const eu = await exigirGerente(request, "lancarAf")
 
   const form = await request.formData()
+
+  // O preço de venda novo, como na nota de entrada: permissão de quem mexe no catálogo.
+  if (form.get("intencao") === "atualizarPrecos") {
+    const gerente = await exigirGerente(request, "editarProdutos")
+    let itens: { produtoId: string; preco: number }[] = []
+    try {
+      itens = JSON.parse(String(form.get("itens") ?? "[]"))
+    } catch {
+      return { intencao: "atualizarPrecos" as const, ok: false as const, erro: "Dados inválidos" }
+    }
+    const r = await alterarPrecos(itens, { nome: gerente.nome, id: gerente.id })
+    return r.ok
+      ? { intencao: "atualizarPrecos" as const, ok: true as const, alterados: r.alterados }
+      : { intencao: "atualizarPrecos" as const, ok: false as const, erro: r.erro }
+  }
+
   let itens: ItemDaAf[] = []
   try {
     itens = JSON.parse(String(form.get("itens") ?? "[]"))
@@ -136,7 +169,21 @@ export async function action({ request }: Route.ActionArgs) {
   return { intencao: "lancar" as const, ok: false as const, erro: resultado.erro }
 }
 
-type LinhaAf = { produtoId: string; quantidadeTexto: string; custoTexto: string }
+type LinhaAf = {
+  produtoId: string
+  quantidadeTexto: string
+  custoTexto: string
+  /**
+   * O preço de venda novo. `fixo` diz o que o gerente digitou por último: com
+   * "markup", o preço acompanha o custo; com "preco", o markup acompanha; sem
+   * nada, vale a proposta de manter o markup que o produto tinha.
+   */
+  markupTexto?: string
+  precoTexto?: string
+  fixo?: "markup" | "preco" | null
+  /** Desmarcado: o preço deste produto fica como está. */
+  manter?: boolean
+}
 
 const LINHA_VAZIA: LinhaAf = { produtoId: "", quantidadeTexto: "", custoTexto: "" }
 
@@ -150,9 +197,12 @@ export default function NovaAf({ loaderData }: Route.ComponentProps) {
     pedidoEscolhido,
     ultimoCusto,
     hoje,
+    percentuais,
   } = loaderData
 
   const fetcher = useFetcher<typeof action>()
+  const precoFetcher = useFetcher<typeof action>()
+  const [markupTodosTexto, setMarkupTodosTexto] = useState("")
   const lancando = fetcher.state !== "idle"
   const [params, setParams] = useSearchParams()
 
@@ -213,6 +263,10 @@ export default function NovaAf({ loaderData }: Route.ComponentProps) {
         return {
           ...l,
           produtoId,
+          // Produto novo na linha: o preço digitado era do anterior.
+          markupTexto: undefined,
+          precoTexto: undefined,
+          fixo: null,
           custoTexto:
             l.custoTexto || (sugestao ? String(sugestao).replace(".", ",") : l.custoTexto),
         }
@@ -220,11 +274,70 @@ export default function NovaAf({ loaderData }: Route.ComponentProps) {
     )
   }
 
+  const custoDoPedido = new Map(
+    (pedidoEscolhido?.itens ?? []).map((item) => [item.produtoId, item.custoUnitario])
+  )
+
   const linhasComTotal = linhas.map((l) => {
     const quantidade = interpretarValor(l.quantidadeTexto) ?? 0
     const custo = interpretarValor(l.custoTexto) ?? 0
-    return { ...l, quantidade, custo, total: quantidade * custo }
+    const produto = catalogoPorId.get(l.produtoId)
+
+    /*
+     * O esperado é o que se combinou: o custo do pedido, ou, sem pedido, o
+     * último custo pago a este fornecedor. A diferença é o mesmo alerta da
+     * nota de entrada — o papel veio mais caro do que o combinado?
+     */
+    const esperado = custoDoPedido.get(l.produtoId) ?? ultimoCusto[l.produtoId] ?? null
+    const diferenca = esperado != null && custo > 0 ? custo - esperado : null
+
+    // O preço novo, conforme o que foi digitado por último (ver `LinhaAf.fixo`).
+    const proposta = propostaDeMarkup({
+      custo,
+      precoHoje: produto?.preco,
+      custoAnterior: produto?.custoAnterior,
+    })
+    const markupDigitado = interpretarValor(l.markupTexto ?? "")
+    const precoDigitado = interpretarValor(l.precoTexto ?? "")
+    const preco =
+      l.fixo === "markup"
+        ? markupDigitado != null && custo > 0
+          ? textoDePreco(precoPorMarkup(custo, markupDigitado))
+          : ""
+        : l.fixo === "preco"
+          ? (l.precoTexto ?? "")
+          : proposta.preco
+    const markup =
+      l.fixo === "markup"
+        ? (l.markupTexto ?? "")
+        : l.fixo === "preco"
+          ? precoDigitado != null && precoDigitado > 0 && custo > 0
+            ? textoDeMarkup(markupPorPreco(custo, precoDigitado))
+            : ""
+          : proposta.markup
+
+    return { ...l, quantidade, custo, total: quantidade * custo, esperado, diferenca, preco, markup }
   })
+
+  /** O que vai mudar no catálogo: preço válido, diferente do de hoje, linha marcada. */
+  const precosAAtualizar = [
+    ...new Map(
+      linhasComTotal.flatMap((l) => {
+        if (!l.produtoId || l.manter) return []
+        const novo = interpretarValor(l.preco)
+        const hoje = catalogoPorId.get(l.produtoId)?.preco ?? 0
+        if (novo == null || !(novo > 0) || centavos(novo) === centavos(hoje)) return []
+        return [[l.produtoId, { produtoId: l.produtoId, preco: centavos(novo) }] as const]
+      })
+    ).values(),
+  ]
+
+  function aplicarMarkupATodos() {
+    if (interpretarValor(markupTodosTexto) == null) return
+    setLinhas((atual) =>
+      atual.map((l) => (l.produtoId ? { ...l, markupTexto: markupTodosTexto, fixo: "markup" } : l))
+    )
+  }
   const total = linhasComTotal.reduce((soma, l) => soma + l.total, 0)
 
   const preenchidas = linhasComTotal.filter((l) => l.produtoId && l.quantidade > 0)
@@ -349,7 +462,12 @@ export default function NovaAf({ loaderData }: Route.ComponentProps) {
                   <th className="px-2 py-1.5">Produto</th>
                   <th className="w-28 px-2 py-1.5 text-right">Quantidade</th>
                   <th className="w-28 px-2 py-1.5 text-right">Custo unit.</th>
+                  <th className="w-24 px-2 py-1.5 text-right">Esperado</th>
+                  <th className="w-28 px-2 py-1.5 text-right">Diferença</th>
                   <th className="w-28 px-2 py-1.5 text-right">Total</th>
+                  <th className="w-24 px-2 py-1.5 text-right">Preço hoje</th>
+                  <th className="w-24 px-2 py-1.5 text-right">Markup</th>
+                  <th className="w-32 px-2 py-1.5 text-right">Novo preço</th>
                   <th className="w-8 px-2 py-1.5"></th>
                 </tr>
               </thead>
@@ -390,8 +508,104 @@ export default function NovaAf({ loaderData }: Route.ComponentProps) {
                           )}
                         />
                       </td>
+                      <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
+                        {linha.esperado != null ? moeda(linha.esperado) : "—"}
+                      </td>
+                      <td className="px-2 py-1.5 text-right">
+                        {linha.diferenca != null && linha.esperado ? (
+                          <Badge
+                            variant={
+                              Math.abs(linha.diferenca / linha.esperado) < 0.01
+                                ? "outline"
+                                : linha.diferenca > 0
+                                  ? "destructive"
+                                  : "secondary"
+                            }
+                          >
+                            {linha.diferenca > 0 ? "+" : ""}
+                            {moeda(linha.diferenca)} ({((linha.diferenca / linha.esperado) * 100).toFixed(0)}%)
+                          </Badge>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </td>
                       <td className="px-2 py-1.5 text-right tabular-nums">
                         {linha.total > 0 ? moeda(linha.total) : "—"}
+                      </td>
+                      <td className="px-2 py-1.5 text-right tabular-nums">
+                        {produto?.preco ? (
+                          <>
+                            <div>{moeda(produto.preco)}</div>
+                            {linha.custo > 0 ? (
+                              <div
+                                className={cn(
+                                  "text-[11px]",
+                                  produto.preco <= linha.custo
+                                    ? "font-medium text-destructive"
+                                    : "text-muted-foreground"
+                                )}
+                              >
+                                {markupPorPreco(linha.custo, produto.preco).toFixed(0)}% s/ custo
+                              </div>
+                            ) : null}
+                          </>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <div className="flex items-center justify-end gap-1">
+                          <Input
+                            value={linha.markup}
+                            disabled={!linha.produtoId || !(linha.custo > 0)}
+                            onChange={(e) =>
+                              setLinhas((atual) =>
+                                atual.map((l, idx) =>
+                                  idx === i ? { ...l, markupTexto: e.target.value, fixo: "markup" } : l
+                                )
+                              )
+                            }
+                            inputMode="decimal"
+                            className="h-7 w-16 text-right font-mono text-xs"
+                          />
+                          <span className="text-muted-foreground">%</span>
+                        </div>
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <input
+                            type="checkbox"
+                            checked={!linha.manter}
+                            disabled={!linha.produtoId}
+                            onChange={(e) =>
+                              setLinhas((atual) =>
+                                atual.map((l, idx) =>
+                                  idx === i ? { ...l, manter: !e.target.checked } : l
+                                )
+                              )
+                            }
+                            title="Atualizar o preço de venda deste produto"
+                            className="size-3.5"
+                          />
+                          <Input
+                            value={linha.preco}
+                            disabled={!linha.produtoId || !(linha.custo > 0)}
+                            onChange={(e) =>
+                              setLinhas((atual) =>
+                                atual.map((l, idx) =>
+                                  idx === i ? { ...l, precoTexto: e.target.value, fixo: "preco" } : l
+                                )
+                              )
+                            }
+                            inputMode="decimal"
+                            className="h-7 w-20 text-right font-mono text-xs"
+                          />
+                        </div>
+                        <AvisoDoPreco
+                          custo={linha.custo}
+                          preco={interpretarValor(linha.preco)}
+                          percentuais={percentuais}
+                        />
                       </td>
                       <td className="px-2 py-1.5">
                         <Button
@@ -435,6 +649,68 @@ export default function NovaAf({ loaderData }: Route.ComponentProps) {
 
             <span className="ml-auto text-sm">
               Total da AF: <strong className="tabular-nums">{moeda(total)}</strong>
+            </span>
+          </div>
+
+          {/* O preço de venda, como na nota de entrada: markup sobre o custo da AF. */}
+          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-border p-2 text-xs">
+            <span className="text-muted-foreground">Markup para todos</span>
+            <Input
+              value={markupTodosTexto}
+              onChange={(e) => setMarkupTodosTexto(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault()
+                  aplicarMarkupATodos()
+                }
+              }}
+              inputMode="decimal"
+              placeholder="ex. 40"
+              className="h-7 w-16 text-right font-mono text-xs"
+            />
+            <span className="text-muted-foreground">%</span>
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              disabled={interpretarValor(markupTodosTexto) == null}
+              onClick={aplicarMarkupATodos}
+            >
+              Aplicar
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="ml-auto"
+              disabled={precosAAtualizar.length === 0 || precoFetcher.state !== "idle"}
+              onClick={() =>
+                precoFetcher.submit(
+                  { intencao: "atualizarPrecos", itens: JSON.stringify(precosAAtualizar) },
+                  { method: "post" }
+                )
+              }
+            >
+              {precoFetcher.state !== "idle"
+                ? "Atualizando…"
+                : precosAAtualizar.length === 0
+                  ? "Nenhum preço de venda a mudar"
+                  : `Atualizar ${precosAAtualizar.length} ${precosAAtualizar.length === 1 ? "preço" : "preços"} de venda`}
+            </Button>
+            {precoFetcher.data?.intencao === "atualizarPrecos" ? (
+              precoFetcher.data.ok ? (
+                <span className="text-muted-foreground">
+                  {precoFetcher.data.alterados}{" "}
+                  {precoFetcher.data.alterados === 1 ? "preço atualizado" : "preços atualizados"} no
+                  catálogo
+                </span>
+              ) : (
+                <span className="text-destructive">{precoFetcher.data.erro}</span>
+              )
+            ) : null}
+            <span className="w-full text-muted-foreground">
+              Preço = custo da AF × (1 + markup). Começa no markup que o produto já tinha, para a
+              margem se manter com o custo novo.
             </span>
           </div>
 
@@ -562,4 +838,35 @@ function EscolhaDeFornecedor({
       ) : null}
     </div>
   )
+}
+
+/** O mesmo aviso da nota: abaixo do custo, ou sem pagar os custos da operação. */
+function AvisoDoPreco({
+  custo,
+  preco,
+  percentuais,
+}: {
+  custo: number
+  preco: number | null
+  percentuais: Route.ComponentProps["loaderData"]["percentuais"]
+}) {
+  if (preco == null || !(preco > 0) || !(custo > 0)) return null
+  if (preco < custo) {
+    return <div className="text-right text-[11px] font-medium text-destructive">abaixo do custo</div>
+  }
+  const conferencia = percentuais?.temDados
+    ? conferirPrecoVenda({
+        custo,
+        preco,
+        pctFixos: percentuais.pctFixas,
+        pctVariaveis: percentuais.pctVariaveis,
+      })
+    : null
+  if (conferencia?.status === "prejuizo") {
+    return <div className="text-right text-[11px] font-medium text-destructive">dá prejuízo</div>
+  }
+  if (conferencia?.status === "empate") {
+    return <div className="text-right text-[11px] text-amber-600 dark:text-amber-500">empata</div>
+  }
+  return null
 }
