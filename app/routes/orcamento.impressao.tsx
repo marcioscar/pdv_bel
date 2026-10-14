@@ -172,7 +172,14 @@ export async function loader({ request }: Route.LoaderArgs) {
     display: flex; justify-content: space-between; gap: 6mm;
     padding: 1.2mm 0; font-size: 11px;
   }
-  .somas .linha .valor { font-family: ui-monospace, Menlo, monospace; }
+  /*
+   * Largura livre: a classe .valor é também a das colunas da tabela, de 24mm
+   * fixos. No total, em fonte grande, "R$ 1.234,50" não cabia, passava da
+   * margem e o último dígito saía cortado no papel.
+   */
+  .somas .linha .valor {
+    font-family: ui-monospace, Menlo, monospace; width: auto; white-space: nowrap;
+  }
   .somas .total {
     margin-top: 1.5mm; padding-top: 2mm; border-top: 1.5px solid #111;
     font-size: 15px; font-weight: 700;
