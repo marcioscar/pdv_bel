@@ -11,6 +11,11 @@ export type ProdutoDoCatalogo = {
   unidade: string
   /** O preço de venda de hoje. Opcional: nem toda tela que escolhe produto o carrega. */
   preco?: number
+  /**
+   * O último custo conhecido ANTES desta nota. É sobre ele que o preço de hoje
+   * foi feito, e daí sai o markup que se quer manter com o custo novo.
+   */
+  custoAnterior?: number | null
 }
 
 /**

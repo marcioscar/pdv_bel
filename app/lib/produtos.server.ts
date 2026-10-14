@@ -182,6 +182,37 @@ export async function atualizarProduto(
   return { ok: true, produto }
 }
 
+/**
+ * Muda só o preço de venda de vários produtos de uma vez — o que a entrada da
+ * nota faz depois de recalcular o markup. Cada mudança entra no histórico com
+ * nome e hora, como na edição do cadastro: preço é dinheiro.
+ */
+export async function alterarPrecos(
+  itens: { produtoId: string; preco: number }[],
+  quem: { nome: string; id: string }
+): Promise<{ ok: true; alterados: number } | { ok: false; erro: string }> {
+  for (const item of itens) {
+    if (!OBJECT_ID.test(item.produtoId)) return { ok: false, erro: "Produto inválido" }
+    if (!Number.isFinite(item.preco) || item.preco <= 0) {
+      return { ok: false, erro: "Preço de venda inválido" }
+    }
+  }
+
+  let alterados = 0
+  for (const { produtoId, preco } of itens) {
+    const existente = await db.produto.findUnique({ where: { id: produtoId }, select: { preco: true } })
+    if (!existente) continue
+    const novo = Math.round(preco * 100) / 100
+    if (existente.preco === novo) continue
+    await db.produto.update({ where: { id: produtoId }, data: { preco: novo } })
+    await db.alteracaoDePreco.create({
+      data: { produtoId, de: existente.preco, para: novo, operador: quem.nome, operadorId: quem.id },
+    })
+    alterados++
+  }
+  return { ok: true, alterados }
+}
+
 /** O histórico de preço de um produto, do mais recente para o mais antigo. */
 export function alteracoesDePreco(produtoId: string, limite = 40) {
   return db.alteracaoDePreco.findMany({

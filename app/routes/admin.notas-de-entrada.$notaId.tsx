@@ -30,7 +30,8 @@ import {
 import { db } from "~/lib/db.server"
 import { listarLojas } from "~/lib/lojas.server"
 import { recebidoPorProduto } from "~/lib/pedidos-compra.server"
-import { criarProduto, lerProduto, SOMENTE_ATIVOS } from "~/lib/produtos.server"
+import { alterarPrecos, criarProduto, lerProduto, SOMENTE_ATIVOS } from "~/lib/produtos.server"
+import { ultimoCustoPorProduto } from "~/lib/compras.server"
 
 export function meta({ loaderData }: Route.MetaArgs) {
   const nome = loaderData?.nota?.emitenteNome
@@ -85,6 +86,16 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   const itensComCusto = temItens ? itensComCustoDaNota(nota.xml!) : []
 
   /*
+   * O custo de antes desta nota, por produto: é sobre ele que o preço de hoje
+   * foi formado, e daí sai o markup que a tela propõe manter com o custo novo.
+   * Nota já recebida não precisa — a precificação só aparece antes da entrada.
+   */
+  const custoAnterior =
+    temItens && nota.situacao !== "recebida"
+      ? await ultimoCustoPorProduto(catalogo.map((p) => p.id))
+      : new Map<string, number>()
+
+  /*
    * Quanto a operação custa, em percentual do faturamento — é o que transforma
    * o custo da nota em preço de venda sugerido. Só quando há itens: sem nota
    * completa não há custo para precificar, e a consulta seria à toa.
@@ -129,7 +140,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     })),
     pedidoEscolhidoId: pedidoEscolhido?.id ?? "",
     itensComCusto,
-    catalogo,
+    catalogo: catalogo.map((p) => ({ ...p, custoAnterior: custoAnterior.get(p.id) ?? null })),
     percentuais,
     lojas: lojas.map((l) => l.codigo),
     recebidoAntes: Object.fromEntries(recebidoAntes),
@@ -173,6 +184,21 @@ export async function action({ request }: Route.ActionArgs): Promise<RespostaAct
       itens
     )
     return { intencao: "receber", ...resultado }
+  }
+
+  if (intencao === "atualizarPrecos") {
+    // Preço é do catálogo: a mesma permissão de quem edita produto.
+    const gerente = await exigirGerente(request, "editarProdutos")
+    let itens: { produtoId: string; preco: number }[] = []
+    try {
+      itens = JSON.parse(String(form.get("itens") ?? "[]"))
+    } catch {
+      return { intencao: "atualizarPrecos", ok: false, erro: "Dados inválidos" }
+    }
+    const resultado = await alterarPrecos(itens, { nome: gerente.nome, id: gerente.id })
+    return resultado.ok
+      ? { intencao: "atualizarPrecos", ok: true, alterados: resultado.alterados }
+      : { intencao: "atualizarPrecos", ok: false, erro: resultado.erro }
   }
 
   if (intencao === "cadastrarProduto") {

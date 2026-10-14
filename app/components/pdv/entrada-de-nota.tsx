@@ -13,11 +13,7 @@ import {
 import { ReceberPedido } from "~/components/pdv/pedido-compra"
 import type { ItemDaNotaParaConciliar, ItemReconciliado } from "~/lib/conciliacao.server"
 import { interpretarValor, moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
-import {
-  calcularPrecoVenda,
-  conferirPrecoVenda,
-  LUCRO_PADRAO,
-} from "~/lib/precificacao"
+import { conferirPrecoVenda } from "~/lib/precificacao"
 import type { PercentuaisDaOperacao } from "~/lib/precificacao.server"
 import { buscarProdutos, criarIndice, type EntradaIndice } from "~/lib/pdv"
 import { cn } from "~/lib/utils"
@@ -55,6 +51,8 @@ export type RespostaEntrada =
   | { intencao: "receber"; ok: false; erro: string }
   | { intencao: "cadastrarProduto"; ok: true; linha: number; produtoId: string }
   | { intencao: "cadastrarProduto"; ok: false; erro: string }
+  | { intencao: "atualizarPrecos"; ok: true; alterados: number }
+  | { intencao: "atualizarPrecos"; ok: false; erro: string }
 
 export type { ProdutoDoCatalogo }
 
@@ -114,14 +112,17 @@ export function EntradaDeNota({
     Object.fromEntries(itensDaNota.map((item, i) => [i, formatarQuantidade(item.quantidade)]))
   )
 
+  const precoFetcher = useFetcher<RespostaEntrada>()
   /*
-   * O lucro é escolha de quem confere a nota, não constante do sistema: muda
-   * por linha de produto, por concorrência, por o que a mercadoria custou desta
-   * vez. Começa em 10% porque é preciso começar em algum lugar, e é onde a
-   * calculadora da rede começa.
+   * O preço de venda novo de cada produto, por markup sobre o CUSTO REAL desta
+   * nota: preço = custo × (1 + markup). Os dois campos andam juntos — mexer no
+   * markup recalcula o preço, digitar o preço recalcula o markup. Vazio no
+   * estado é "ainda não mexi": vale a proposta inicial (ver `propostaDe`).
    */
-  const [lucroTexto, setLucroTexto] = useState(String(LUCRO_PADRAO))
-  const pctLucro = interpretarValor(lucroTexto) ?? 0
+  const [precos, setPrecos] = useState<Record<string, { markup: string; preco: string }>>({})
+  /** Produtos que o gerente desmarcou: o preço deles fica como está. */
+  const [manterPreco, setManterPreco] = useState<Set<string>>(new Set())
+  const [markupTodosTexto, setMarkupTodosTexto] = useState("")
 
   const catalogoPorId = useMemo(() => new Map(catalogo.map((p) => [p.id, p])), [catalogo])
   /*
@@ -245,6 +246,79 @@ export function EntradaDeNota({
 
   const nadaPareado = linhasDaComparacao.every((l) => quantidadeAReceber(l.produtoId) <= 0)
 
+  const centavos = (v: number) => Math.round(v * 100) / 100
+  const texto2 = (v: number) => v.toFixed(2).replace(".", ",")
+  const texto1 = (v: number) => v.toFixed(1).replace(".", ",")
+
+  /**
+   * O ponto de partida de cada linha: MANTER o markup que o produto tinha.
+   *
+   * O preço de hoje foi feito sobre o custo anterior; esse markup, aplicado ao
+   * custo novo, dá o preço que conserva a margem — se o custo subiu 10%, o
+   * preço sobe 10%. Sem custo anterior conhecido, parte do preço de hoje sobre
+   * o custo novo (nada muda até o gerente mexer). Sem preço, começa vazio.
+   */
+  function propostaDe(produtoId: string): { markup: string; preco: string } {
+    const custo = custoUnitarioDe(produtoId)
+    const produto = catalogoPorId.get(produtoId)
+    const hoje = produto?.preco ?? 0
+    if (!(custo > 0) || !(hoje > 0)) return { markup: "", preco: "" }
+    const base = produto?.custoAnterior && produto.custoAnterior > 0 ? produto.custoAnterior : custo
+    const markup = (hoje / base - 1) * 100
+    return { markup: texto1(markup), preco: texto2(centavos(custo * (1 + markup / 100))) }
+  }
+
+  function precoDaLinha(produtoId: string) {
+    return precos[produtoId] ?? propostaDe(produtoId)
+  }
+
+  function mudarMarkup(produtoId: string, texto: string) {
+    const custo = custoUnitarioDe(produtoId)
+    const markup = interpretarValor(texto)
+    setPrecos((atual) => ({
+      ...atual,
+      [produtoId]: {
+        markup: texto,
+        preco: markup != null && custo > 0 ? texto2(centavos(custo * (1 + markup / 100))) : "",
+      },
+    }))
+  }
+
+  function mudarPreco(produtoId: string, texto: string) {
+    const custo = custoUnitarioDe(produtoId)
+    const preco = interpretarValor(texto)
+    setPrecos((atual) => ({
+      ...atual,
+      [produtoId]: {
+        preco: texto,
+        markup: preco != null && preco > 0 && custo > 0 ? texto1((preco / custo - 1) * 100) : "",
+      },
+    }))
+  }
+
+  function aplicarMarkupATodos() {
+    if (interpretarValor(markupTodosTexto) == null) return
+    for (const linha of linhasDaComparacao) {
+      if (custoUnitarioDe(linha.produtoId) > 0) mudarMarkup(linha.produtoId, markupTodosTexto)
+    }
+  }
+
+  /** O que vai mudar de fato: preço válido, diferente do de hoje, e não desmarcado. */
+  const precosAAtualizar = linhasDaComparacao.flatMap((linha) => {
+    if (manterPreco.has(linha.produtoId)) return []
+    const novo = interpretarValor(precoDaLinha(linha.produtoId).preco)
+    const hoje = catalogoPorId.get(linha.produtoId)?.preco ?? 0
+    if (novo == null || !(novo > 0) || centavos(novo) === centavos(hoje)) return []
+    return [{ produtoId: linha.produtoId, preco: centavos(novo) }]
+  })
+
+  function atualizarPrecos() {
+    precoFetcher.submit(
+      { intencao: "atualizarPrecos", itens: JSON.stringify(precosAAtualizar) },
+      { method: "post" }
+    )
+  }
+
   function receber(loja: string) {
     const itens: ItemReconciliado[] = linhasDaComparacao.map((linha) => ({
       produtoId: linha.produtoId,
@@ -349,35 +423,37 @@ export function EntradaDeNota({
         <h4 className="text-sm font-medium">O que entra no estoque</h4>
 
         {/*
-          A régua do preço, ao lado da tabela que ela precifica. Fica aqui, e
-          não numa tela de configuração, porque é decisão desta nota: o gerente
-          vê o custo que chegou e escolhe a margem olhando para ele.
+          O markup para todas as linhas de uma vez — o atalho de quem trabalha
+          com um percentual só. Cada linha continua editável depois.
         */}
-        {percentuais?.temDados ? (
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <label className="flex items-center gap-1.5">
-              <span className="text-muted-foreground">Lucro</span>
-              <Input
-                value={lucroTexto}
-                onChange={(e) => setLucroTexto(e.target.value)}
-                inputMode="decimal"
-                className="h-7 w-16 text-right font-mono text-xs"
-              />
-              <span className="text-muted-foreground">%</span>
-            </label>
-            <span
-              className="text-muted-foreground"
-              title={
-                `Receita de ${moeda(percentuais.receitas)} no período · ` +
-                `fixas ${moeda(percentuais.fixas)} · variáveis ${moeda(percentuais.variaveis)}`
-              }
-            >
-              + {percentuais.pctFixas.toFixed(1)}% fixas e{" "}
-              {percentuais.pctVariaveis.toFixed(1)}% variáveis, medidos de{" "}
-              {percentuais.de} a {percentuais.ate}
-            </span>
-          </div>
-        ) : null}
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <label className="flex items-center gap-1.5">
+            <span className="text-muted-foreground">Markup para todos</span>
+            <Input
+              value={markupTodosTexto}
+              onChange={(e) => setMarkupTodosTexto(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault()
+                  aplicarMarkupATodos()
+                }
+              }}
+              inputMode="decimal"
+              placeholder="ex. 40"
+              className="h-7 w-16 text-right font-mono text-xs"
+            />
+            <span className="text-muted-foreground">%</span>
+          </label>
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            disabled={interpretarValor(markupTodosTexto) == null}
+            onClick={aplicarMarkupATodos}
+          >
+            Aplicar
+          </Button>
+        </div>
       </div>
       <div className="mt-2 overflow-x-auto rounded-lg border">
         <table className="w-full text-xs">
@@ -390,16 +466,16 @@ export function EntradaDeNota({
               <th className="px-2 py-1.5 text-right">Custo esperado</th>
               <th className="px-2 py-1.5 text-right">Custo real</th>
               <th className="px-2 py-1.5 text-right">Diferença</th>
-              {percentuais?.temDados ? (
-                <th className="px-2 py-1.5 text-right">Preço sugerido</th>
-              ) : null}
+              <th className="px-2 py-1.5 text-right">Preço hoje</th>
+              <th className="px-2 py-1.5 text-right">Markup</th>
+              <th className="px-2 py-1.5 text-right">Novo preço</th>
             </tr>
           </thead>
           <tbody>
             {linhasDaComparacao.length === 0 ? (
               <tr>
                 <td
-                  colSpan={percentuais?.temDados ? 8 : 7}
+                  colSpan={10}
                   className="px-2 py-4 text-center text-muted-foreground"
                 >
                   Pareie os itens da nota acima para ver o que vai entrar.
@@ -419,8 +495,20 @@ export function EntradaDeNota({
                   }
                   custoUnitario={custoUnitarioDe(linha.produtoId)}
                   percentuais={percentuais}
-                  pctLucro={pctLucro}
                   precoAtual={catalogoPorId.get(linha.produtoId)?.preco ?? null}
+                  markupTexto={precoDaLinha(linha.produtoId).markup}
+                  precoTexto={precoDaLinha(linha.produtoId).preco}
+                  manter={manterPreco.has(linha.produtoId)}
+                  onMudarMarkup={(texto) => mudarMarkup(linha.produtoId, texto)}
+                  onMudarPreco={(texto) => mudarPreco(linha.produtoId, texto)}
+                  onManter={(manter) =>
+                    setManterPreco((atual) => {
+                      const novo = new Set(atual)
+                      if (manter) novo.add(linha.produtoId)
+                      else novo.delete(linha.produtoId)
+                      return novo
+                    })
+                  }
                   quantidade={quantidadeAReceber(linha.produtoId)}
                   onMudarQuantidade={(texto) =>
                     setQuantidadeRecebida((atual) => ({ ...atual, [linha.produtoId]: texto }))
@@ -430,6 +518,35 @@ export function EntradaDeNota({
             )}
           </tbody>
         </table>
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-center gap-3">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={precosAAtualizar.length === 0 || precoFetcher.state !== "idle"}
+          onClick={atualizarPrecos}
+        >
+          {precoFetcher.state !== "idle"
+            ? "Atualizando…"
+            : precosAAtualizar.length === 0
+              ? "Nenhum preço de venda a mudar"
+              : `Atualizar ${precosAAtualizar.length} ${precosAAtualizar.length === 1 ? "preço" : "preços"} de venda`}
+        </Button>
+        {precoFetcher.data?.intencao === "atualizarPrecos" ? (
+          precoFetcher.data.ok ? (
+            <span className="text-xs text-muted-foreground">
+              {precoFetcher.data.alterados} {precoFetcher.data.alterados === 1 ? "preço atualizado" : "preços atualizados"} no catálogo
+            </span>
+          ) : (
+            <span className="text-xs text-destructive">{precoFetcher.data.erro}</span>
+          )
+        ) : null}
+        <span className="text-xs text-muted-foreground">
+          Markup sobre o custo real desta nota: preço = custo × (1 + markup). Começa no markup
+          que o produto já tinha, para a margem se manter com o custo novo.
+        </span>
       </div>
 
       <p className="mt-2 text-xs text-muted-foreground">
@@ -671,9 +788,14 @@ function LinhaResumoProduto({
   quantidade,
   custoUnitario,
   percentuais,
-  pctLucro,
   precoAtual,
+  markupTexto,
+  precoTexto,
+  manter,
   onMudarQuantidade,
+  onMudarMarkup,
+  onMudarPreco,
+  onManter,
 }: {
   linha: LinhaDaComparacao
   temPedido: boolean
@@ -683,10 +805,16 @@ function LinhaResumoProduto({
   quantidade: number
   custoUnitario: number
   percentuais: PercentuaisDaOperacao | null
-  pctLucro: number
   /** Null quando o produto acabou de ser cadastrado e ainda não tem preço. */
   precoAtual: number | null
+  markupTexto: string
+  precoTexto: string
+  /** Desmarcado: o preço deste produto fica como está. */
+  manter: boolean
   onMudarQuantidade: (texto: string) => void
+  onMudarMarkup: (texto: string) => void
+  onMudarPreco: (texto: string) => void
+  onManter: (manter: boolean) => void
 }) {
   const custoEsperadoTotal = linha.quantidadeEsperada * linha.custoEsperado
   // Sem nada pedido não há o que comparar — o extra é mercadoria a mais, não um
@@ -700,27 +828,23 @@ function LinhaResumoProduto({
   // parcial — mostrado por linha para o gerente ver de onde vem a pendência.
   const faltaDepois = linha.quantidadeEsperada - jaRecebido - quantidade
 
-  /*
-   * A sugestão sai do custo REAL desta nota — produto mais impostos por fora
-   * mais o rateio do frete —, e não do custo esperado do pedido. É o número que
-   * a mercadoria custou de verdade ao entrar, e é sobre ele que a margem tem
-   * que ser tirada.
-   */
-  const preco =
-    percentuais?.temDados && custoUnitario > 0
-      ? calcularPrecoVenda({
-          custo: custoUnitario,
-          pctFixos: percentuais.pctFixas,
-          pctVariaveis: percentuais.pctVariaveis,
-          pctLucro,
-        })
-      : null
+  const novoPreco = interpretarValor(precoTexto)
+  const muda =
+    !manter && novoPreco != null && novoPreco > 0 && Math.round(novoPreco * 100) !== Math.round((precoAtual ?? 0) * 100)
+  // O markup que o preço de HOJE dá sobre o custo novo — para ver se a nota
+  // comeu a margem antes de decidir.
+  const markupHoje =
+    precoAtual != null && precoAtual > 0 && custoUnitario > 0 ? (precoAtual / custoUnitario - 1) * 100 : null
 
-  const hoje =
-    percentuais?.temDados && precoAtual != null && precoAtual > 0 && custoUnitario > 0
+  /*
+   * O preço novo conferido contra os custos da operação, quando há dados: um
+   * markup "bonito" sobre o custo ainda pode não pagar fixas e variáveis.
+   */
+  const conferencia =
+    percentuais?.temDados && novoPreco != null && novoPreco > 0 && custoUnitario > 0
       ? conferirPrecoVenda({
           custo: custoUnitario,
-          preco: precoAtual,
+          preco: novoPreco,
           pctFixos: percentuais.pctFixas,
           pctVariaveis: percentuais.pctVariaveis,
         })
@@ -796,73 +920,77 @@ function LinhaResumoProduto({
         )}
       </td>
 
-      {/*
-        A sugestão e o preço de hoje lado a lado. Um número sozinho —
-        "sugerido R$ 16,67" — não diz o que fazer; com o preço atual embaixo,
-        a linha responde se está barato, caro ou já certo.
-      */}
-      {percentuais?.temDados ? (
-        <td className="px-2 py-1.5 text-right">
-          {preco ? (
-            <>
-              {/*
-                A unidade fica escrita junto. O custo vem da nota, que fatura na
-                embalagem do FORNECEDOR (quilo, rolo, fardo), e o preço é do
-                catálogo, que vende na sua. Enquanto a "Qtd no catálogo" não for
-                convertida lá em cima, este número está na unidade da nota — e
-                dizer "por PC" é o que deixa a divergência visível em vez de
-                virar um preço plausível e errado.
-              */}
-              <div className="font-medium">
-                {moeda(preco.precoSugerido)}
-                <span className="ml-0.5 text-[10px] font-normal text-muted-foreground">
-                  /{linha.unidade}
-                </span>
-              </div>
-              <div className="text-[11px] text-muted-foreground">
-                {precoAtual != null && precoAtual > 0 ? (
-                  <>
-                    hoje {moeda(precoAtual)}
-                    {hoje ? (
-                      <span
-                        className={cn(
-                          "ml-1",
-                          hoje.status === "prejuizo" && "font-medium text-destructive",
-                          hoje.status === "empate" && "text-amber-600 dark:text-amber-500"
-                        )}
-                        title={
-                          `Neste preço sobra ${moeda(hoje.sobraReal)} por unidade depois de ` +
-                          `cobrir custo, fixas e variáveis. Mínimo para empatar: ` +
-                          `${preco.precoMinimo != null ? moeda(preco.precoMinimo) : "—"}`
-                        }
-                      >
-                        {hoje.status === "prejuizo"
-                          ? "· dá prejuízo"
-                          : hoje.status === "empate"
-                            ? "· empata"
-                            : `· ${hoje.margemBruta.toFixed(0)}% bruto`}
-                      </span>
-                    ) : null}
-                  </>
-                ) : (
-                  "sem preço no catálogo"
+      <td className="px-2 py-1.5 text-right">
+        {precoAtual != null && precoAtual > 0 ? (
+          <>
+            <div>{moeda(precoAtual)}</div>
+            {markupHoje != null ? (
+              <div
+                className={cn(
+                  "text-[11px]",
+                  markupHoje <= 0 ? "font-medium text-destructive" : "text-muted-foreground"
                 )}
+                title="O markup que o preço de hoje dá sobre o custo desta nota"
+              >
+                {markupHoje.toFixed(0)}% s/ custo
               </div>
-            </>
-          ) : (
-            <span
-              className="text-muted-foreground"
-              title={
-                custoUnitario > 0
-                  ? "Fixas + variáveis + lucro passam de 100% — nesse ponto não existe preço que feche"
-                  : "Sem custo nesta linha"
-              }
-            >
-              —
+            ) : null}
+          </>
+        ) : (
+          <span className="text-muted-foreground">sem preço</span>
+        )}
+      </td>
+      <td className="px-2 py-1.5 text-right">
+        <div className="flex items-center justify-end gap-1">
+          <Input
+            value={markupTexto}
+            onChange={(e) => onMudarMarkup(e.target.value)}
+            disabled={!(custoUnitario > 0)}
+            inputMode="decimal"
+            className="h-7 w-16 text-right font-mono text-xs"
+          />
+          <span className="text-muted-foreground">%</span>
+        </div>
+      </td>
+      <td className="px-2 py-1.5 text-right">
+        <div className="flex items-center justify-end gap-1.5">
+          {/*
+            Marcado = este preço vai para o catálogo no "Atualizar preços".
+            Desmarcar segura a linha sem perder o que foi digitado.
+          */}
+          <input
+            type="checkbox"
+            checked={!manter}
+            onChange={(e) => onManter(!e.target.checked)}
+            title="Atualizar o preço de venda deste produto"
+            className="size-3.5"
+          />
+          <Input
+            value={precoTexto}
+            onChange={(e) => onMudarPreco(e.target.value)}
+            disabled={!(custoUnitario > 0)}
+            inputMode="decimal"
+            className={cn(
+              "h-7 w-24 text-right font-mono text-xs",
+              muda && "border-primary font-semibold"
+            )}
+          />
+        </div>
+        <div className="text-[11px] text-muted-foreground">
+          {/* A unidade junto: o custo vem na embalagem da nota até a "Qtd no
+              catálogo" lá em cima converter — dizer "/PC" deixa isso à vista. */}
+          /{linha.unidade}
+          {novoPreco != null && novoPreco > 0 && novoPreco < custoUnitario ? (
+            <span className="ml-1 font-medium text-destructive">· abaixo do custo</span>
+          ) : conferencia?.status === "prejuizo" ? (
+            <span className="ml-1 font-medium text-destructive" title="Não paga custos fixos e variáveis">
+              · dá prejuízo
             </span>
-          )}
-        </td>
-      ) : null}
+          ) : conferencia?.status === "empate" ? (
+            <span className="ml-1 text-amber-600 dark:text-amber-500">· empata</span>
+          ) : null}
+        </div>
+      </td>
     </tr>
   )
 }
