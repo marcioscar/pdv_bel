@@ -46,6 +46,8 @@ export async function loader({ request }: Route.LoaderArgs) {
   if (!preco.ok) return new Response(preco.erro, { status: 400 })
 
   const loja = await db.loja.findUnique({ where: { codigo: eu.loja } })
+  // O e-mail da empresa é o mesmo de onde saem as notas (a caixa da Hostinger).
+  const emailDaEmpresa = process.env.SMTP_USUARIO ?? null
 
   /*
    * O cliente escolhido na venda (F6), quando há: sai impresso no lugar das
@@ -182,7 +184,17 @@ export async function loader({ request }: Route.LoaderArgs) {
     font-size: 9.5px; color: #333;
     print-color-adjust: exact; -webkit-print-color-adjust: exact;
   }
-  .rodape { margin-top: 4mm; font-size: 8.5px; color: #666; }
+  /* Quem atendeu e como falar com a loja: o que o cliente usa para voltar. */
+  .atendimento {
+    margin-top: 6mm; display: grid; grid-template-columns: 1fr 1fr; gap: 4mm;
+    border: 1px solid #bbb; border-radius: 3px; padding: 3mm 3.5mm; break-inside: avoid;
+  }
+  .atendimento .titulo {
+    font-size: 8.5px; text-transform: uppercase; letter-spacing: .1em; color: #666;
+  }
+  .atendimento .quem { margin-top: 1mm; font-size: 13px; font-weight: 700; }
+  .atendimento .telefone { white-space: nowrap; }
+  .atendimento .contato { margin-top: .6mm; font-size: 10px; color: #333; }
 </style>
 </head>
 <body>
@@ -289,14 +301,35 @@ export async function loader({ request }: Route.LoaderArgs) {
     </div>
   </div>
 
+  <div class="atendimento">
+    <div>
+      <div class="titulo">Atendido por</div>
+      <div class="quem">${escapar(eu.nome)}</div>
+      ${eu.email ? `<div class="contato">${escapar(eu.email)}</div>` : ""}
+    </div>
+    <div>
+      <div class="titulo">Fale com a loja</div>
+      <div class="quem">${escapar(loja?.nome ?? eu.loja)}${
+        loja?.telefone ? ` · <span class="telefone">${escapar(loja.telefone)}</span>` : ""
+      }</div>
+      ${
+        loja?.endereco
+          ? `<div class="contato">${escapar(
+              [loja.endereco, loja.bairro, [loja.cidade, loja.uf].filter(Boolean).join("/")]
+                .filter(Boolean)
+                .join(" — ")
+            )}</div>`
+          : ""
+      }
+      ${emailDaEmpresa ? `<div class="contato">${escapar(emailDaEmpresa)}</div>` : ""}
+    </div>
+  </div>
+
   <div class="aviso">
     Este documento é um orçamento e <strong>não é documento fiscal</strong>. Os preços valem
     para a data de emissão e estão sujeitos a alteração e à disponibilidade de estoque.
   </div>
 
-  <div class="rodape">
-    ${escapar(loja?.nome ?? eu.loja)} · atendido por ${escapar(eu.nome)}
-  </div>
 </body>
 </html>`
 
