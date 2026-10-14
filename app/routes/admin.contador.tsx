@@ -89,6 +89,18 @@ const nomeDoMes = (mes: string) => {
   })
 }
 
+/** Os últimos 24 meses até o atual, mais o escolhido se for mais antigo. */
+function ultimosMeses(escolhido: string) {
+  const hoje = new Date()
+  const meses: string[] = []
+  for (let i = 0; i < 24; i++) {
+    const d = new Date(Date.UTC(hoje.getFullYear(), hoje.getMonth() - i, 1))
+    meses.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`)
+  }
+  if (!meses.includes(escolhido)) meses.push(escolhido)
+  return meses
+}
+
 export default function Contador({ loaderData }: Route.ComponentProps) {
   const { mes, comCanceladas, porLoja, envios, ultimoPara, podeEnviar } = loaderData
   const [, setParams] = useSearchParams()
@@ -114,12 +126,22 @@ export default function Contador({ loaderData }: Route.ComponentProps) {
       <div className="mt-4 flex flex-wrap items-end gap-4">
         <label className="grid gap-1 text-xs text-muted-foreground">
           Mês
-          <input
-            type="month"
+          {/*
+            Lista, e não <input type="month">: o Safari não tem o seletor de mês
+            e mostra um campo de texto, que mandava o mês pela metade a cada
+            tecla — e a tela voltava para o mês anterior.
+          */}
+          <select
             value={mes}
-            onChange={(e) => e.target.value && mudar({ mes: e.target.value })}
-            className="h-9 rounded-lg border border-border bg-background px-2 text-sm"
-          />
+            onChange={(e) => mudar({ mes: e.target.value })}
+            className="h-9 rounded-lg border border-border bg-background px-2 text-sm capitalize"
+          >
+            {ultimosMeses(mes).map((m) => (
+              <option key={m} value={m}>
+                {nomeDoMes(m)}
+              </option>
+            ))}
+          </select>
         </label>
         <label className="flex items-center gap-2 pb-2 text-sm">
           <input
