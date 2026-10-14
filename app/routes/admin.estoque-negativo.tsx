@@ -6,8 +6,9 @@ import type { Route } from "./+types/admin.estoque-negativo"
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
 import {
-  avisosPendentes,
+  avisosRecentes,
   darCiencia,
+  DIAS_DE_AVISO,
   negativosAgora,
 } from "~/lib/estoque-negativo.server"
 import { quantidade as formatarQuantidade } from "~/lib/moeda"
@@ -29,10 +30,18 @@ export function meta(_: Route.MetaArgs) {
 export async function loader({ request }: Route.LoaderArgs) {
   const eu = await exigirGerente(request, "verEstoqueNegativo")
   const lojas = eu.lojasPermitidas
-  const [pendentes, negativos] = await Promise.all([avisosPendentes(lojas), negativosAgora(lojas)])
+  const [avisos, negativos] = await Promise.all([avisosRecentes(lojas), negativosAgora(lojas)])
+  // Ainda negativo AGORA — o aviso cujo produto saiu daqui teve a entrada lançada.
+  const aindaNegativo = new Set(negativos.map((n) => `${n.loja}|${n.produtoId}`))
   return {
-    pendentes: pendentes.map((a) => ({ ...a, criadoEm: a.criadoEm.toISOString() })),
+    avisos: avisos.map((a) => ({
+      ...a,
+      criadoEm: a.criadoEm.toISOString(),
+      cienteEm: a.cienteEm?.toISOString() ?? null,
+      resolvido: !aindaNegativo.has(`${a.loja}|${a.produtoId}`),
+    })),
     negativos,
+    dias: DIAS_DE_AVISO,
   }
 }
 
@@ -53,10 +62,11 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function EstoqueNegativo({ loaderData }: Route.ComponentProps) {
-  const { pendentes, negativos } = loaderData
+  const { avisos, negativos, dias } = loaderData
   const todos = useFetcher<typeof action>()
-  const [ocultos, setOcultos] = useState<string[]>([])
-  const visiveis = pendentes.filter((a) => !ocultos.includes(a.id))
+  // Ciência dada nesta tela: o selo aparece na hora, antes de a página recarregar.
+  const [cientesAgora, setCientesAgora] = useState<string[]>([])
+  const pendentes = avisos.filter((a) => !a.cienteEm && !cientesAgora.includes(a.id))
 
   return (
     <div className="p-6">
@@ -71,12 +81,13 @@ export default function EstoqueNegativo({ loaderData }: Route.ComponentProps) {
       <section className="mt-5">
         <div className="flex items-center gap-3">
           <h2 className="text-sm font-semibold">
-            Avisos para dar ciência
-            <Badge variant={visiveis.length > 0 ? "destructive" : "secondary"} className="ml-2">
-              {visiveis.length}
+            Avisos
+            <Badge variant={pendentes.length > 0 ? "destructive" : "secondary"} className="ml-2">
+              {pendentes.length} sem ciência
             </Badge>
           </h2>
-          {visiveis.length > 1 ? (
+          <span className="text-xs text-muted-foreground">últimos {dias} dias</span>
+          {pendentes.length > 1 ? (
             <Button
               type="button"
               size="sm"
@@ -84,7 +95,7 @@ export default function EstoqueNegativo({ loaderData }: Route.ComponentProps) {
               className="ml-auto rounded-lg"
               disabled={todos.state !== "idle"}
               onClick={() => {
-                setOcultos(pendentes.map((a) => a.id))
+                setCientesAgora(pendentes.map((a) => a.id))
                 todos.submit({ todos: "1" }, { method: "post" })
               }}
             >
@@ -93,8 +104,8 @@ export default function EstoqueNegativo({ loaderData }: Route.ComponentProps) {
           ) : null}
         </div>
 
-        {visiveis.length === 0 ? (
-          <p className="mt-3 text-sm text-muted-foreground">Nenhum aviso esperando ciência.</p>
+        {avisos.length === 0 ? (
+          <p className="mt-3 text-sm text-muted-foreground">Nenhum aviso nos últimos {dias} dias.</p>
         ) : (
           <div className="mt-3 overflow-x-auto">
             <table className="w-full min-w-[52rem] text-sm">
@@ -106,12 +117,17 @@ export default function EstoqueNegativo({ loaderData }: Route.ComponentProps) {
                   <th className="px-2 py-2 text-left font-semibold">Documento</th>
                   <th className="w-24 px-2 py-2 text-right font-semibold">Saiu</th>
                   <th className="w-28 px-2 py-2 text-right font-semibold">Saldo depois</th>
-                  <th className="w-24 px-2 py-2 text-right font-semibold" />
+                  <th className="w-56 px-2 py-2 text-right font-semibold">Situação</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {visiveis.map((a) => (
-                  <LinhaAviso key={a.id} aviso={a} onCiente={() => setOcultos((o) => [...o, a.id])} />
+                {avisos.map((a) => (
+                  <LinhaAviso
+                    key={a.id}
+                    aviso={a}
+                    cienteAgora={cientesAgora.includes(a.id)}
+                    onCiente={() => setCientesAgora((o) => [...o, a.id])}
+                  />
                 ))}
               </tbody>
             </table>
@@ -170,12 +186,21 @@ export default function EstoqueNegativo({ loaderData }: Route.ComponentProps) {
   )
 }
 
-type Aviso = Route.ComponentProps["loaderData"]["pendentes"][number]
+type Aviso = Route.ComponentProps["loaderData"]["avisos"][number]
 
-function LinhaAviso({ aviso, onCiente }: { aviso: Aviso; onCiente: () => void }) {
+function LinhaAviso({
+  aviso,
+  cienteAgora,
+  onCiente,
+}: {
+  aviso: Aviso
+  cienteAgora: boolean
+  onCiente: () => void
+}) {
   const fetcher = useFetcher<typeof action>()
+  const ciente = Boolean(aviso.cienteEm) || cienteAgora
   return (
-    <tr>
+    <tr className={cn(ciente && "text-muted-foreground")}>
       <td className="py-2 text-xs tabular-nums text-muted-foreground">
         {new Date(aviso.criadoEm).toLocaleString("pt-BR", {
           day: "2-digit",
@@ -203,18 +228,36 @@ function LinhaAviso({ aviso, onCiente }: { aviso: Aviso; onCiente: () => void })
         {formatarQuantidade(aviso.saldoDepois)} {aviso.unidade}
       </td>
       <td className="px-2 py-2 text-right">
-        <Button
-          type="button"
-          size="xs"
-          variant="outline"
-          disabled={fetcher.state !== "idle"}
-          onClick={() => {
-            onCiente()
-            fetcher.submit({ id: aviso.id }, { method: "post" })
-          }}
-        >
-          <Check className="size-3.5" /> Ciente
-        </Button>
+        <div className="flex flex-wrap items-center justify-end gap-1">
+          {/* A entrada lançada é do estoque de AGORA: o produto saiu dos negativos. */}
+          {aviso.resolvido ? (
+            <Badge className="bg-emerald-600/15 text-[10px] text-emerald-700 dark:text-emerald-400">
+              entrada lançada
+            </Badge>
+          ) : null}
+          {ciente ? (
+            <Badge variant="secondary" className="text-[10px]">
+              ciente
+              {aviso.cientePor ? ` · ${aviso.cientePor}` : ""}
+              {aviso.cienteEm
+                ? ` · ${new Date(aviso.cienteEm).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })}`
+                : ""}
+            </Badge>
+          ) : (
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              disabled={fetcher.state !== "idle"}
+              onClick={() => {
+                onCiente()
+                fetcher.submit({ id: aviso.id }, { method: "post" })
+              }}
+            >
+              <Check className="size-3.5" /> Ciente
+            </Button>
+          )}
+        </div>
       </td>
     </tr>
   )

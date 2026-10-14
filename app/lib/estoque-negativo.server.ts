@@ -84,17 +84,22 @@ export async function registrarAvisosDeNegativo(entrada: {
   }
 }
 
-/** Os avisos sem ciência, mais recentes primeiro. */
-export async function avisosPendentes(lojas: string[]) {
-  return db.avisoEstoqueNegativo.findMany({
-    where: {
-      loja: { in: lojas },
-      // Campo ausente não é null para o Mongo: os dois estados são "sem ciência".
-      OR: [{ cienteEm: null }, { cienteEm: { isSet: false } }],
-    },
+/** Quanto tempo o aviso fica na lista depois de criado. */
+export const DIAS_DE_AVISO = 60
+
+/**
+ * Os avisos dos últimos `DIAS_DE_AVISO` dias — com ciência ou sem. Ciência
+ * não tira da lista: a lista é o histórico do que aconteceu, e o selo diz quem
+ * viu. Os pendentes vêm primeiro; depois, o mais recente.
+ */
+export async function avisosRecentes(lojas: string[]) {
+  const desde = new Date(Date.now() - DIAS_DE_AVISO * 86_400_000)
+  const avisos = await db.avisoEstoqueNegativo.findMany({
+    where: { loja: { in: lojas }, criadoEm: { gte: desde } },
     orderBy: { criadoEm: "desc" },
-    take: 500,
+    take: 1000,
   })
+  return avisos.sort((a, b) => Number(Boolean(a.cienteEm)) - Number(Boolean(b.cienteEm)))
 }
 
 /**
