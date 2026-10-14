@@ -120,6 +120,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       cfopTransferencia: loja.cfopTransferencia ?? "",
       cfopDevolucao: loja.cfopDevolucao ?? "",
       csosnPadrao: loja.csosnPadrao ?? "",
+      telefone: loja.telefone ?? "",
       pendencias: pendenciasDoEmitente(loja),
     })),
   }
@@ -312,6 +313,7 @@ function Emitente({
     cfopTransferencia: loja.cfopTransferencia,
     cfopDevolucao: loja.cfopDevolucao,
     csosnPadrao: loja.csosnPadrao,
+    telefone: loja.telefone,
   })
 
   const fetcher = useFetcher<typeof action>()
@@ -406,6 +408,15 @@ function Emitente({
       ) : null}
 
       <div className="grid grid-cols-12 gap-3 px-4 py-3">
+        {/* Não é fiscal, mas é da loja e mora aqui: sai no orçamento, no quadro
+            "Fale com a loja", para o cliente voltar a falar com ela. */}
+        <Campo
+          nome="telefone"
+          rotulo="Telefone / WhatsApp"
+          valor={form.telefone}
+          onChange={(v) => alterar({ telefone: v })}
+          className="col-span-12 sm:col-span-4"
+        />
         <Campo
           nome="inscricaoEstadual"
           rotulo="Inscrição estadual"

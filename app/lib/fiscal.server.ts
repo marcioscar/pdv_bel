@@ -21,6 +21,8 @@ export type EmitenteEntrada = {
   cfopTransferencia: string | null
   cfopDevolucao: string | null
   csosnPadrao: string | null
+  /** O telefone da loja — vai no orçamento, para o cliente voltar a falar. */
+  telefone: string | null
 }
 
 export type ResultadoEmitente =
@@ -49,6 +51,7 @@ export function lerEmitente(form: FormData): EmitenteEntrada {
     cfopTransferencia: texto(form.get("cfopTransferencia")).replace(/\D/g, "") || null,
     cfopDevolucao: texto(form.get("cfopDevolucao")).replace(/\D/g, "") || null,
     csosnPadrao: texto(form.get("csosnPadrao")).replace(/\D/g, "") || null,
+    telefone: texto(form.get("telefone")).slice(0, 40) || null,
   }
 }
 
@@ -124,6 +127,7 @@ export async function salvarEmitente(
       cfopTransferencia: entrada.cfopTransferencia,
       cfopDevolucao: entrada.cfopDevolucao,
       csosnPadrao: entrada.csosnPadrao,
+      telefone: entrada.telefone,
     },
   })
 
