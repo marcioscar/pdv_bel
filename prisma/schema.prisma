@@ -1163,6 +1163,10 @@ model PoliticaDeCompra {
   diasComVenda  Int
   /// Total vendido no período analisado, para conferir a conta de fora.
   vendidoNoPeriodo Float
+  /// A mesma quantidade aberta por loja ({"QI": 120, "SDS": 40}), do "Centro de
+  /// custo" do histórico. É o que permite a curva ABC de uma loja só. Ausente
+  /// nas políticas calculadas antes de o script guardar este campo.
+  vendidoPorLoja Json?
 
   @@map("politicas_de_compra")
 }
@@ -1609,6 +1613,11 @@ model Despesa {
   pago          Boolean  @default(false)
   loja          String?
   contaCorrente String?
+  /// Quando e por quem foi paga — gravados pelo Contas a pagar do PDV. O outro
+  /// sistema não os lê: para ele basta `pago: true`, que é o que põe a despesa
+  /// no resultado do mês.
+  pagoEm        DateTime?
+  pagoPor       String?
 
   @@map("despesas")
 }

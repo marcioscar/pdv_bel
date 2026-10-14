@@ -219,6 +219,12 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         somenteGerente: true,
       },
       {
+        para: "/admin/contas-a-pagar",
+        rotulo: "Contas a pagar",
+        descricao: "Títulos das notas de entrada e AFs por vencimento: a pagar, vencidos e pagos",
+        somenteGerente: true,
+      },
+      {
         para: "/admin/inadimplentes",
         rotulo: "Inadimplentes",
         descricao: "Quem deve boleto vencido, do PDV e do sistema antigo, e o que entrou",
@@ -410,6 +416,7 @@ export const ACOES_DE_GERENTE = {
   verRelatorios: "Só gerente vê os relatórios",
   verVendasDaRede: "Só gerente vê as vendas das outras lojas",
   verContasAReceber: "Só gerente vê as contas a receber",
+  verContasAPagar: "Só gerente vê e paga as contas a pagar",
   decidirAutorizacoes: "Só gerente libera venda travada — é ele que responde pelo risco",
   trocarDeLoja:
     "Só gerente troca a loja do turno — para operar em outra, saia e entre de novo",
