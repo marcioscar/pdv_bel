@@ -289,7 +289,12 @@ export default function AdminCompras({ loaderData }: Route.ComponentProps) {
           quantidades={quantidades}
           fornecedorEscolhido={fornecedorEscolhido}
           onAlternar={alternar}
-          onQuantidade={(id, v) => setQuantidades((q) => ({ ...q, [id]: v }))}
+          onQuantidade={(id, v) => {
+            setQuantidades((q) => ({ ...q, [id]: v }))
+            // Digitar a quantidade já é dizer que quer comprar: marca a linha.
+            // Zerar desmarca — quantidade zero não vai para o pedido.
+            setSelecionados((s) => ({ ...s, [id]: v > 0 }))
+          }}
           onFornecedor={(id, v) => setFornecedorEscolhido((f) => ({ ...f, [id]: v }))}
         />
       )}
