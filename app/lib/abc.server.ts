@@ -31,6 +31,10 @@ export type CurvaAbc = {
   diasAnalisados: number
   /** Quantos produtos ficaram de fora por serem de grupo que não é padrão. */
   foraPorGrupo: number
+  /** A loja da curva, ou null para a rede inteira. */
+  loja: string | null
+  /** False quando a política foi calculada antes da abertura por loja existir. */
+  temPorLoja: boolean
 }
 
 /** Os cortes clássicos: A até 80% do valor acumulado, B até 95%, C o resto. */
@@ -62,10 +66,16 @@ const CORTE_B = 95
  * corte não pode acontecer aqui, porque as faixas e a participação de cada
  * linha só existem contra o total de todos os produtos.
  */
-export async function curvaAbc(): Promise<CurvaAbc | null> {
+export async function curvaAbc({ loja = null }: { loja?: string | null } = {}): Promise<CurvaAbc | null> {
   const [politicas, daAnalise] = await Promise.all([
     db.politicaDeCompra.findMany({
-      select: { produtoId: true, vendidoNoPeriodo: true, calculadoEm: true, diasAnalisados: true },
+      select: {
+        produtoId: true,
+        vendidoNoPeriodo: true,
+        vendidoPorLoja: true,
+        calculadoEm: true,
+        diasAnalisados: true,
+      },
     }),
     gruposDaAnalise(),
   ])
@@ -80,9 +90,25 @@ export async function curvaAbc(): Promise<CurvaAbc | null> {
   const grupos = await db.grupoDeProduto.findMany({ select: { id: true, nome: true } })
   const nomeDoGrupo = new Map(grupos.map((g) => [g.id, g.nome]))
 
+  const temPorLoja = politicas.some((p) => p.vendidoPorLoja != null)
+
+  /*
+   * Com uma loja, a quantidade é a DELA, e a curva é refeita sobre o total
+   * dela: "o que sustenta a NRT" é outra pergunta que "o que sustenta a rede",
+   * e as faixas têm que responder a pergunta feita. Produto que a loja não
+   * vendeu não entra — zero não tem lugar numa curva de valor.
+   */
+  const vendidoNaLoja = (p: (typeof politicas)[number]) => {
+    if (!loja) return p.vendidoNoPeriodo
+    const porLoja = (p.vendidoPorLoja ?? {}) as Record<string, number>
+    return Number(porLoja[loja] ?? 0)
+  }
+
   let foraDaAnalise = 0
   const todas = politicas
     .flatMap((p) => {
+      const quantidade = vendidoNaLoja(p)
+      if (loja && !(quantidade > 0)) return []
       const produto = porId.get(p.produtoId)
       // Produto desativado depois do cálculo: a política sobrevive ao cadastro,
       // mas um item sem nome não diz nada numa curva que se lê pelo nome.
@@ -105,22 +131,31 @@ export async function curvaAbc(): Promise<CurvaAbc | null> {
           descricao: produto.descricao,
           grupoId: produto.grupoId,
           grupoNome: produto.grupoId ? (nomeDoGrupo.get(produto.grupoId) ?? null) : null,
-          quantidade: p.vendidoNoPeriodo,
+          quantidade,
           preco: produto.preco,
-          valor: p.vendidoNoPeriodo * produto.preco,
+          valor: quantidade * produto.preco,
         },
       ]
     })
     .sort((a, b) => b.valor - a.valor)
 
+  const vazia = { linhas: [], total: 0, produtos: 0, faixas: {
+    A: { produtos: 0, valor: 0, participacao: 0 },
+    B: { produtos: 0, valor: 0, participacao: 0 },
+    C: { produtos: 0, valor: 0, participacao: 0 },
+  } }
   const curva = faixasDaCurva(todas)
-  if (!curva) return null
+  // A rede sem venda é "não há curva"; uma loja sem venda é uma curva vazia —
+  // a tela precisa continuar de pé para escolher outra loja.
+  if (!curva && !loja) return null
 
   return {
-    ...curva,
+    ...(curva ?? vazia),
     calculadoEm: politicas[0].calculadoEm.toISOString(),
     diasAnalisados: politicas[0].diasAnalisados,
     foraPorGrupo: foraDaAnalise,
+    loja,
+    temPorLoja,
   }
 }
 

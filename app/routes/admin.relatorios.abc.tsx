@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from "react"
+import { useSearchParams } from "react-router"
 import { ListFilter, Search } from "lucide-react"
 
 import type { Route } from "./+types/admin.relatorios.abc"
@@ -7,6 +8,7 @@ import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { curvaAbc, type Faixa } from "~/lib/abc.server"
+import { listarLojas } from "~/lib/lojas.server"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { exigirGerente } from "~/lib/sessao.server"
 import { cn } from "~/lib/utils"
@@ -30,8 +32,16 @@ export function meta(_: Route.MetaArgs) {
  * troca.
  */
 export async function loader({ request }: Route.LoaderArgs) {
-  await exigirGerente(request, "verRelatorios")
-  return { curva: await curvaAbc() }
+  const eu = await exigirGerente(request, "verRelatorios")
+  /*
+   * A loja vai ao servidor, e não ao filtro do navegador como grupo e faixa:
+   * com uma loja a curva é OUTRA — refeita sobre o total dela —, e não um
+   * recorte da curva da rede.
+   */
+  const pedida = new URL(request.url).searchParams.get("loja") ?? ""
+  const loja = eu.lojasPermitidas.includes(pedida) ? pedida : null
+  const lojas = (await listarLojas()).filter((l) => eu.lojasPermitidas.includes(l.codigo))
+  return { curva: await curvaAbc({ loja }), loja, lojas: lojas.map((l) => ({ codigo: l.codigo, nome: l.nome })) }
 }
 
 const FAIXAS: { valor: Faixa | "todas"; rotulo: string }[] = [
@@ -49,7 +59,8 @@ function normalizar(texto: string) {
 }
 
 export default function RelatorioAbc({ loaderData }: Route.ComponentProps) {
-  const { curva } = loaderData
+  const { curva, loja, lojas } = loaderData
+  const [, setParams] = useSearchParams()
 
   const [faixa, setFaixa] = useState<Faixa | "todas">("todas")
   const [grupo, setGrupo] = useState("todos")
@@ -98,8 +109,42 @@ export default function RelatorioAbc({ loaderData }: Route.ComponentProps) {
         <h1 className="shrink-0 text-base font-semibold">Curva ABC</h1>
         <span className="shrink-0 text-xs text-muted-foreground">
           {curva.produtos.toLocaleString("pt-BR")} produtos · {moeda(curva.total)} no período
+          {loja ? ` · só ${loja}` : " · rede inteira"}
         </span>
+        <select
+          value={loja ?? ""}
+          onChange={(e) => {
+            // Trocar de loja é outra curva: os filtros do recorte anterior
+            // (faixa, grupo, busca) não valem sobre ela.
+            setFaixa("todas")
+            setGrupo("todos")
+            setBusca("")
+            setParams(e.target.value ? { loja: e.target.value } : {})
+          }}
+          aria-label="Filtrar por loja"
+          className="ml-auto h-9 rounded-lg border border-border bg-background px-2 text-sm"
+        >
+          <option value="">Todas as lojas</option>
+          {lojas.map((l) => (
+            <option key={l.codigo} value={l.codigo}>
+              {l.codigo} · {l.nome}
+            </option>
+          ))}
+        </select>
       </div>
+
+      {loja && !curva.temPorLoja ? (
+        <p className="border-b border-border bg-amber-500/10 px-4 py-2 text-xs sm:px-5">
+          A política de compra foi calculada antes de guardar a venda por loja. Rode de novo{" "}
+          <code>scripts/calcular-politica-de-compra.mjs</code> com o histórico para a curva por
+          loja aparecer.
+        </p>
+      ) : loja ? (
+        <p className="border-b border-border px-4 py-2 text-xs text-muted-foreground sm:px-5">
+          Curva da {loja}: as faixas são calculadas sobre o que esta loja vendeu, e não sobre a
+          rede — um produto pode ser A aqui e C na rede.
+        </p>
+      ) : null}
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {/* ---- As três faixas, que são a leitura inteira do relatório ---- */}
@@ -186,7 +231,7 @@ export default function RelatorioAbc({ loaderData }: Route.ComponentProps) {
           <span className="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums">
             {filtradas.length.toLocaleString("pt-BR")} linha
             {filtradas.length === 1 ? "" : "s"} · {moeda(valorFiltrado)}
-            {filtradas.length !== curva.produtos ? (
+            {filtradas.length !== curva.produtos && curva.total > 0 ? (
               <> · {((valorFiltrado / curva.total) * 100).toFixed(1)}% do total</>
             ) : null}
           </span>

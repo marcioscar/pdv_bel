@@ -125,6 +125,19 @@ const COL = {
   status: cabecalho.indexOf("Status"),
 }
 
+/*
+ * A loja de cada venda, pelo "Centro de custo" ("4 - SACOBRAS"). Opcional: sem
+ * a coluna, a política sai como antes, só sem a abertura por loja — que é o
+ * que a curva ABC de uma loja precisa. O número é o mesmo do estoque.
+ */
+const COL_CENTRO = cabecalho.indexOf("Centro de custo")
+const LOJA_DO_CENTRO = { 1: "QI", 2: "QNE", 3: "NRT", 4: "SDS" }
+const lojaDaLinha = (c) =>
+  COL_CENTRO < 0 ? null : (LOJA_DO_CENTRO[Number.parseInt(c[COL_CENTRO], 10)] ?? null)
+if (COL_CENTRO < 0) {
+  console.log('⚠ sem a coluna "Centro de custo": a política sai sem a abertura por loja')
+}
+
 for (const [nome, indice] of Object.entries(COL)) {
   if (indice < 0) {
     console.error(`coluna "${nome}" não encontrada no cabeçalho — o layout mudou?`)
@@ -209,10 +222,13 @@ for (const linha of linhas.slice(1)) {
       vendido: 0,
       valor: 0,
       dias: new Set(),
+      porLoja: {},
     })
   }
   const registro = consumo.get(produto.id)
   registro.vendido += quantidade
+  const loja = lojaDaLinha(c)
+  if (loja) registro.porLoja[loja] = (registro.porLoja[loja] ?? 0) + quantidade
   registro.valor += valor
   if (quando) registro.dias.add(quando.toISOString().slice(0, 10))
 }
@@ -301,10 +317,20 @@ if (!gravar) {
  * políticas, e a tela passaria a mostrar o produto duas vezes com números
  * diferentes, sem nada indicando qual está certo.
  */
-await db.$runCommandRaw({
-  createIndexes: "politicas_de_compra",
-  indexes: [{ key: { produtoId: 1 }, name: "produtoId_1", unique: true }],
-})
+try {
+  await db.$runCommandRaw({
+    createIndexes: "politicas_de_compra",
+    indexes: [{ key: { produtoId: 1 }, name: "produtoId_1", unique: true }],
+  })
+} catch (erro) {
+  /*
+   * Código 85 (IndexOptionsConflict): o índice único de produtoId JÁ existe,
+   * só que com outro nome — o que o Prisma dá (`politicas_de_compra_produtoId_key`).
+   * Ele garante a mesma coisa, então segue. Qualquer outro erro para tudo.
+   */
+  const mensagem = String(erro?.meta?.message ?? erro?.message ?? "")
+  if (!mensagem.includes("Error code 85") && !mensagem.includes("IndexOptionsConflict")) throw erro
+}
 
 const calculadoEm = new Date()
 let gravadas = 0
@@ -318,6 +344,7 @@ for (const r of calculadas) {
     diasAnalisados: diasDoPeriodo,
     diasComVenda: r.dias.size,
     vendidoNoPeriodo: r.vendido,
+    vendidoPorLoja: r.porLoja,
   }
   await db.politicaDeCompra.upsert({
     where: { produtoId: r.produto.id },
