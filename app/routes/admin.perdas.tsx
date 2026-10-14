@@ -9,11 +9,12 @@ import { Input } from "~/components/ui/input"
 import { quantidade as formatarQuantidade } from "~/lib/moeda"
 import { cn } from "~/lib/utils"
 import { exigirGerente } from "~/lib/sessao.server"
-import { faltaDoItem, faltaEmAberto } from "~/lib/transferencias"
+import { faltaDoItem, faltaEmAberto, sobraDoItem, sobraEmAberto } from "~/lib/transferencias"
 import {
   listarTransferencias,
   perdasNoTransporte,
   resolverFalta,
+  resolverSobra,
   type PerdaNoTransporte,
   type TransferenciaListada,
 } from "~/lib/transferencias.server"
@@ -42,7 +43,11 @@ export async function loader({ request }: Route.LoaderArgs) {
     listarTransferencias(eu.lojasPermitidas),
   ])
 
-  return { perdas, aResolver: transferencias.filter(faltaEmAberto) }
+  return {
+    perdas,
+    aResolver: transferencias.filter(faltaEmAberto),
+    sobras: transferencias.filter(sobraEmAberto),
+  }
 }
 
 export async function action({ request }: Route.ActionArgs) {
@@ -50,6 +55,25 @@ export async function action({ request }: Route.ActionArgs) {
 
   const formulario = await request.formData()
   const decisao = String(formulario.get("decisao") ?? "")
+
+  // A sobra: de onde veio o que chegou a mais.
+  if (decisao === "origem" || decisao === "contagem") {
+    const r = await resolverSobra({
+      id: String(formulario.get("id") ?? ""),
+      decisao,
+      operador: eu.nome,
+      observacao: String(formulario.get("observacao") ?? ""),
+    })
+    if (!r.ok) return data({ ok: false as const, erro: r.erro }, { status: 400 })
+    return {
+      ok: true as const,
+      mensagem:
+        decisao === "origem"
+          ? "Sobra resolvida: o excedente saiu do estoque da origem"
+          : "Sobra resolvida: a contagem do destino foi corrigida",
+    }
+  }
+
   if (decisao !== "perda" && decisao !== "apareceu") {
     return data({ ok: false as const, erro: "Decisão inválida" }, { status: 400 })
   }
@@ -72,7 +96,7 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function AdminPerdas({ loaderData, actionData }: Route.ComponentProps) {
-  const { perdas, aResolver } = loaderData
+  const { perdas, aResolver, sobras } = loaderData
 
   return (
     <div className="p-4 sm:p-6">
@@ -103,6 +127,19 @@ export default function AdminPerdas({ loaderData, actionData }: Route.ComponentP
         >
           {actionData.ok ? actionData.mensagem : actionData.erro}
         </p>
+      ) : null}
+
+      {sobras.length > 0 ? (
+        <section className="mt-7">
+          <h2 className="text-[10px] font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-400">
+            Chegou a mais — de onde veio?
+          </h2>
+          <div className="mt-2 grid gap-3 lg:grid-cols-2">
+            {sobras.map((t) => (
+              <Sobra key={t.id} transferencia={t} />
+            ))}
+          </div>
+        </section>
       ) : null}
 
       {aResolver.length > 0 ? (
@@ -298,6 +335,73 @@ function Falta({ transferencia: t }: { transferencia: TransferenciaListada }) {
           >
             Perdeu no caminho
           </Button>
+      </Form>
+    </article>
+  )
+}
+
+/**
+ * O que chegou a mais. O destino já recebeu o contado; aqui se diz de onde
+ * veio o excedente, e o saldo é acertado na loja certa.
+ */
+function Sobra({ transferencia: t }: { transferencia: TransferenciaListada }) {
+  const navegacao = useNavigation()
+  const enviando = navegacao.formData?.get("id") === t.id
+  const sobrando = t.itens.filter((i) => sobraDoItem(i) > 0)
+
+  return (
+    <article className="rounded-xl border border-amber-500/50 p-4">
+      <CabecalhoDaTransferencia transferencia={t} />
+      <p className="mt-1 text-xs text-muted-foreground">conferida por {t.recebidaPor}</p>
+
+      <ul className="mt-3 space-y-1">
+        {sobrando.map((i) => (
+          <li key={i.produtoId} className="text-sm">
+            <b className="font-mono text-amber-700 dark:text-amber-400">
+              sobraram {formatarQuantidade(sobraDoItem(i))} {i.unidade}
+            </b>{" "}
+            de {i.descricao}
+            <span className="ml-1 font-mono text-[11px] text-muted-foreground">
+              (saiu {formatarQuantidade(i.enviada)}, chegou {formatarQuantidade(i.recebida ?? 0)})
+            </span>
+          </li>
+        ))}
+      </ul>
+
+      <p className="mt-2 text-xs text-muted-foreground">
+        O excedente já entrou no estoque de {t.destino}. Escolha o que houve para acertar o saldo.
+      </p>
+
+      <Form method="post" className="mt-3 flex flex-wrap items-center gap-2">
+        <input type="hidden" name="id" value={t.id} />
+        <Input
+          name="observacao"
+          placeholder="O que houve (opcional)"
+          autoComplete="off"
+          className="h-10 w-full min-w-0 rounded-lg border-border bg-background text-sm sm:w-auto sm:flex-1"
+        />
+        <Button
+          type="submit"
+          name="decisao"
+          value="origem"
+          variant="outline"
+          disabled={enviando}
+          className="h-11 flex-1 rounded-lg sm:h-9 sm:flex-none"
+          title={`Separaram mais do que registraram: o excedente sai do estoque de ${t.origem}`}
+        >
+          Saiu a mais de {t.origem}
+        </Button>
+        <Button
+          type="submit"
+          name="decisao"
+          value="contagem"
+          variant="outline"
+          disabled={enviando}
+          className="h-11 flex-1 rounded-lg sm:h-9 sm:flex-none"
+          title={`A contagem errou: o excedente sai do estoque de ${t.destino}`}
+        >
+          Contagem errada em {t.destino}
+        </Button>
       </Form>
     </article>
   )

@@ -22,7 +22,7 @@ import {
 import { SOMENTE_ATIVOS } from "~/lib/produtos.server"
 import { ehGerente } from "~/lib/permissoes"
 import { exigirUsuario } from "~/lib/sessao.server"
-import { faltaEmAberto, rotuloDaSituacao } from "~/lib/transferencias"
+import { faltaEmAberto, rotuloDaSituacao, sobraDoItem, sobraEmAberto } from "~/lib/transferencias"
 import {
   cancelarTransferencia,
   conferirTransferencia,
@@ -123,9 +123,20 @@ export async function action({ request }: Route.ActionArgs) {
     if (!resultado.ok) return data({ ok: false as const, erro: resultado.erro }, { status: 400 })
     return {
       ok: true as const,
-      mensagem: resultado.faltou
-        ? `Conferida com falta em ${resultado.itensComFalta} ${resultado.itensComFalta === 1 ? "item" : "itens"} — um gerente precisa resolver`
-        : "Conferida: tudo o que saiu chegou",
+      mensagem:
+        resultado.faltou || resultado.itensComSobra > 0
+          ? [
+              resultado.faltou
+                ? `falta em ${resultado.itensComFalta} ${resultado.itensComFalta === 1 ? "item" : "itens"}`
+                : "",
+              resultado.itensComSobra > 0
+                ? `sobra em ${resultado.itensComSobra} ${resultado.itensComSobra === 1 ? "item" : "itens"}`
+                : "",
+            ]
+              .filter(Boolean)
+              .join(" e ")
+              .replace(/^/, "Conferida com ") + " — um gerente precisa resolver"
+          : "Conferida: tudo o que saiu chegou",
     }
   }
 
@@ -156,7 +167,7 @@ export default function Transferencias({ loaderData, actionData }: Route.Compone
     (t) => t.situacao === "em_transito" && t.origem === eu.loja
   )
   const encerradas = transferencias.filter(
-    (t) => t.situacao !== "em_transito" && !faltaEmAberto(t)
+    (t) => t.situacao !== "em_transito" && !faltaEmAberto(t) && !sobraEmAberto(t)
   )
 
   return (
@@ -268,6 +279,11 @@ export default function Transferencias({ loaderData, actionData }: Route.Compone
                       >
                         {rotuloDaSituacao(t.situacao)}
                       </Badge>
+                      {t.itens.some((i) => sobraDoItem(i) > 0) ? (
+                        <Badge variant="secondary" className="ml-1 text-[10px]">
+                          {t.sobraResolvidaEm ? "sobra resolvida" : "com sobra"}
+                        </Badge>
+                      ) : null}
                     </td>
                     <td className="px-2 py-2.5">
                       <a
@@ -673,6 +689,13 @@ function Conferencia({
                     <span className="block truncate text-sm">{item.descricao}</span>
                     <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
                       saiu {formatarQuantidade(item.enviada)} {item.unidade}
+                      {diverge ? (
+                        <b className="ml-1.5 text-destructive">
+                          {digitado > item.enviada
+                            ? `sobram ${formatarQuantidade(digitado - item.enviada)}`
+                            : `faltam ${formatarQuantidade(item.enviada - digitado)}`}
+                        </b>
+                      ) : null}
                     </span>
                   </span>
                   <Input

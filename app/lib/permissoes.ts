@@ -140,7 +140,7 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
       {
         para: "/admin/perdas",
         rotulo: "Perdas no transporte",
-        descricao: "O que saiu de uma loja e não chegou na outra, por rota",
+        descricao: "O que saiu de uma loja e não chegou na outra — e o que chegou a mais",
         somenteGerente: true,
       },
       {

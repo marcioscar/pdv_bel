@@ -903,6 +903,14 @@ model Transferencia {
   faltaResolvidaPor String?
   faltaObservacao   String?
 
+  /// Sobra: chegou MAIS do que saiu. O destino recebe o contado na conferência;
+  /// o gerente decide depois se saiu a mais da origem ("origem") ou se a
+  /// contagem do destino errou ("contagem"), e o saldo é acertado aí.
+  sobraResolvidaEm  DateTime?
+  sobraResolvidaPor String?
+  sobraDecisao      String?
+  sobraObservacao   String?
+
   @@index([situacao, criadaEm])
   @@index([origem, situacao])
   @@index([destino, situacao])

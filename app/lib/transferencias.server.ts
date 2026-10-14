@@ -4,7 +4,7 @@ import { db } from "~/lib/db.server"
 import { registrarAvisosDeNegativo } from "~/lib/estoque-negativo.server"
 import { arredondar, QUANTIDADE_INTEIRA, quantidadeInteira } from "~/lib/moeda"
 import type { TipoMovimento } from "~/lib/estoque.server"
-import { faltaDoItem, type ItemConferido } from "~/lib/transferencias"
+import { faltaDoItem, sobraDoItem, type ItemConferido } from "~/lib/transferencias"
 
 /**
  * Transferência entre lojas: sai na expedição, entra na conferência.
@@ -150,7 +150,7 @@ async function proximoNumero() {
 }
 
 export type ResultadoConferencia =
-  | { ok: true; faltou: boolean; itensComFalta: number }
+  | { ok: true; faltou: boolean; itensComFalta: number; itensComSobra: number }
   | { ok: false; erro: string }
 
 /**
@@ -208,14 +208,18 @@ export async function conferirTransferencia(entrada: {
     if (recebida === undefined || !Number.isFinite(recebida) || recebida < 0) {
       return { ...item, recebida: 0 }
     }
-    // Chegar MAIS do que saiu não é sobra: é erro de contagem de um dos dois
-    // lados. O excedente não entra — entra o que foi despachado, e a diferença
-    // fica para as pessoas resolverem olhando o papel.
-    return { ...item, recebida: arredondar(Math.min(recebida, item.enviada)) }
+    /*
+     * Entra o CONTADO, inclusive quando é mais do que saiu. Antes o excedente
+     * era descartado calado: a mercadoria estava na prateleira do destino e
+     * fora do estoque. A sobra fica marcada para o gerente decidir de onde veio
+     * (ver `resolverSobra`).
+     */
+    return { ...item, recebida: arredondar(recebida) }
   })
 
   const itensComFalta = itens.filter((i) => faltaDoItem(i) > 0).length
   const faltou = itensComFalta > 0
+  const itensComSobra = itens.filter((i) => sobraDoItem(i) > 0).length
 
   await db.$transaction(async (tx) => {
     await tx.transferencia.update({
@@ -242,6 +246,7 @@ export async function conferirTransferencia(entrada: {
       .filter((item) => (item.recebida ?? 0) > 0)
       .map((item) => {
         const falta = faltaDoItem(item)
+        const sobra = sobraDoItem(item)
         return {
           produtoId: item.produtoId,
           loja: doc.destino,
@@ -253,14 +258,104 @@ export async function conferirTransferencia(entrada: {
           observacao:
             falta > 0
               ? `Transferência #${doc.numero} de ${doc.origem} — saíram ${item.enviada}, chegaram ${item.recebida}: faltaram ${falta} ${item.unidade}`
-              : `Transferência #${doc.numero} de ${doc.origem}`,
+              : sobra > 0
+                ? `Transferência #${doc.numero} de ${doc.origem} — saíram ${item.enviada}, chegaram ${item.recebida}: sobraram ${sobra} ${item.unidade}`
+                : `Transferência #${doc.numero} de ${doc.origem}`,
         }
       })
 
     if (entradas.length > 0) await tx.movimentoEstoque.createMany({ data: entradas })
   })
 
-  return { ok: true, faltou, itensComFalta }
+  return { ok: true, faltou, itensComFalta, itensComSobra }
+}
+
+/**
+ * O gerente decide de onde veio o que chegou a mais.
+ *
+ * Na conferência o destino já recebeu o contado — então, até aqui, a rede tem
+ * o excedente contado nas duas pontas (a origem ainda acha que tem). As duas
+ * saídas acertam isso:
+ *
+ * - `origem`: separaram mais do que registraram. A origem dá a saída do
+ *   excedente — ele saiu de lá mesmo — e o documento passa a dizer o que saiu
+ *   de verdade.
+ * - `contagem`: a contagem do destino errou, chegou o que saiu. O destino
+ *   devolve o excedente, e o documento passa a dizer que chegou o enviado.
+ */
+export async function resolverSobra(entrada: {
+  id: string
+  decisao: "origem" | "contagem"
+  operador: string
+  observacao?: string | null
+}) {
+  const doc = await db.transferencia.findUnique({ where: { id: entrada.id } })
+  if (!doc) return { ok: false as const, erro: "Transferência não encontrada" }
+  if (doc.sobraResolvidaEm) {
+    return { ok: false as const, erro: `A sobra já foi resolvida por ${doc.sobraResolvidaPor}` }
+  }
+  const sobras = doc.itens
+    .map((item) => ({ item, sobra: sobraDoItem(item) }))
+    .filter((x) => x.sobra > 0)
+  if (sobras.length === 0) {
+    return { ok: false as const, erro: "Esta transferência não tem sobra a resolver" }
+  }
+
+  await db.$transaction(async (tx) => {
+    if (entrada.decisao === "origem") {
+      await tx.movimentoEstoque.createMany({
+        data: sobras.map(({ item, sobra }) => ({
+          produtoId: item.produtoId,
+          loja: doc.origem,
+          tipo: "transferencia_saida" satisfies TipoMovimento,
+          quantidade: -sobra,
+          operador: entrada.operador,
+          transferenciaId: doc.id,
+          transferenciaNumero: doc.numero,
+          observacao: `Transferência #${doc.numero}: saíram ${sobra} ${item.unidade} a mais do que o registrado (sobra em ${doc.destino})`,
+        })),
+      })
+      await tx.transferencia.update({
+        where: { id: doc.id },
+        data: {
+          itens: doc.itens.map((i) =>
+            sobraDoItem(i) > 0 ? { ...i, enviada: i.recebida as number } : i
+          ),
+        },
+      })
+    } else {
+      await tx.movimentoEstoque.createMany({
+        data: sobras.map(({ item, sobra }) => ({
+          produtoId: item.produtoId,
+          loja: doc.destino,
+          tipo: "transferencia_entrada" satisfies TipoMovimento,
+          quantidade: -sobra,
+          operador: entrada.operador,
+          transferenciaId: doc.id,
+          transferenciaNumero: doc.numero,
+          observacao: `Transferência #${doc.numero}: contagem corrigida — chegaram ${item.enviada}, não ${item.recebida}`,
+        })),
+      })
+      await tx.transferencia.update({
+        where: { id: doc.id },
+        data: {
+          itens: doc.itens.map((i) => (sobraDoItem(i) > 0 ? { ...i, recebida: i.enviada } : i)),
+        },
+      })
+    }
+
+    await tx.transferencia.update({
+      where: { id: doc.id },
+      data: {
+        sobraResolvidaEm: new Date(),
+        sobraResolvidaPor: entrada.operador,
+        sobraDecisao: entrada.decisao,
+        sobraObservacao: entrada.observacao?.trim() || null,
+      },
+    })
+  })
+
+  return { ok: true as const, itens: sobras.length }
 }
 
 /**

@@ -43,3 +43,17 @@ export function faltaDoItem(item: { enviada: number; recebida: number | null }) 
   if (item.recebida === null) return 0
   return Math.max(0, item.enviada - item.recebida)
 }
+
+/** O que chegou a MAIS do que saiu, positivo quando sobrou. */
+export function sobraDoItem(item: { enviada: number; recebida: number | null }) {
+  if (item.recebida === null) return 0
+  return Math.max(0, item.recebida - item.enviada)
+}
+
+/** Tem sobra esperando a decisão do gerente. */
+export function sobraEmAberto(t: {
+  itens: { enviada: number; recebida: number | null }[]
+  sobraResolvidaEm: Date | string | null
+}) {
+  return !t.sobraResolvidaEm && t.itens.some((i) => sobraDoItem(i) > 0)
+}
