@@ -1,0 +1,89 @@
+# SISTEMA
+
++ NFs
+    - CFOP → 6102 fora 5102 - dentro - QNE → 5152
+    - O/CSOSN - 0102
+    - CSC → homologação ID=2 / produção ID 2 — chave no painel da Focus (não versionar)
+  - [x] **Opcao** - frete e observacao
+- NFS → Emitidas e cupons Tela
+  - [x] NCM - obrigatorio para NF (verificar)
+- CUPONS FISCAIS - ainda nao implementado
+  - [x] CPF na nota
+- CLIENTES - Puxar pelo cpf ou cnpj (implementar) 
+  - [x] TEla pra o vendedor
+  - [x] Inscricao e cnpj
+  - [x] Quem cadastrou - LOJA
+  - [x] COntribuinte ou nao (fiscal)
+  - [x] Contatos Empresa → Nome , tel e email.
+  - [x] Historico de movimentacoes (vendas, devolucoes etc) clicar detalhar a vendas 
+  - [ ] Financeiro do cliente - ao consultar clientes
+- PRODUTO
+  - [ ] Código manual (ja é)
+  - [ ] historico de compra(fornecedores diferentes)
+  - [ ] cadastrar combos(quantidade para desconto)
+  - [ ] Gerente - > preco de custo, margem e venda (pode alterar)
+  - [ ] No inventario tem entradas colocar saidas (uso de loja) **gerente**
+- NF Transferencia → Não dar baixa no estoque e nem comissao e nem estatistitca de estoque (Forma de pagamento → Transferencia entre lojas para diferenciar a NF)
+  - [ ] sds e qi - Normal
+  - [ ] QNE → transferencia → Nao dar baixa no 
+- DEVOLUCAO de Mercadoria (Gerente aprovar igual ao desconto ou inadimplencia)
+  - [ ] Devolve o dinheiro se for inteiro
+  - [ ] Se não devolver tudo gera credito para o cliente (gerar credito do valor de venda)
+  - [ ] volta estoque para a loja
+- Cancelar Venda (gerente)
+  - [ ] Procurar a venda para cancelar (NF se der no prazo)
+  - [ ] Volta estoque
+- Boleto - Ver possibildiade de protestar
+  - [ ] imprimir 2 vias boletos pq o pix nao vai para o cliente
+- CAIXA
+  - [x] Reforco de caixa
+  - [x] descontar o fundo de caixa no fechamento descontar do dinheiro
+  - [x] Link de pagamento como forma de pagamento
+- VENDAS
+  - [x] Nova venda escolher o vendedor (para comissão)
+  - [ ] Imprimir e depois se o cliente precisar da NF dar opcao de gerar a NF do pedido
+  - [ ] Cupom fiscal eletronico - NFC-e e NF-e MD-e (entrada)
+  - [x] Consulta vendas filtros - data, vendedor, cliente e valor - data 
+  - [x] orcamento na tela de vendas
+  - [x] Atacado (regras de desconto) combo - dar desconto automatico - 
+- COMPRA
+  - [x] Ultima quantidade pedida / Ultimo pedido
+  - [x] data pedida / data prometida
+  - [x] Estoques total e por  lojas
+  - [ ] Valor de compra preco de custo
+  - [ ] Entrada de produtos sem nota so com AF
+  - [x] Unid medida de todos os produtos 'PC'
+  - [ ] Calcular precos de venda
+    - PEDIDOS DE COMPRA
+        - Ver se recebido marcar como recebido
+    - [x] Conciliar NF com o pedido (escolher o pedido e assim marcar como recebido) se sobrar marcar entrega parcial
+    - [x] Consulta NF por fornecedor nas NFs recebidas
+        - Entrada por XML (gerar compra)
+      - [x] Buscar pedido de compra (para conciliar com o pedido)
+      - [x] Se for produto novo (abrir para cadastrar produto novo)
+      - [x] Trazer impostos da NF para calculo do preco de venda (IPI que entra no preco)
+      - [x] Frete tb entra no frete (rateio) por peça.
+      - [x] ICMS Substituicao entra tb no preço
+        - Financeiro
+      - [x] Gerar o contas a pagar pelos boletos da NF 
+      - [x] Parcelas poder editar e acrescentar (por fora)
+      - [x] Fornecedor Plano de contas
+      - [ ] Concluir → resumo → produto → compra antigo e novo , Margem antiga, margem atual → preco de venda (pode alterar manual) 
+        - RELATORIOS
+      - [ ] Curva ABC
+      - [ ] Inentario
+      - [ ] Contas a pagar e receber
+      - [ ] Comissao por vendedor(data filtro) (loja)
+        - [ ] Valor das vendas (faturada)
+        - [ ] Valor da comissao (1,5%)
+            - Dahsboard
+        - [ ] Vendas por vendedor Filtros Datas
+        - [ ] Faturamento (por dia total e por loja) FIltros mes / anual
+        - [ ] Transferencia nao entra tem que tirar do financeiro todas as transferencias 
+        - [ ] Top 10 produtos vendidos(valor)
+        - [ ] Top 10 Cliente (tirar consumidor final)
+
+                
+
+
+
