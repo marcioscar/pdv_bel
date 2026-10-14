@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { data, Link, useFetcher, useSearchParams } from "react-router"
-import { ArrowLeft, Printer, Search, Send, ShoppingBag, Truck } from "lucide-react"
+import { data, Link, redirect, useFetcher, useSearchParams } from "react-router"
+import { ArrowLeft, Plus, Printer, Search, Send, ShoppingBag, Truck } from "lucide-react"
 
 import type { Route } from "./+types/admin.pedido-novo"
 import { Badge } from "~/components/ui/badge"
@@ -12,10 +12,19 @@ import {
   type ProdutoDoHistorico,
 } from "~/components/pdv/compras-do-produto"
 import { db } from "~/lib/db.server"
-import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
+import { interpretarValor, moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
+import { criarIndice } from "~/lib/pdv"
+import { EscolhaDeProduto, type ProdutoDoCatalogo } from "~/components/pdv/escolha-de-produto"
 import { cn } from "~/lib/utils"
 import { exigirGerente } from "~/lib/sessao.server"
 import { listarLojas } from "~/lib/lojas.server"
+import { ultimoCustoPorProduto } from "~/lib/compras.server"
+import {
+  criarFornecedor,
+  lerFornecedor,
+  proximoCodigoDeFornecedor,
+} from "~/lib/fornecedores.server"
+import { SOMENTE_ATIVOS } from "~/lib/produtos.server"
 import { criarPedido, catalogoDoFornecedor, type ItemDoFornecedor } from "~/lib/pedidos-compra.server"
 import { DIAS_DE_ENTREGA, ROTULOS_DE_URGENCIA, type Urgencia } from "~/lib/compras"
 
@@ -44,7 +53,16 @@ export async function loader({ request }: Route.LoaderArgs) {
   })
 
   if (!fornecedorId) {
-    return { fornecedores, fornecedor: null, itens: null, lojas: [] }
+    // O código sugerido para o cadastro rápido de fornecedor, aqui mesmo.
+    return {
+      fornecedores,
+      fornecedor: null,
+      itens: null,
+      lojas: [],
+      catalogo: [],
+      custoConhecido: {},
+      proximoCodigo: await proximoCodigoDeFornecedor(),
+    }
   }
 
   const fornecedor = await db.fornecedor.findUnique({ where: { id: fornecedorId } })
@@ -52,16 +70,28 @@ export async function loader({ request }: Route.LoaderArgs) {
     throw new Response("Fornecedor não encontrado", { status: 404 })
   }
 
-  const [itens, lojas] = await Promise.all([
+  const [itens, lojas, catalogo] = await Promise.all([
     catalogoDoFornecedor(fornecedorId),
     listarLojas(),
+    // O catálogo inteiro: dá para pedir a este fornecedor o que ele nunca vendeu.
+    db.produto.findMany({
+      where: SOMENTE_ATIVOS,
+      orderBy: { descricao: "asc" },
+      select: { id: true, codigo: true, descricao: true, unidade: true },
+    }),
   ])
+  // O último custo de qualquer fornecedor: a referência para o produto novo
+  // neste fornecedor, que não tem custo dele.
+  const custoConhecido = await ultimoCustoPorProduto(catalogo.map((p) => p.id))
 
   return {
     fornecedores,
     fornecedor: { id: fornecedor.id, nome: fornecedor.nomeFantasia || fornecedor.razaoSocial },
     itens,
     lojas: lojas.map((l) => l.codigo),
+    catalogo,
+    custoConhecido: Object.fromEntries(custoConhecido),
+    proximoCodigo: "",
   }
 }
 
@@ -69,8 +99,20 @@ export async function action({ request }: Route.ActionArgs) {
   const eu = await exigirGerente(request, "verRelatorios")
   const form = await request.formData()
 
+  /*
+   * Cadastro rápido de fornecedor: o mesmo `lerFornecedor`/`criarFornecedor`
+   * da tela de Fornecedores, para as regras valerem iguais. Cadastrado, já
+   * abre o pedido com ele.
+   */
+  if (form.get("intencao") === "cadastrarFornecedor") {
+    await exigirGerente(request, "editarProdutos")
+    const r = await criarFornecedor(lerFornecedor(form))
+    if (!r.ok) return data({ ok: false as const, erro: r.erro }, { status: 400 })
+    throw redirect(`/admin/pedido-novo?fornecedor=${r.fornecedor.id}`)
+  }
+
   const fornecedorId = String(form.get("fornecedorId") ?? "")
-  let itens: { produtoId: string; quantidade: number }[] = []
+  let itens: { produtoId: string; quantidade: number; custoUnitario?: number }[] = []
   try {
     itens = JSON.parse(String(form.get("itens") ?? "[]"))
   } catch {
@@ -98,10 +140,11 @@ const CORES: Record<Urgencia, string> = {
 }
 
 export default function AdminPedidoNovo({ loaderData }: Route.ComponentProps) {
-  const { fornecedores, fornecedor, itens, lojas } = loaderData
+  const { fornecedores, fornecedor, itens, lojas, catalogo, custoConhecido, proximoCodigo } =
+    loaderData
 
   if (!fornecedor) {
-    return <EscolherFornecedor fornecedores={fornecedores} />
+    return <EscolherFornecedor fornecedores={fornecedores} proximoCodigo={proximoCodigo} />
   }
 
   return (
@@ -110,6 +153,8 @@ export default function AdminPedidoNovo({ loaderData }: Route.ComponentProps) {
       fornecedor={fornecedor}
       itens={itens ?? []}
       lojas={lojas}
+      catalogo={catalogo}
+      custoConhecido={custoConhecido}
     />
   )
 }
@@ -123,10 +168,13 @@ function normalizar(texto: string) {
 
 function EscolherFornecedor({
   fornecedores,
+  proximoCodigo,
 }: {
   fornecedores: Route.ComponentProps["loaderData"]["fornecedores"]
+  proximoCodigo: string
 }) {
   const [busca, setBusca] = useState("")
+  const [cadastrando, setCadastrando] = useState(false)
   const campoBusca = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -149,7 +197,19 @@ function EscolherFornecedor({
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <ShoppingBag className="size-4 shrink-0 text-muted-foreground" aria-hidden />
         <h1 className="text-base font-semibold">Novo pedido</h1>
+        <Button
+          type="button"
+          size="sm"
+          variant={cadastrando ? "secondary" : "outline"}
+          className="ml-auto rounded-lg"
+          onClick={() => setCadastrando((c) => !c)}
+        >
+          <Plus className="size-4" /> Novo fornecedor
+        </Button>
       </div>
+      {cadastrando ? (
+        <NovoFornecedor proximoCodigo={proximoCodigo} onCancelar={() => setCadastrando(false)} />
+      ) : null}
       <p className="mt-1 max-w-2xl text-xs text-muted-foreground">
         Escolha o fornecedor. Depois disso a tela mostra o que ele vende, com o
         que está faltando já sinalizado — e dá para pedir qualquer outra coisa do
@@ -203,11 +263,23 @@ function MontarPedido({
   fornecedor,
   itens,
   lojas,
+  catalogo,
+  custoConhecido,
 }: {
   fornecedor: { id: string; nome: string }
   itens: ItemDoFornecedor[]
   lojas: string[]
+  catalogo: ProdutoDoCatalogo[]
+  custoConhecido: Record<string, number>
 }) {
+  /**
+   * Produtos pedidos FORA do que este fornecedor já vendeu — o caso de todo
+   * fornecedor novo. O custo é digitado (ele não tem custo deste fornecedor) e
+   * vai junto no pedido; começa no último custo pago a qualquer um.
+   */
+  const [outros, setOutros] = useState<
+    { produtoId: string; quantidadeTexto: string; custoTexto: string }[]
+  >([])
   const [busca, setBusca] = useState("")
   // Nada vem marcado: a urgência aparece no selo de cada linha, mas o que entra
   // no pedido é escolha de quem está comprando, item por item.
@@ -241,12 +313,18 @@ function MontarPedido({
   }
 
   const selecionadosLista = itens.filter((i) => selecionados[i.produtoId])
-  const totalItens = selecionadosLista.length
-  const totalValor = selecionadosLista.reduce(
-    (soma, i) => soma + quantidadeDe(i) * i.custoUnitario,
-    0
-  )
-  const comQuantidadeInvalida = selecionadosLista.some((i) => !(quantidadeDe(i) > 0))
+  const outrosValidos = outros.map((o) => ({
+    produtoId: o.produtoId,
+    quantidade: Math.trunc(Number(o.quantidadeTexto)) || 0,
+    custoUnitario: interpretarValor(o.custoTexto) ?? 0,
+  }))
+  const totalItens = selecionadosLista.length + outrosValidos.length
+  const totalValor =
+    selecionadosLista.reduce((soma, i) => soma + quantidadeDe(i) * i.custoUnitario, 0) +
+    outrosValidos.reduce((soma, o) => soma + o.quantidade * o.custoUnitario, 0)
+  const comQuantidadeInvalida =
+    selecionadosLista.some((i) => !(quantidadeDe(i) > 0)) ||
+    outrosValidos.some((o) => !(o.quantidade > 0) || !(o.custoUnitario > 0))
 
   function alternar(produtoId: string) {
     setSelecionados((s) => ({ ...s, [produtoId]: !s[produtoId] }))
@@ -254,10 +332,13 @@ function MontarPedido({
 
   function gerar() {
     if (totalItens === 0 || comQuantidadeInvalida || gerando) return
-    const payload = selecionadosLista.map((i) => ({
-      produtoId: i.produtoId,
-      quantidade: quantidadeDe(i),
-    }))
+    const payload = [
+      ...selecionadosLista.map((i) => ({
+        produtoId: i.produtoId,
+        quantidade: quantidadeDe(i),
+      })),
+      ...outrosValidos,
+    ]
     fetcher.submit(
       {
         fornecedorId: fornecedor.id,
@@ -302,6 +383,9 @@ function MontarPedido({
           <p className="mt-3 text-sm text-muted-foreground">
             Nenhum produto ligado a este fornecedor ainda.
           </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Peça qualquer produto do catálogo logo abaixo, com o custo combinado.
+          </p>
         </div>
       ) : (
         <>
@@ -312,12 +396,6 @@ function MontarPedido({
             autoComplete="off"
             className="mt-5 h-10 w-full min-w-0 rounded-lg border-border bg-background text-sm sm:w-72"
           />
-
-          {fetcher.data && !fetcher.data.ok ? (
-            <p className="mt-3 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive" role="alert">
-              {fetcher.data.erro}
-            </p>
-          ) : null}
 
           <Tabela
             itens={encontrados}
@@ -336,6 +414,21 @@ function MontarPedido({
         </>
       )}
 
+      <OutrosProdutos
+        catalogo={catalogo}
+        jaDoFornecedor={itens.map((i) => i.produtoId)}
+        outros={outros}
+        onMudar={setOutros}
+        onJaDoFornecedor={(produtoId) => setSelecionados((s) => ({ ...s, [produtoId]: true }))}
+        custoConhecido={custoConhecido}
+      />
+
+      {fetcher.data && !fetcher.data.ok ? (
+        <p className="mt-3 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive" role="alert">
+          {fetcher.data.erro}
+        </p>
+      ) : null}
+
       {totalItens > 0 ? (
         <div className="fixed inset-x-0 bottom-0 z-10 border-t border-border bg-card px-4 py-3 shadow-[0_-4px_12px_rgba(0,0,0,0.08)] sm:px-6">
           <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-3">
@@ -345,7 +438,7 @@ function MontarPedido({
             <span className="text-xs text-muted-foreground">≈ {moeda(totalValor)}</span>
             {comQuantidadeInvalida ? (
               <span className="text-xs font-medium text-destructive">
-                Há item selecionado sem quantidade
+                Há item selecionado sem quantidade ou sem custo
               </span>
             ) : null}
 
@@ -766,6 +859,199 @@ function PedidoGerado({
           </Link>
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * Cadastro rápido de fornecedor sem sair do pedido — os mesmos campos e as
+ * mesmas regras da tela de Fornecedores (o servidor usa `criarFornecedor`).
+ * Cadastrado, a tela já abre o pedido com ele.
+ */
+function NovoFornecedor({
+  proximoCodigo,
+  onCancelar,
+}: {
+  proximoCodigo: string
+  onCancelar: () => void
+}) {
+  const fetcher = useFetcher<typeof action>()
+  const gravando = fetcher.state !== "idle"
+  const erro = fetcher.data && !fetcher.data.ok ? fetcher.data.erro : null
+
+  return (
+    <fetcher.Form
+      method="post"
+      className="mt-4 max-w-3xl rounded-xl border border-border p-4"
+    >
+      <input type="hidden" name="intencao" value="cadastrarFornecedor" />
+      <h2 className="text-sm font-semibold">Novo fornecedor</h2>
+      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+        <label className="grid gap-1 text-xs text-muted-foreground">
+          Código
+          <Input name="codigo" defaultValue={proximoCodigo} required className="font-mono" />
+        </label>
+        <label className="grid gap-1 text-xs text-muted-foreground sm:col-span-2">
+          Razão social
+          <Input name="razaoSocial" required autoFocus />
+        </label>
+        <label className="grid gap-1 text-xs text-muted-foreground sm:col-span-2">
+          Nome fantasia
+          <Input name="nomeFantasia" placeholder="como a loja chama o fornecedor" />
+        </label>
+        <label className="grid gap-1 text-xs text-muted-foreground">
+          CNPJ/CPF
+          <Input name="documento" inputMode="numeric" placeholder="opcional" />
+        </label>
+        <label className="grid gap-1 text-xs text-muted-foreground">
+          Cidade
+          <Input name="cidade" required />
+        </label>
+        <label className="grid gap-1 text-xs text-muted-foreground">
+          Bairro
+          <Input name="bairro" required />
+        </label>
+        <label className="grid gap-1 text-xs text-muted-foreground">
+          Observação
+          <Input name="observacao" />
+        </label>
+      </div>
+      {erro ? <p className="mt-2 text-sm text-destructive">{erro}</p> : null}
+      <div className="mt-3 flex gap-2">
+        <Button type="submit" size="sm" disabled={gravando}>
+          {gravando ? "Cadastrando…" : "Cadastrar e montar o pedido"}
+        </Button>
+        <Button type="button" size="sm" variant="ghost" onClick={onCancelar}>
+          Cancelar
+        </Button>
+      </div>
+    </fetcher.Form>
+  )
+}
+
+/**
+ * Pedir ao fornecedor um produto que ele nunca vendeu. O produto que já está na
+ * lista dele não entra aqui: é só marcado na tabela de cima, com o custo dele.
+ */
+function OutrosProdutos({
+  catalogo,
+  jaDoFornecedor,
+  outros,
+  onMudar,
+  onJaDoFornecedor,
+  custoConhecido,
+}: {
+  catalogo: ProdutoDoCatalogo[]
+  jaDoFornecedor: string[]
+  outros: { produtoId: string; quantidadeTexto: string; custoTexto: string }[]
+  onMudar: (
+    outros: { produtoId: string; quantidadeTexto: string; custoTexto: string }[]
+  ) => void
+  onJaDoFornecedor: (produtoId: string) => void
+  custoConhecido: Record<string, number>
+}) {
+  const indice = useMemo(() => criarIndice(catalogo), [catalogo])
+  const porId = useMemo(() => new Map(catalogo.map((p) => [p.id, p])), [catalogo])
+
+  function escolher(produtoId: string) {
+    if (jaDoFornecedor.includes(produtoId)) {
+      onJaDoFornecedor(produtoId)
+      return
+    }
+    if (outros.some((o) => o.produtoId === produtoId)) return
+    const custo = custoConhecido[produtoId]
+    onMudar([
+      ...outros,
+      {
+        produtoId,
+        quantidadeTexto: "",
+        custoTexto: custo ? String(custo).replace(".", ",") : "",
+      },
+    ])
+  }
+
+  function mudar(i: number, campo: "quantidadeTexto" | "custoTexto", valor: string) {
+    onMudar(outros.map((o, idx) => (idx === i ? { ...o, [campo]: valor } : o)))
+  }
+
+  return (
+    <div className="mt-6 rounded-xl border border-border p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="text-sm font-semibold">Pedir outro produto do catálogo</h2>
+        <span className="text-xs text-muted-foreground">
+          o que este fornecedor ainda não vendeu — com o custo combinado
+        </span>
+        <div className="w-full sm:ml-auto sm:w-80">
+          <EscolhaDeProduto escolhido={null} destacados={[]} indice={indice} onEscolher={escolher} />
+        </div>
+      </div>
+
+      {outros.length > 0 ? (
+        <table className="mt-3 w-full text-sm tabular-nums">
+          <thead>
+            <tr className="border-b border-border text-left text-[10px] uppercase tracking-wider text-muted-foreground">
+              <th className="py-2 pr-3 font-semibold">Produto</th>
+              <th className="w-28 py-2 pr-3 text-right font-semibold">Quantidade</th>
+              <th className="w-28 py-2 pr-3 text-right font-semibold">Custo</th>
+              <th className="w-28 py-2 pr-3 text-right font-semibold">Subtotal</th>
+              <th className="w-8" />
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {outros.map((o, i) => {
+              const produto = porId.get(o.produtoId)
+              const quantidade = Math.trunc(Number(o.quantidadeTexto)) || 0
+              const custo = interpretarValor(o.custoTexto) ?? 0
+              return (
+                <tr key={o.produtoId}>
+                  <td className="py-2 pr-3">
+                    <span className="font-mono text-xs text-muted-foreground">{produto?.codigo}</span>{" "}
+                    {produto?.descricao}{" "}
+                    <span className="text-xs text-muted-foreground">{produto?.unidade}</span>
+                  </td>
+                  <td className="py-2 pr-3 text-right">
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={o.quantidadeTexto}
+                      onChange={(e) => mudar(i, "quantidadeTexto", e.target.value)}
+                      className={cn(
+                        "h-7 w-20 rounded border border-border bg-background px-1.5 text-right text-sm tabular-nums",
+                        !(quantidade > 0) && "border-destructive/50"
+                      )}
+                    />
+                  </td>
+                  <td className="py-2 pr-3 text-right">
+                    <Input
+                      value={o.custoTexto}
+                      onChange={(e) => mudar(i, "custoTexto", e.target.value)}
+                      inputMode="decimal"
+                      className={cn(
+                        "h-7 w-24 text-right font-mono text-xs",
+                        !(custo > 0) && "border-destructive/50"
+                      )}
+                    />
+                  </td>
+                  <td className="py-2 pr-3 text-right text-muted-foreground">
+                    {quantidade > 0 && custo > 0 ? moeda(quantidade * custo) : "—"}
+                  </td>
+                  <td>
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="ghost"
+                      onClick={() => onMudar(outros.filter((_, idx) => idx !== i))}
+                    >
+                      ×
+                    </Button>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      ) : null}
     </div>
   )
 }

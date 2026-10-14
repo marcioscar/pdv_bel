@@ -23,7 +23,16 @@ import { SITUACOES_PEDIDO, type FiltroPedidos, type SituacaoPedido } from "~/lib
  * comprometida não deve gerar uma segunda compra em cima da primeira.
  */
 
-export type ItemParaPedir = { produtoId: string; quantidade: number }
+export type ItemParaPedir = {
+  produtoId: string
+  quantidade: number
+  /**
+   * O custo combinado, quando quem pede o digitou — o produto que este
+   * fornecedor nunca vendeu não tem custo de referência. Sem ele, vale o último
+   * custo do fornecedor.
+   */
+  custoUnitario?: number
+}
 
 export type ResultadoPedido =
   | { ok: true; numero: number; id: string }
@@ -80,7 +89,11 @@ export async function criarPedido(entrada: {
     // Sem fornecimento registrado deste fornecedor para este produto, o preço de
     // venda é a única referência disponível — melhor um número aproximado no
     // papel do que um campo em branco que trava a gravação.
-    const custoUnitario = custoPorProduto.get(pedido.produtoId) ?? produto.preco
+    const digitado =
+      typeof pedido.custoUnitario === "number" && pedido.custoUnitario > 0
+        ? pedido.custoUnitario
+        : null
+    const custoUnitario = digitado ?? custoPorProduto.get(pedido.produtoId) ?? produto.preco
     const quantidade = arredondar(pedido.quantidade)
 
     itens.push({
