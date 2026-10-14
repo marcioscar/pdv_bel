@@ -325,7 +325,12 @@ function MontarPedido({
             selecionados={selecionados}
             quantidades={quantidades}
             onAlternar={alternar}
-            onQuantidade={(id, v) => setQuantidades((q) => ({ ...q, [id]: v }))}
+            onQuantidade={(id, v) => {
+              setQuantidades((q) => ({ ...q, [id]: v }))
+              // Digitar a quantidade já é dizer que quer comprar: marca a linha.
+              // Zerar desmarca — quantidade zero não vai para o pedido.
+              setSelecionados((s) => ({ ...s, [id]: v > 0 }))
+            }}
             onHistorico={setCompras}
           />
         </>
@@ -421,6 +426,7 @@ function Tabela({
                 </th>
               ))}
               <th className="py-2 pr-3 text-right font-semibold">Dura</th>
+              <th className="py-2 pr-3 text-right font-semibold">Última compra</th>
               <th className="py-2 pr-3 text-right font-semibold">Último pedido</th>
               <th className="py-2 pr-3 text-right font-semibold">Sugestão</th>
               <th className="py-2 pr-3 text-right font-semibold">Quantidade</th>
@@ -501,6 +507,9 @@ function Tabela({
                   })}
                   <td className="py-2 pr-3 text-right">
                     <Duracao dias={item.diasRestantes} />
+                  </td>
+                  <td className="py-2 pr-3 text-right text-muted-foreground">
+                    <UltimaCompra em={item.ultimaCompra} />
                   </td>
                   <td className="py-2 pr-3 text-right">
                     <UltimoPedido item={item} />
@@ -592,6 +601,9 @@ function ItemCartao({
             <span className="text-muted-foreground">
               <Duracao dias={item.diasRestantes} />
             </span>
+            <span className="text-muted-foreground">
+              última compra <UltimaCompra em={item.ultimaCompra} />
+            </span>
           </div>
 
           <p className="mt-1 font-mono text-[11px] text-muted-foreground">
@@ -630,7 +642,6 @@ function UltimoPedido({ item }: { item: ItemDoFornecedor }) {
   const ultimo = item.ultimoPedido
   if (!ultimo) return <span className="text-muted-foreground">—</span>
 
-  const dias = Math.floor((Date.now() - new Date(ultimo.em).getTime()) / 86_400_000)
   const variacao =
     ultimo.custoUnitario > 0
       ? ((item.custoUnitario - ultimo.custoUnitario) / ultimo.custoUnitario) * 100
@@ -652,9 +663,7 @@ function UltimoPedido({ item }: { item: ItemDoFornecedor }) {
       }
     >
       {formatarQuantidade(ultimo.quantidade)}{" "}
-      <span className="text-muted-foreground">
-        · {dias === 0 ? "hoje" : dias > 365 ? "+1 ano" : `${dias} d`}
-      </span>
+      <span className="text-muted-foreground">· {dataCurta(ultimo.em)}</span>
       {Math.abs(variacao) >= 1 ? (
         <span
           className={cn(
@@ -668,6 +677,26 @@ function UltimoPedido({ item }: { item: ItemDoFornecedor }) {
       ) : null}
     </a>
   )
+}
+
+/** "03/10/26": a data cabe na coluna estreita, e o ano curto não confunde. */
+function dataCurta(em: Date | string) {
+  return new Date(em).toLocaleDateString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+    timeZone: "America/Sao_Paulo",
+  })
+}
+
+/**
+ * A última vez que se COMPROU deste fornecedor — do histórico de fornecimentos,
+ * que inclui o sistema antigo. Diferente do "Último pedido", que é só o que se
+ * pediu por este sistema.
+ */
+function UltimaCompra({ em }: { em: Date | string | null }) {
+  if (!em) return <span>—</span>
+  return <span title={new Date(em).toLocaleDateString("pt-BR")}>{dataCurta(em)}</span>
 }
 
 /** O punhado que o diálogo de histórico precisa, do item do catálogo. */
