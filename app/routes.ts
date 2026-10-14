@@ -74,6 +74,7 @@ export default [
       route("caixas/:fechamentoId", "routes/admin.caixa.tsx"),
       route("contas-a-receber", "routes/admin.contas-a-receber.tsx"),
       route("contas-a-pagar", "routes/admin.contas-a-pagar.tsx"),
+      route("contador", "routes/admin.contador.tsx"),
       route("inadimplentes", "routes/admin.inadimplentes.tsx"),
       route("autorizacoes", "routes/admin.autorizacoes.tsx"),
       // Cada relatório é uma rota irmã: nenhum deles é layout do outro.
@@ -89,6 +90,8 @@ export default [
     // com a sidebar junto. A guarda de gerente é cobrada na própria rota.
     route("contas-a-receber/impressao", "routes/contas-a-receber.impressao.tsx"),
     route("inadimplentes/impressao", "routes/inadimplentes.impressao.tsx"),
+    // O ZIP dos XMLs do mês: arquivo, não tela.
+    route("contador/zip", "routes/contador.zip.tsx"),
   ]),
 
   // Usuários morava aqui: quem tiver o link antigo continua chegando.

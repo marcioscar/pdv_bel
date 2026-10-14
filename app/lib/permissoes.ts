@@ -231,6 +231,12 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         somenteGerente: true,
       },
       {
+        para: "/admin/contador",
+        rotulo: "Envio ao contador",
+        descricao: "Os XMLs das notas do mês, por loja, em ZIP para a contadora",
+        somenteGerente: true,
+      },
+      {
         para: "/admin/inadimplentes",
         rotulo: "Inadimplentes",
         descricao: "Quem deve boleto vencido, do PDV e do sistema antigo, e o que entrou",
@@ -424,6 +430,7 @@ export const ACOES_DE_GERENTE = {
   verContasAReceber: "Só gerente vê as contas a receber",
   verContasAPagar: "Só gerente vê e paga as contas a pagar",
   verEstoqueNegativo: "Só gerente vê e dá ciência no estoque negativo",
+  enviarAoContador: "Só gerente baixa e envia os XMLs ao contador",
   decidirAutorizacoes: "Só gerente libera venda travada — é ele que responde pelo risco",
   trocarDeLoja:
     "Só gerente troca a loja do turno — para operar em outra, saia e entre de novo",

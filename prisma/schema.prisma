@@ -589,6 +589,27 @@ model Venda {
   @@map("vendas")
 }
 
+/// Um envio dos XMLs do mês ao contador, por loja (cada loja é um CNPJ).
+///
+/// O histórico responde "o de setembro da QI já foi?", e o e-mail do último
+/// envio vem preenchido no próximo — não há tela de configuração para isso.
+model EnvioAoContador {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  loja       String
+  /// "2026-09"
+  mes        String
+  para       String
+  enviadoEm  DateTime @default(now())
+  enviadoPor String
+  /// Quantas notas foram no ZIP e o total das autorizadas.
+  quantidade Int
+  total      Float
+  comCanceladas Boolean
+
+  @@index([loja, mes])
+  @@map("envios_ao_contador")
+}
+
 /// Aviso ao gerente: uma venda ou transferência deixou o saldo de um produto
 /// negativo numa loja.
 ///
