@@ -1,4 +1,5 @@
 import { db } from "~/lib/db.server"
+import { enviarNfeAoAutorizar } from "~/lib/nota-email.server"
 import { mesmaEmpresa } from "~/lib/documento"
 import {
   ambienteFocus,
@@ -408,6 +409,9 @@ export async function emitirDaVenda(
     const dados = daResposta(resposta)
 
     await db.notaFiscalEmitida.update({ where: { id: nota.id }, data: dados })
+    // NF-e autorizada já na resposta: sai por e-mail ao cliente, em segundo
+    // plano — buscar o PDF e falar com o SMTP não pode segurar quem emitiu.
+    void enviarNfeAoAutorizar(nota.id)
     return { ok: true, notaId: nota.id, modelo, status: dados.status }
   } catch (erro) {
     const mensagem =
@@ -447,6 +451,8 @@ export async function atualizarStatusDaNota(notaId: string) {
   try {
     const resposta = await consultarNota(nota.loja, nota.modelo as ModeloNota, nota.ref)
     await db.notaFiscalEmitida.update({ where: { id: notaId }, data: daResposta(resposta) })
+    // A NF-e que acabou de sair do "processando" vai por e-mail ao cliente.
+    void enviarNfeAoAutorizar(notaId)
   } catch (erro) {
     // Focus fora do ar não é motivo para marcar a nota como recusada: o status
     // antigo continua valendo, e a próxima consulta tenta de novo.

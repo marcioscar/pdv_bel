@@ -1626,6 +1626,14 @@ model NotaFiscalEmitida {
   criadaEm     DateTime @default(now())
   atualizadaEm DateTime @updatedAt
 
+  /// O último envio do DANFE e do XML por e-mail ao cliente (brassaco@brassaco.com.br).
+  /// `emailEnviadoPor` é "automático" quando saiu sozinho ao autorizar a NF-e.
+  emailEnviadoEm   DateTime?
+  emailEnviadoPara String?
+  emailEnviadoPor  String?
+  /// A falha do último envio, para a tela mostrar e alguém reenviar.
+  emailErro        String?
+
   @@index([loja, criadaEm])
   @@index([status])
   @@index([vendaId])
