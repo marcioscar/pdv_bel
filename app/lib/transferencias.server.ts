@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client"
 
 import { db } from "~/lib/db.server"
+import { registrarAvisosDeNegativo } from "~/lib/estoque-negativo.server"
 import { arredondar, QUANTIDADE_INTEIRA, quantidadeInteira } from "~/lib/moeda"
 import type { TipoMovimento } from "~/lib/estoque.server"
 import { faltaDoItem, type ItemConferido } from "~/lib/transferencias"
@@ -118,6 +119,17 @@ export async function enviarTransferencia(entrada: {
     })
 
     return doc
+  })
+
+  // A origem pode ter ficado negativa (o despacho não recusa por saldo):
+  // o gerente fica sabendo, para lançar a entrada que faltou.
+  await registrarAvisosDeNegativo({
+    loja: entrada.origem,
+    itens: transferencia.itens.map((i) => ({ produtoId: i.produtoId, quantidade: i.enviada })),
+    origem: "transferencia",
+    documento: `Transferência #${transferencia.numero} para ${entrada.destino}`,
+    documentoId: transferencia.id,
+    operador: entrada.operador,
   })
 
   return { ok: true, numero: transferencia.numero, id: transferencia.id }

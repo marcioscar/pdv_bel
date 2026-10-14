@@ -589,6 +589,39 @@ model Venda {
   @@map("vendas")
 }
 
+/// Aviso ao gerente: uma venda ou transferência deixou o saldo de um produto
+/// negativo numa loja.
+///
+/// O estoque pode ficar negativo de propósito — a mercadoria chegou, o gerente
+/// não estava para dar entrada, e a loja não pode parar de vender. Não precisa
+/// de liberação; precisa de que alguém SAIBA, porque negativo esquecido é
+/// entrada que nunca foi lançada. O gerente dá ciência, e o aviso sai da fila.
+model AvisoEstoqueNegativo {
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  produtoId   String    @db.ObjectId
+  /// Copiados do cadastro para o aviso continuar legível se o produto mudar.
+  codigo      String
+  descricao   String
+  unidade     String
+  loja        String
+  /// "venda" | "transferencia"
+  origem      String
+  /// "Venda #12" / "Transferência #3" — o que se procura nas outras telas.
+  documento   String
+  documentoId String?   @db.ObjectId
+  /// Quanto saiu neste documento, e como ficou o saldo da loja depois.
+  quantidade  Float
+  saldoDepois Float
+  operador    String
+  criadoEm    DateTime  @default(now())
+  cienteEm    DateTime?
+  cientePor   String?
+
+  @@index([cienteEm])
+  @@index([loja, produtoId])
+  @@map("avisos_estoque_negativo")
+}
+
 /// Pix do balcão esperando o pagamento — a venda que ainda não nasceu.
 ///
 /// O carrinho vivia só na tela: se o operador saísse dela, ninguém mais

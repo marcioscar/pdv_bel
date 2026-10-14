@@ -143,6 +143,12 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         descricao: "O que saiu de uma loja e não chegou na outra, por rota",
         somenteGerente: true,
       },
+      {
+        para: "/admin/estoque-negativo",
+        rotulo: "Estoque negativo",
+        descricao: "Vendas e transferências sem saldo: dar ciência e ver o que falta dar entrada",
+        somenteGerente: true,
+      },
     ],
   },
   {
@@ -417,6 +423,7 @@ export const ACOES_DE_GERENTE = {
   verVendasDaRede: "Só gerente vê as vendas das outras lojas",
   verContasAReceber: "Só gerente vê as contas a receber",
   verContasAPagar: "Só gerente vê e paga as contas a pagar",
+  verEstoqueNegativo: "Só gerente vê e dá ciência no estoque negativo",
   decidirAutorizacoes: "Só gerente libera venda travada — é ele que responde pelo risco",
   trocarDeLoja:
     "Só gerente troca a loja do turno — para operar em outra, saia e entre de novo",

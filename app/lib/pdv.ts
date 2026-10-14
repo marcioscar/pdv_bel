@@ -104,17 +104,15 @@ export type AcaoVenda =
   | { tipo: "limpar" }
 
 /**
- * Quanto deste produto ainda cabe na venda.
+ * Se esta quantidade passa do saldo da loja.
  *
- * Não se vende o que não existe: o saldo da loja é o teto, e o que já está no
- * carrinho conta contra ele. Estoque zerado ou negativo não deixa entrar nada.
- *
- * A checagem de verdade é a do servidor, na gravação — esta existe para o
- * vendedor descobrir a falta enquanto monta o carrinho, e não com o cliente
- * esperando o cupom.
+ * Não é mais um teto (decisão do Marcio, 14/10/2026): a mercadoria pode ter
+ * chegado sem a entrada lançada, e a venda segue com o saldo ficando negativo.
+ * Serve para a tela AVISAR — a linha fica vermelha e o gerente é avisado na
+ * gravação (ver estoque-negativo.server).
  */
-export function quantidadeQueCabe(estoque: number, jaNoCarrinho: number) {
-  return arredondar(Math.max(0, estoque - jaNoCarrinho))
+export function passaDoEstoque(estoque: number, quantidade: number) {
+  return quantidade > estoque
 }
 
 function limitar(indice: number, total: number) {
@@ -128,11 +126,9 @@ export function reduzirVenda(estado: EstadoVenda, acao: AcaoVenda): EstadoVenda 
       const { produto, quantidade } = acao
       if (!Number.isInteger(quantidade)) return estado
       const existente = estado.itens.findIndex((item) => item.produtoId === produto.id)
-      const jaNoCarrinho = existente >= 0 ? estado.itens[existente].quantidade : 0
-
-      // O que passar do estoque não entra. A tela avisa o que aconteceu; aqui
-      // só se garante que o carrinho nunca guarde mais do que a loja tem.
-      const entra = Math.min(quantidade, quantidadeQueCabe(produto.estoque, jaNoCarrinho))
+      // Entra tudo, mesmo passando do estoque: a tela avisa, e o saldo fica
+      // negativo na gravação (ver `passaDoEstoque`).
+      const entra = quantidade
       if (entra <= 0) return estado
 
       if (existente >= 0) {
@@ -173,14 +169,12 @@ export function reduzirVenda(estado: EstadoVenda, acao: AcaoVenda): EstadoVenda 
       if (indice < 0 || indice >= estado.itens.length) return estado
       if (quantidade <= 0) return reduzirVenda(estado, { tipo: "remover", indice })
 
-      // Mesmo teto de "adicionar", agora para quem digitou a quantidade ou
-      // apertou `+`: a linha para no estoque da loja.
       // Fração não entra no carrinho: a tela avisa antes, e aqui é a garantia.
+      // Passar do estoque pode (ver `passaDoEstoque`).
       if (!Number.isInteger(quantidade)) return estado
 
       const alvo = estado.itens[indice]
-      const nova = Math.min(quantidade, quantidadeQueCabe(alvo.estoque, 0))
-      if (nova <= 0) return reduzirVenda(estado, { tipo: "remover", indice })
+      const nova = quantidade
       if (nova === alvo.quantidade) return estado
 
       const itens = estado.itens.map((item, i) =>

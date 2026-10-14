@@ -43,7 +43,6 @@ import {
   conferirVenda,
   lerPedido,
   precificar,
-  recusaPorFaltaDeEstoque,
   registrarVenda,
 } from "~/lib/vendas.server"
 import { vendedoresDaLoja } from "~/lib/vendedores.server"
@@ -91,7 +90,7 @@ import {
   interpretarComando,
   produtosPorCodigo,
   reduzirVenda,
-  quantidadeQueCabe,
+  passaDoEstoque,
   totaisDaVenda,
   vendaVazia,
   type CondicaoPagamento,
@@ -381,17 +380,6 @@ export async function action({ request }: Route.ActionArgs) {
     if (!preco.ok) {
       return data(
         { ok: false as const, tipo: "autorizacao" as const, erro: preco.erro },
-        { status: 400 }
-      )
-    }
-
-    // Estoque antes da fila do gerente: não se libera o que não existe, e o
-    // pagamento por link chega a ser mandado ao cliente por este caminho — um
-    // link pago de uma venda que não fecha é o pior desfecho do balcão.
-    const semEstoque = await recusaPorFaltaDeEstoque(preco.itens, eu.loja)
-    if (semEstoque) {
-      return data(
-        { ok: false as const, tipo: "autorizacao" as const, erro: semEstoque },
         { status: 400 }
       )
     }
@@ -1167,13 +1155,19 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     setEntrada("")
   }, [])
 
-  /** O aviso de quem esbarrou no estoque, dito com o número que resta. */
+  /**
+   * O aviso de quem passou do estoque. Não trava: a venda segue, o saldo fica
+   * negativo e o gerente é avisado na gravação — é a mercadoria que chegou sem
+   * a entrada lançada.
+   */
   const avisarSemEstoque = useCallback(
     (item: { descricao: string; unidade: string; estoque: number }) => {
       avisar(
-        item.estoque <= 0
-          ? `${item.descricao} — sem estoque`
-          : `${item.descricao} — só há ${formatarQuantidade(item.estoque)} ${item.unidade} em estoque`,
+        `${item.descricao} — ${
+          item.estoque <= 0
+            ? "sem estoque"
+            : `só há ${formatarQuantidade(item.estoque)} ${item.unidade}`
+        }: o saldo vai ficar negativo e o gerente será avisado`,
         "erro"
       )
     },
@@ -1182,27 +1176,16 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
 
   const adicionar = useCallback(
     (produto: ProdutoCatalogo, quantidade: number) => {
-      // O estoque da loja é o teto: o que não tem não entra no carrinho, e o
-      // que tem em parte entra até onde dá. A recusa acontece aqui e de novo na
-      // gravação, que é onde ela vale.
+      // Entra mesmo sem estoque: a mercadoria pode ter chegado sem a entrada
+      // lançada. O aviso diz que o saldo vai ficar negativo.
       const jaNoCarrinho =
         venda.itens.find((item) => item.produtoId === produto.id)?.quantidade ?? 0
-      const cabe = quantidadeQueCabe(produto.estoque, jaNoCarrinho)
 
-      if (cabe <= 0) {
-        avisarSemEstoque(produto)
-        return
-      }
-
-      const entra = Math.min(quantidade, cabe)
-      despachar({ tipo: "adicionar", produto, quantidade: entra })
+      despachar({ tipo: "adicionar", produto, quantidade })
       setEntrada("")
 
-      if (entra < quantidade) {
-        avisar(
-          `${produto.descricao} · entraram ${formatarQuantidade(entra)} ${produto.unidade} — o estoque de ${formatarQuantidade(produto.estoque)} não cobre ${formatarQuantidade(quantidade)}`,
-          "erro"
-        )
+      if (passaDoEstoque(produto.estoque, jaNoCarrinho + quantidade)) {
+        avisarSemEstoque(produto)
         return
       }
 
@@ -1580,9 +1563,9 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       // seria ressuscitar do carrinho o que saiu do catálogo.
       if (!produto) continue
 
-      const entra = Math.min(item.quantidade, quantidadeQueCabe(produto.estoque, 0))
-      if (entra < item.quantidade) faltaram.push(produto.descricao)
-      if (entra > 0) despachar({ tipo: "adicionar", produto, quantidade: entra })
+      // Volta inteiro; o que passar do estoque fica negativo, com aviso.
+      if (passaDoEstoque(produto.estoque, item.quantidade)) faltaram.push(produto.descricao)
+      despachar({ tipo: "adicionar", produto, quantidade: item.quantidade })
     }
     if (retomada.desconto > 0) {
       despachar({ tipo: "definirDesconto", valor: retomada.desconto })
@@ -1611,7 +1594,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
 
     avisar(
       faltaram.length > 0
-        ? `${feito} · o estoque não cobre tudo: confira ${faltaram.join(", ")}`
+        ? `${feito} · sem estoque suficiente, vai ficar negativo: ${faltaram.join(", ")}`
         : feito,
       faltaram.length > 0 ? "erro" : "sucesso"
     )
@@ -1974,10 +1957,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
         return
       }
       const alvo: ItemVenda | undefined = venda.itens[venda.indiceAtivo]
-      if (alvo && valor > alvo.estoque) {
-        avisarSemEstoque(alvo)
-        return
-      }
+      if (alvo && passaDoEstoque(alvo.estoque, valor)) avisarSemEstoque(alvo)
       despachar({ tipo: "definirQuantidade", indice: venda.indiceAtivo, quantidade: valor })
       voltarParaBusca()
       return
@@ -2210,9 +2190,8 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       if (key === "+" || key === "-") {
         evento.preventDefault()
         const alvo: ItemVenda | undefined = venda.itens[venda.indiceAtivo]
-        if (key === "+" && alvo && alvo.quantidade >= alvo.estoque) {
+        if (key === "+" && alvo && passaDoEstoque(alvo.estoque, alvo.quantidade + 1)) {
           avisarSemEstoque(alvo)
-          return
         }
         despachar({ tipo: "ajustarQuantidade", delta: key === "+" ? 1 : -1 })
         return

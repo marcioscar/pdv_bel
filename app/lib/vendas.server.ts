@@ -9,7 +9,7 @@ import { caixaAberto } from "~/lib/caixa.server"
 import { validarCpf } from "~/lib/documento"
 import { db } from "~/lib/db.server"
 import { depoisDoDia, diaAtras, diaDeHoje, inicioDoDia } from "~/lib/dia"
-import { movimentosDeVenda, saldosDosProdutos } from "~/lib/estoque.server"
+import { movimentosDeVenda } from "~/lib/estoque.server"
 import { ultimoCustoPorProduto } from "~/lib/compras.server"
 import { gastarCredito, saldoDeCredito } from "~/lib/creditos.server"
 import { lojaPeloDocumento } from "~/lib/lojas.server"
@@ -17,10 +17,10 @@ import {
   arredondar,
   interpretarValor,
   moeda,
-  quantidade as formatarQuantidade,
   quantidadeInteira,
 } from "~/lib/moeda"
 import { vendedorPorCodigo, type VendedorDoBalcao } from "~/lib/vendedores.server"
+import { registrarAvisosDeNegativo } from "~/lib/estoque-negativo.server"
 import {
   condicaoCabeNoTotal,
   condicaoPorId,
@@ -302,44 +302,6 @@ export async function precificarAoCusto(
 }
 
 /**
- * A recusa por estoque, ou `null` quando a loja cobre o carrinho inteiro.
- *
- * Não se vende o que não existe: o saldo da loja é o teto de cada item. A tela
- * do caixa já impede de passar disso, mas o saldo pode ter mudado entre a
- * montagem do carrinho e o fechamento — outro caixa vendendo a mesma última
- * caixa, uma transferência despachada — e a tela é do outro lado da rede.
- *
- * Fica ANTES da liberação do gerente de propósito: falta de estoque não é coisa
- * que se libere, então não faz sentido mandar o vendedor buscar o gerente para
- * uma venda que não vai fechar de jeito nenhum.
- *
- * A janela entre esta consulta e a gravação é pequena mas existe. Fechá-la de
- * vez pediria reservar o saldo dentro da transação; enquanto o balcão tiver dois
- * caixas por loja, o custo disso não se paga.
- */
-export async function recusaPorFaltaDeEstoque(
-  itens: { produtoId: string; descricao: string; unidade: string; quantidade: number }[],
-  loja: string
-): Promise<string | null> {
-  const saldos = await saldosDosProdutos(
-    itens.map((item) => item.produtoId),
-    loja
-  )
-
-  const faltando = itens.filter((item) => item.quantidade > (saldos.get(item.produtoId) ?? 0))
-  if (faltando.length === 0) return null
-
-  return faltando
-    .map((item) => {
-      const saldo = saldos.get(item.produtoId) ?? 0
-      return saldo <= 0
-        ? `${item.descricao} — sem estoque em ${loja}`
-        : `${item.descricao} — só há ${formatarQuantidade(saldo)} ${item.unidade} em ${loja}`
-    })
-    .join("; ")
-}
-
-/**
  * Os preços vêm do banco, nunca do cliente: o payload só diz *o que* e *quanto*.
  * Assim um total adulterado no navegador não chega a ser gravado.
  */
@@ -367,9 +329,25 @@ export async function registrarVenda(recebidoDaTela: PedidoVenda): Promise<Resul
   if (!validada.ok) return validada
 
   try {
+    const gravada = await gravar(...validada.argumentos)
+
+    // Venda que deixou produto abaixo de zero avisa o gerente. A transferência
+    // entre lojas não baixa estoque aqui (já baixou no despacho), então não entra.
+    const [pedido, itens] = validada.argumentos
+    if (!ehTransferenciaEntreLojas(pedido.forma)) {
+      await registrarAvisosDeNegativo({
+        loja: pedido.loja,
+        itens: itens.map((i) => ({ produtoId: i.produtoId, quantidade: i.quantidade })),
+        origem: "venda",
+        documento: `Venda #${gravada.numero}`,
+        documentoId: gravada.vendaId,
+        operador: pedido.operador,
+      })
+    }
+
     return {
       ok: true,
-      ...(await gravar(...validada.argumentos)),
+      ...gravada,
       total: validada.total,
       troco: validada.troco,
     }
@@ -566,22 +544,11 @@ async function validarVenda(
   }
 
   /*
-   * A falta de estoque não se cobra aqui quando o destino é a rede: quem moveu
-   * a mercadoria foi a transferência, que já baixou o saldo da origem no
-   * despacho. Cobrar de novo recusaria a nota justamente por causa da baixa que
-   * a própria carga fez — e a nota é o papel que acompanha essa carga.
+   * Falta de estoque NÃO recusa a venda (decisão do Marcio, 14/10/2026): a
+   * mercadoria chega quando o gerente não está para dar entrada, e a loja não
+   * pode parar. O saldo fica negativo e o gerente é avisado depois da gravação
+   * (`registrarAvisosDeNegativo`), para lançar a entrada que faltou.
    */
-  /*
-   * Nem no Pix confirmado: o estoque foi cobrado antes de o QR existir, e com
-   * o caixa livre durante a espera outra venda pode ter levado a última peça.
-   * Recusar ali deixaria o dinheiro recebido sem venda, com a mercadoria já
-   * fora da loja — o saldo negativo é o registro certo do que aconteceu.
-   * `pixTxid` só chega aqui pelo servidor, depois de o Inter confirmar.
-   */
-  if (!paraARede && !pedido.pixTxid) {
-    const semEstoque = await recusaPorFaltaDeEstoque(itens, pedido.loja)
-    if (semEstoque) return { ok: false, erro: semEstoque }
-  }
 
   /**
    * A trava do gerente, cobrada AQUI.

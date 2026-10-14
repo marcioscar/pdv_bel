@@ -54,6 +54,7 @@ export default [
       route("estoque", "routes/admin.estoque.tsx"),
       route("ficha", "routes/admin.ficha.tsx"),
       route("perdas", "routes/admin.perdas.tsx"),
+      route("estoque-negativo", "routes/admin.estoque-negativo.tsx"),
       route("compras", "routes/admin.compras.tsx"),
       route("pedido-novo", "routes/admin.pedido-novo.tsx"),
       route("pedidos-de-compra", "routes/admin.pedidos-de-compra.tsx"),
