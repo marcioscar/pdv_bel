@@ -119,6 +119,13 @@ model Produto {
   /// cadastro recusa preencher só um.
   precoCombo      Float?
   quantidadeCombo Float?
+  /// Custo vindo de fora de uma compra registrada aqui — hoje, o do arquivo de
+  /// estoque do sistema antigo. Anda com a data porque é só mais uma fonte do
+  /// "último custo": uma nota ou fornecimento mais novo passa por cima dele
+  /// (ver `ultimoCustoPorProduto`). Sem isto, produto que nunca foi comprado
+  /// por aqui não tinha custo, e a transferência ao custo recusava o produto.
+  custo   Float?
+  custoEm DateTime?
   /// Classificação fiscal (8 dígitos), obrigatória em cada item da NF-e que a
   /// rede emitir. Veio do sistema antigo; opcional porque produto cadastrado
   /// aqui pelo balcão pode nascer sem ela, e travar o cadastro por causa de um

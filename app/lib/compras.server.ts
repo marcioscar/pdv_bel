@@ -526,7 +526,7 @@ export async function ultimoCustoPorProduto(
   const ids = [...new Set(produtoIds)]
   if (ids.length === 0) return new Map()
 
-  const [fornecimentos, entradas] = await Promise.all([
+  const [fornecimentos, entradas, importados] = await Promise.all([
     db.fornecimento.findMany({
       where: {
         produtoId: { in: ids },
@@ -544,6 +544,14 @@ export async function ultimoCustoPorProduto(
       orderBy: { criadoEm: "asc" },
       select: { produtoId: true, custoUnitario: true, criadoEm: true },
     }),
+    db.produto.findMany({
+      where: {
+        id: { in: ids },
+        custo: { gt: 0 },
+        ...(ate ? { custoEm: { lte: ate } } : {}),
+      },
+      select: { id: true, custo: true, custoEm: true },
+    }),
   ])
 
   const mapa = new Map<string, { custo: number; em: Date }>()
@@ -556,6 +564,7 @@ export async function ultimoCustoPorProduto(
 
   for (const f of fornecimentos) considerar(f.produtoId, f.ultimoCusto, f.ultimaCompra)
   for (const e of entradas) considerar(e.produtoId, e.custoUnitario, e.criadoEm)
+  for (const p of importados) if (p.custoEm) considerar(p.id, p.custo, p.custoEm)
 
   return new Map([...mapa].map(([id, { custo }]) => [id, custo]))
 }
