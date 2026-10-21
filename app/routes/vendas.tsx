@@ -805,6 +805,9 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                     Quando
                   </th>
                   <th scope="col" className="px-2 py-2.5 text-left font-semibold">
+                    Cliente
+                  </th>
+                  <th scope="col" className="px-2 py-2.5 text-left font-semibold">
                     Itens
                   </th>
                   <th scope="col" className="w-28 px-2 py-2.5 text-left font-semibold">
@@ -827,7 +830,7 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
               <tbody>
                 {vendas.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-5 py-16 text-center">
+                    <td colSpan={9} className="px-5 py-16 text-center">
                       <Receipt
                         className="mx-auto size-10 text-muted-foreground/40"
                         aria-hidden
@@ -875,6 +878,11 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                             dateStyle: "short",
                             timeStyle: "short",
                           })}
+                        </td>
+                        <td className="max-w-[14rem] truncate px-2 py-2.5 text-xs">
+                          {venda.clienteNome ?? (
+                            <span className="text-muted-foreground">Consumidor Final</span>
+                          )}
                         </td>
                         <td className="px-2 py-2">
                           <ItensDaVenda itens={venda.itens} />
