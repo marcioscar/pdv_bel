@@ -231,6 +231,9 @@ export default function Fechamento({ loaderData, actionData }: Route.ComponentPr
               </Button>
             )}
           </div>
+
+          {/* Fechado, quem vale é o papel do fechamento, logo abaixo. */}
+          {fechado ? null : <BotaoConferencia dia={dia} />}
         </div>
 
         {actionData ? (
@@ -781,6 +784,42 @@ function BotaoComprovante({ id }: { id: string }) {
         <Printer className="size-4" aria-hidden />
       )}
     </Button>
+  )
+}
+
+/** A foto do caixa aberto, para conferir a gaveta no meio do dia sem fechar. */
+function BotaoConferencia({ dia }: { dia: string }) {
+  const [gerando, setGerando] = useState(false)
+  const [erro, setErro] = useState<string | null>(null)
+
+  return (
+    <>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        disabled={gerando}
+        className="ml-auto rounded-lg"
+        title="Imprime a conta do caixa como está agora, com o contado em branco para preencher à mão"
+        onClick={async () => {
+          setGerando(true)
+          setErro(await imprimirDocumento(`/fechamento/parcial?dia=${dia}`))
+          setGerando(false)
+        }}
+      >
+        {gerando ? (
+          <Loader2 className="size-4 animate-spin" aria-hidden />
+        ) : (
+          <Printer className="size-4" aria-hidden />
+        )}
+        Imprimir conferência
+      </Button>
+      {erro ? (
+        <span role="alert" className="text-xs text-destructive">
+          {erro}
+        </span>
+      ) : null}
+    </>
   )
 }
 
