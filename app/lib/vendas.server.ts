@@ -22,6 +22,7 @@ import {
 import { vendedorPorCodigo, type VendedorDoBalcao } from "~/lib/vendedores.server"
 import { registrarAvisosDeNegativo } from "~/lib/estoque-negativo.server"
 import {
+  acrescimoDaCondicao,
   condicaoCabeNoTotal,
   condicaoPorId,
   DIAS_PIX_ENTREGA,
@@ -452,7 +453,16 @@ async function validarVenda(
     ? await precificarAoCusto(pedido.itens)
     : await precificar(pedido.itens, pedido.desconto)
   if (!preco.ok) return { ok: false, erro: preco.erro }
-  const { itens, subtotal, total } = preco
+  const { itens, subtotal } = preco
+
+  /*
+   * O acréscimo do prazo entra no total AQUI, antes de tudo que depende dele:
+   * crédito abatido, parcelas e o próprio valor gravado. Calculado pela
+   * condição do servidor, nunca pelo que a tela mostrou.
+   */
+  const condicaoDoPrazo = pedido.forma === "prazo" ? condicaoPorId(pedido.condicao ?? "") : null
+  const acrescimo = condicaoDoPrazo ? acrescimoDaCondicao(condicaoDoPrazo, preco.total) : 0
+  const total = arredondar(preco.total + acrescimo)
 
   /*
    * Daqui para baixo a transferência segue sem desconto e sem valor recebido.
@@ -614,12 +624,15 @@ async function validarVenda(
       return { ok: false, erro: "Venda a prazo exige cliente (F6 para vincular)" }
     }
 
-    const condicao = condicaoPorId(pedido.condicao ?? "")
+    const condicao = condicaoDoPrazo
     if (!condicao) return { ok: false, erro: "Escolha a condição de pagamento" }
+    if (!condicao.ativa) {
+      return { ok: false, erro: `${condicao.rotulo} não é mais praticado — escolha outra condição` }
+    }
 
     // O mínimo do Inter vale por boleto, então o que decide é a menor parcela,
     // não o total: R$ 6,00 em 3× daria três boletos de R$ 2,00, todos recusados.
-    if (!condicaoCabeNoTotal(condicao, total)) {
+    if (!condicaoCabeNoTotal(condicao, preco.total)) {
       const menor = Math.min(...dividirParcelas(total, condicao.dias.length))
       return {
         ok: false,
@@ -665,7 +678,7 @@ async function validarVenda(
     troco,
     argumentos: [
       pedido, itens, subtotal, total, troco, cliente, vencimento, condicaoId, autorizacaoAUsar,
-      vendedor, creditoUsado,
+      vendedor, creditoUsado, acrescimo,
     ],
   }
 }
@@ -705,7 +718,9 @@ async function gravar(
   autorizacaoId: string | null,
   /** Null na transferência entre lojas: não há comissão a creditar. */
   vendedor: VendedorDoBalcao | null,
-  creditoUsado: number
+  creditoUsado: number,
+  /** O acréscimo do prazo, já somado em `total`. */
+  acrescimo: number
 ): Promise<{ numero: number; vendaId: string }> {
   for (let tentativa = 0; tentativa < 25; tentativa++) {
     // O $inc fica FORA da transação de propósito: dentro dela, o rollback de uma
@@ -723,7 +738,7 @@ async function gravar(
     try {
       return await gravarUmaVez(
         contador.valor, pedido, itens, subtotal, total, troco, cliente, vencimento, condicao,
-        autorizacaoId, vendedor, creditoUsado
+        autorizacaoId, vendedor, creditoUsado, acrescimo
       )
     } catch (erro) {
       if (!ehColisaoDeNumero(erro)) throw erro
@@ -745,7 +760,9 @@ async function gravarUmaVez(
   autorizacaoId: string | null,
   /** Null na transferência entre lojas: não há comissão a creditar. */
   vendedor: VendedorDoBalcao | null,
-  creditoUsado: number
+  creditoUsado: number,
+  /** O acréscimo do prazo, já somado em `total`. */
+  acrescimo: number
 ): Promise<{ numero: number; vendaId: string }> {
   // A venda e as baixas de estoque caem juntas ou não caem: uma venda gravada
   // sem seus movimentos deixaria o saldo derivado errado para sempre.
@@ -761,6 +778,7 @@ async function gravarUmaVez(
         itens,
         subtotal,
         desconto: pedido.desconto,
+        acrescimo: acrescimo || null,
         total,
         forma: pedido.forma,
         creditoUsado,

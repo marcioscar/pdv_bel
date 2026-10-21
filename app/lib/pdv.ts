@@ -436,18 +436,42 @@ export const DIAS_ATE_CANCELAR_BOLETO = 60
  *
  * `dias` com mais de um elemento é parcelamento — cada parcela vira um boleto
  * com o seu próprio vencimento.
+ *
+ * Política de 21/10/2026: 15 dias sai pelo preço à vista; os demais prazos
+ * levam 4% sobre o total (já com o desconto). O acréscimo entra no total da
+ * venda — é ele que se divide nos boletos e que vai para a nota.
+ *
+ * As condições aposentadas continuam aqui com `ativa: false`: vendas antigas
+ * apontam para elas, e o rótulo e os vencimentos dessas vendas saem daqui.
  */
 export const CONDICOES_PAGAMENTO = [
-  { id: "7", rotulo: "7 dias", dias: [7] },
-  { id: "21", rotulo: "21 dias", dias: [21] },
-  { id: "28", rotulo: "28 dias", dias: [28] },
-  { id: "3x", rotulo: "3× — 21, 28 e 35 dias", dias: [21, 28, 35] },
+  { id: "15", rotulo: "15 dias", dias: [15], acrescimo: 0, ativa: true },
+  { id: "21", rotulo: "21 dias", dias: [21], acrescimo: 4, ativa: true },
+  { id: "28", rotulo: "28 dias", dias: [28], acrescimo: 4, ativa: true },
+  { id: "45", rotulo: "45 dias", dias: [45], acrescimo: 4, ativa: true },
+  { id: "3x", rotulo: "3× — 21, 28 e 35 dias", dias: [21, 28, 35], acrescimo: 4, ativa: true },
+  { id: "3x28", rotulo: "3× — 28, 35 e 42 dias", dias: [28, 35, 42], acrescimo: 4, ativa: true },
+  { id: "2x30", rotulo: "2× — 30 e 60 dias", dias: [30, 60], acrescimo: 4, ativa: true },
+  { id: "7", rotulo: "7 dias", dias: [7], acrescimo: 0, ativa: false },
 ] as const
 
 export type CondicaoPagamento = (typeof CONDICOES_PAGAMENTO)[number]
 
+/** O que o vendedor pode escolher hoje. */
+export const CONDICOES_ATIVAS = CONDICOES_PAGAMENTO.filter((c) => c.ativa)
+
 export function condicaoPorId(id: string): CondicaoPagamento | null {
   return CONDICOES_PAGAMENTO.find((c) => c.id === id) ?? null
+}
+
+/** O acréscimo do prazo em reais, sobre o total à vista. */
+export function acrescimoDaCondicao(condicao: CondicaoPagamento, totalAVista: number) {
+  return Math.round(totalAVista * condicao.acrescimo) / 100
+}
+
+/** O total da venda nesta condição: à vista mais o acréscimo do prazo. */
+export function totalDaCondicao(condicao: CondicaoPagamento, totalAVista: number) {
+  return Math.round((totalAVista + acrescimoDaCondicao(condicao, totalAVista)) * 100) / 100
 }
 
 /** Vencimentos de uma condição, ao meio-dia para o fuso não empurrar o dia. */
@@ -472,9 +496,12 @@ export function dividirParcelas(total: number, quantidade: number): number[] {
   return Array.from({ length: quantidade }, (_, i) => (base + (i === 0 ? sobra : 0)) / 100)
 }
 
-/** O Inter recusa boleto abaixo de R$ 2,50 — e o limite vale POR parcela. */
-export function condicaoCabeNoTotal(condicao: CondicaoPagamento, total: number) {
-  return dividirParcelas(total, condicao.dias.length).every(
+/**
+ * O Inter recusa boleto abaixo de R$ 2,50 — e o limite vale POR parcela.
+ * Recebe o total À VISTA: o acréscimo da condição é aplicado aqui dentro.
+ */
+export function condicaoCabeNoTotal(condicao: CondicaoPagamento, totalAVista: number) {
+  return dividirParcelas(totalDaCondicao(condicao, totalAVista), condicao.dias.length).every(
     (valor) => valor >= VALOR_MINIMO_BOLETO
   )
 }
@@ -490,6 +517,7 @@ export type Parcela = { parcela: number; valor: number; vencimento: Date }
  */
 export function parcelasDaCondicao(
   condicao: CondicaoPagamento,
+  /** O total da venda, JÁ com o acréscimo do prazo (`totalDaCondicao`). */
   total: number,
   base = new Date()
 ): Parcela[] {

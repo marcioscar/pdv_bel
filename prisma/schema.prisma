@@ -569,6 +569,10 @@ model Venda {
   pixPagoEm      DateTime?
   subtotal Float
   desconto Float      @default(0)
+  /// O acréscimo do prazo do boleto (`acrescimo` da condição, em reais), já
+  /// dentro do `total`: subtotal − desconto + acréscimo = total. Opcional
+  /// porque as vendas anteriores a 21/10/2026 não têm o campo.
+  acrescimo Float?
   total    Float
   /// Um dos ids de FORMAS_PAGAMENTO em app/lib/pdv.ts — a lista canônica vive lá
   /// para não haver duas fontes da verdade a manter em sincronia.

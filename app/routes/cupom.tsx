@@ -161,6 +161,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   <table>
     <tr><td>Subtotal</td><td class="dir">${moeda(venda.subtotal)}</td></tr>
     ${venda.desconto > 0 ? `<tr><td>Desconto</td><td class="dir">- ${moeda(venda.desconto)}</td></tr>` : ""}
+    ${venda.acrescimo ? `<tr><td>Acr&eacute;scimo do prazo</td><td class="dir">+ ${moeda(venda.acrescimo)}</td></tr>` : ""}
     <tr class="total"><td>TOTAL</td><td class="dir">${moeda(venda.total)}</td></tr>
   </table>
 

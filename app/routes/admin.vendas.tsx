@@ -525,6 +525,9 @@ function Detalhe({
         {venda.desconto > 0 ? (
           <Linha rotulo="Desconto" valor={`− ${moeda(venda.desconto)}`} />
         ) : null}
+        {venda.acrescimo ? (
+          <Linha rotulo="Acréscimo do prazo" valor={`+ ${moeda(venda.acrescimo)}`} />
+        ) : null}
         {venda.recebido !== null ? (
           <>
             <Linha rotulo="Recebido" valor={moeda(venda.recebido)} />

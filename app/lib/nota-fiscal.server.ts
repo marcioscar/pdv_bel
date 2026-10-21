@@ -234,6 +234,10 @@ export async function emitirDaVenda(
   // O frete é repartido pelos itens pelo mesmo motivo do desconto: a SEFAZ soma
   // os itens e confere com o total do documento.
   const fretes = ratearProporcional(subtotais, valorFrete)
+  // O acréscimo do prazo do boleto vai como "outras despesas acessórias": o
+  // preço da mercadoria é o de tabela, e a diferença é a condição de pagamento.
+  const acrescimo = arredondar(venda.acrescimo ?? 0)
+  const outras = ratearProporcional(subtotais, acrescimo)
 
   const items = venda.itens.map((item, i) => {
     const produto = porId.get(item.produtoId)!
@@ -254,6 +258,7 @@ export async function emitirDaVenda(
       valor_bruto: arredondar(item.subtotal),
       valor_desconto: descontos[i] || undefined,
       valor_frete: fretes[i] || undefined,
+      valor_outras_despesas: outras[i] || undefined,
       icms_origem: tributacao.origem,
       icms_situacao_tributaria: tributacao.csosn,
       codigo_cest: tributacao.cest ?? undefined,
@@ -308,6 +313,7 @@ export async function emitirDaVenda(
     valor_produtos: valorProdutos,
     valor_desconto: venda.desconto || undefined,
     valor_frete: valorFrete || undefined,
+    valor_outras_despesas: acrescimo || undefined,
     // O frete cobrado entra no total da nota: por isso a nota pode valer mais
     // que a venda, e é isso que a tela avisa antes de emitir.
     valor_total: arredondar(venda.total + valorFrete),

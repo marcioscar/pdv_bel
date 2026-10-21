@@ -8,9 +8,10 @@ import { Separator } from "~/components/ui/separator"
 import { moeda } from "~/lib/moeda"
 import { cn } from "~/lib/utils"
 import {
-  CONDICOES_PAGAMENTO,
+  CONDICOES_ATIVAS,
   condicaoCabeNoTotal,
   parcelasDaCondicao,
+  totalDaCondicao,
   VALOR_MINIMO_BOLETO,
   type CondicaoPagamento,
 } from "~/lib/pdv"
@@ -23,7 +24,7 @@ type Props = {
 }
 
 /**
- * Escolha do prazo. As condições são fixas — o vendedor escolhe uma das quatro,
+ * Escolha do prazo. As condições são fixas — o vendedor escolhe uma da lista,
  * não digita dias. Antes ele digitava, e nada garantia que o prazo combinado com
  * o cliente fosse um dos que a empresa pratica.
  *
@@ -34,7 +35,7 @@ type Props = {
 export function CondicaoDialogo({ total, cliente, onEscolher, onFechar }: Props) {
   // Só o que cabe no total é navegável: uma parcela abaixo do mínimo do Inter
   // seria recusada na emissão, depois de a venda já estar gravada.
-  const disponiveis = CONDICOES_PAGAMENTO.filter((c) => condicaoCabeNoTotal(c, total))
+  const disponiveis = CONDICOES_ATIVAS.filter((c) => condicaoCabeNoTotal(c, total))
   const [indice, setIndice] = useState(0)
 
   useEffect(() => {
@@ -96,9 +97,9 @@ export function CondicaoDialogo({ total, cliente, onEscolher, onFechar }: Props)
         </div>
 
         <p className="mt-1 text-xs text-muted-foreground">
-          {moeda(total)} a prazo para{" "}
+          {moeda(total)} à vista, para{" "}
           <span className="font-medium text-foreground">{cliente.nome}</span> · cada
-          parcela vira um boleto
+          parcela vira um boleto, e prazo acima de 15 dias tem acréscimo
         </p>
 
         <Separator className="my-4" />
@@ -112,7 +113,8 @@ export function CondicaoDialogo({ total, cliente, onEscolher, onFechar }: Props)
           <ul role="listbox" aria-label="Condições" className="space-y-2">
             {disponiveis.map((condicao, i) => {
               const ativa = i === indice
-              const parcelas = parcelasDaCondicao(condicao, total)
+              const totalNoPrazo = totalDaCondicao(condicao, total)
+              const parcelas = parcelasDaCondicao(condicao, totalNoPrazo)
 
               return (
                 <li key={condicao.id} role="option" aria-selected={ativa}>
@@ -132,6 +134,14 @@ export function CondicaoDialogo({ total, cliente, onEscolher, onFechar }: Props)
                       <Kbd className="shrink-0">{i + 1}</Kbd>
                       <span className="flex-1 text-sm font-semibold">
                         {condicao.rotulo}
+                      </span>
+                      {/* O total muda de uma condição para outra: o cliente
+                          precisa ouvir quanto paga antes de escolher. */}
+                      <span className="text-right font-mono text-sm font-semibold tabular-nums">
+                        {moeda(totalNoPrazo)}
+                        <span className="block text-[10px] font-normal text-muted-foreground">
+                          {condicao.acrescimo > 0 ? `+${condicao.acrescimo}%` : "preço à vista"}
+                        </span>
                       </span>
                       <Badge variant="outline" className="font-mono text-[10px]">
                         {parcelas.length === 1
@@ -161,7 +171,7 @@ export function CondicaoDialogo({ total, cliente, onEscolher, onFechar }: Props)
           </ul>
         )}
 
-        {disponiveis.length < CONDICOES_PAGAMENTO.length && disponiveis.length > 0 ? (
+        {disponiveis.length < CONDICOES_ATIVAS.length && disponiveis.length > 0 ? (
           <p className="mt-3 text-[11px] text-muted-foreground">
             Condições ocultas dividiriam {moeda(total)} em parcelas abaixo de{" "}
             {moeda(VALOR_MINIMO_BOLETO)}, o mínimo do boleto.

@@ -80,7 +80,7 @@ import { cn } from "~/lib/utils"
 import {
   buscarProdutos,
   condicaoCabeNoTotal,
-  CONDICOES_PAGAMENTO,
+  CONDICOES_ATIVAS,
   criarIndice,
   FORMA_TRANSFERENCIA,
   FORMAS_DE_CAIXA,
@@ -1880,7 +1880,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
         return
       }
       // Nenhuma condição serve: nem o boleto de uma parcela chega ao mínimo.
-      if (!CONDICOES_PAGAMENTO.some((c) => condicaoCabeNoTotal(c, totais.total))) {
+      if (!CONDICOES_ATIVAS.some((c) => condicaoCabeNoTotal(c, totais.total))) {
         setErroFinalizacao(`Venda a prazo exige no mínimo ${moeda(VALOR_MINIMO_BOLETO)}`)
         return
       }
