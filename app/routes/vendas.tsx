@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { data, useFetcher, useNavigate, useRevalidator, useSearchParams } from "react-router"
+import { data, Link, useFetcher, useNavigate, useRevalidator, useSearchParams } from "react-router"
 import { FileText, Loader2, Mail, Printer, Receipt, Repeat, Undo2 } from "lucide-react"
 
 import type { Route } from "./+types/vendas"
@@ -765,6 +765,18 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
             }
           />
         </div>
+
+        {/* A devolução sem venda mora aqui porque é aqui que se procura a
+            venda — e é quando ela não aparece que este botão serve. */}
+        <Button
+          render={<Link to="/devolucoes/nova" />}
+          nativeButton={false}
+          size="sm"
+          variant="outline"
+          className="ml-auto rounded-lg"
+        >
+          <Undo2 className="size-4" /> Devolução sem venda
+        </Button>
       </div>
 
       {/* Quanto cada um vendeu no que está filtrado — é o que responde "quanto
@@ -1020,35 +1032,36 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
 
                 Os dois ficam ao lado do cancelar porque é a mesma pergunta que
                 traz alguém a esta tela — achar a venda e desfazer parte dela.
+
+                Trocar é do gerente, porque cancela a venda. Devolver é de
+                qualquer um (decisão do Marcio, 22/10/2026): quem atende resolve.
               */}
               {podeCancelar ? (
-                <>
-                  <Button
-                    type="button"
-                    tabIndex={-1}
-                    variant="outline"
-                    size="sm"
-                    disabled={!ativa || Boolean(ativa?.canceladaEm) || cancelando}
-                    title="Cancela esta venda e devolve os itens ao caixa, para refazer com o que o cliente leva"
-                    onClick={() => ativa && trocar(ativa.id)}
-                    className="rounded-lg"
-                  >
-                    <Repeat className="size-4" /> Trocar
-                  </Button>
-                  <Button
-                    type="button"
-                    tabIndex={-1}
-                    variant="outline"
-                    size="sm"
-                    disabled={!ativa || Boolean(ativa?.canceladaEm) || cancelando}
-                    title="Registra a volta de parte da venda, com a venda de pé e nota de devolução"
-                    onClick={() => ativa && devolver(ativa.id)}
-                    className="rounded-lg"
-                  >
-                    <Undo2 className="size-4" /> Devolver
-                  </Button>
-                </>
+                <Button
+                  type="button"
+                  tabIndex={-1}
+                  variant="outline"
+                  size="sm"
+                  disabled={!ativa || Boolean(ativa?.canceladaEm) || cancelando}
+                  title="Cancela esta venda e devolve os itens ao caixa, para refazer com o que o cliente leva"
+                  onClick={() => ativa && trocar(ativa.id)}
+                  className="rounded-lg"
+                >
+                  <Repeat className="size-4" /> Trocar
+                </Button>
               ) : null}
+              <Button
+                type="button"
+                tabIndex={-1}
+                variant="outline"
+                size="sm"
+                disabled={!ativa || Boolean(ativa?.canceladaEm) || cancelando}
+                title="Registra a volta de parte da venda, com a venda de pé e nota de devolução"
+                onClick={() => ativa && devolver(ativa.id)}
+                className="rounded-lg"
+              >
+                <Undo2 className="size-4" /> Devolver
+              </Button>
               {podeCancelar ? (
                 <Button
                   type="button"

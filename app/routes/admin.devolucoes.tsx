@@ -81,6 +81,15 @@ export default function Devolucoes({ loaderData }: Route.ComponentProps) {
         <span className="text-xs text-muted-foreground">
           Mercadoria que voltou depois que a venda virou fato — a venda continua de pé
         </span>
+        <Button
+          render={<Link to="/devolucoes/nova" />}
+          nativeButton={false}
+          size="sm"
+          variant="outline"
+          className="ml-auto rounded-lg"
+        >
+          <Undo2 className="size-4" /> Devolução sem venda
+        </Button>
       </div>
 
       {fetcher.data ? (
@@ -102,7 +111,8 @@ export default function Devolucoes({ loaderData }: Route.ComponentProps) {
           <Undo2 className="mx-auto size-10 text-muted-foreground/40" aria-hidden />
           <p className="mt-3 text-sm text-muted-foreground">
             Nenhuma devolução registrada. Ela nasce na tela de Vendas, na venda que o
-            cliente trouxe de volta.
+            cliente trouxe de volta — ou em “Devolução sem venda”, quando a venda
+            não se acha.
           </p>
         </div>
       ) : (
@@ -114,12 +124,18 @@ export default function Devolucoes({ loaderData }: Route.ComponentProps) {
                 <Badge variant="outline" className="font-mono text-[10px]">
                   {d.loja}
                 </Badge>
-                <Link
-                  to={`/vendas?numero=${d.vendaNumero}`}
-                  className="text-xs underline decoration-dotted underline-offset-2"
-                >
-                  venda #{d.vendaNumero}
-                </Link>
+                {d.vendaNumero !== null ? (
+                  <Link
+                    to={`/vendas?numero=${d.vendaNumero}`}
+                    className="text-xs underline decoration-dotted underline-offset-2"
+                  >
+                    venda #{d.vendaNumero}
+                  </Link>
+                ) : (
+                  <Badge variant="secondary" className="text-[10px]">
+                    sem venda
+                  </Badge>
+                )}
                 <span className="text-xs text-muted-foreground">
                   {new Date(d.criadaEm).toLocaleString("pt-BR", {
                     dateStyle: "short",
@@ -147,7 +163,13 @@ export default function Devolucoes({ loaderData }: Route.ComponentProps) {
               </p>
 
               <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-border pt-2">
-                {d.nota?.status === "autorizado" ? (
+                {/* Sem venda não há nota de origem, e a de devolução existe
+                    para referenciá-la: o botão só prometeria um erro. */}
+                {d.vendaId === null ? (
+                  <span className="text-xs text-muted-foreground">
+                    Sem NF-e de devolução — não há nota de origem a referenciar
+                  </span>
+                ) : d.nota?.status === "autorizado" ? (
                   <Badge variant="outline" className="text-[10px]">
                     NF-e {d.nota.numero} autorizada
                   </Badge>

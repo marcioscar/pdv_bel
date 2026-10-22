@@ -27,8 +27,11 @@ export default [
   route("vendas/:vendaId/pix-entrega", "routes/pix.entrega.tsx"),
   // A devolução nasce na venda — é dela que vêm os itens, o preço praticado e a
   // chave da nota a referenciar. Fica no turno porque acontece com o cliente na
-  // frente; a guarda de gerente é cobrada na própria rota.
+  // frente; qualquer usuário registra, e o gerente confere em Devoluções.
   route("vendas/:vendaId/devolucao", "routes/devolucao.tsx"),
+  // A devolução quando a venda não se acha (outra loja, cupom perdido): o
+  // preço vem do catálogo e o valor vira crédito do cliente.
+  route("devolucoes/nova", "routes/devolucao.sem-venda.tsx"),
   // O DANFE servido daqui: o caixa imprime buscando do próprio sistema, e o
   // navegador não tem como buscar direto na Focus.
   route("notas/:notaId/danfe", "routes/nota.danfe.tsx"),

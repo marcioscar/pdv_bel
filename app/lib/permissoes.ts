@@ -413,8 +413,9 @@ export function secaoAdminDoCaminho(pathname: string): SecaoAdmin | null {
  */
 export const ACOES_DE_GERENTE = {
   cancelarVenda: "Só gerente cancela venda — o cancelamento estorna o estoque",
+  // Registrar é de qualquer um; o gerente confere e emite a nota na lista.
   devolverMercadoria:
-    "Só gerente registra devolução — volta mercadoria ao estoque e dinheiro à mão do cliente",
+    "Só gerente confere as devoluções e emite a nota de entrada",
   inventario: "Só gerente faz inventário — o ajuste reescreve o saldo contado",
   baixarBoleto:
     "Só gerente dá baixa em boleto — ela cancela a cobrança no Inter",

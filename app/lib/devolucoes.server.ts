@@ -290,3 +290,146 @@ export function listarDevolucoes(lojas: string[], limite = 60) {
     take: limite,
   })
 }
+
+/** Uma linha da devolução sem venda: o produto, quanto voltou e por quanto. */
+export type ItemSemVenda = { produtoId: string; quantidade: number; preco: number }
+
+/**
+ * A devolução SEM venda: o cliente volta com a mercadoria e a venda não se
+ * acha — perdeu o cupom, comprou em outra loja, comprou no sistema antigo.
+ *
+ * O que muda em relação à devolução de uma venda, e por quê:
+ *
+ * - **O preço** é o do catálogo de hoje, e o gerente pode BAIXAR (o cliente
+ *   pagou em promoção, o produto subiu desde então), nunca subir. Sem a venda
+ *   não há preço praticado a ler, e um teto é o que impede o crédito de virar
+ *   um número livre.
+ * - **O valor vira crédito do cliente**, e só isso. Dinheiro saindo da gaveta
+ *   por mercadoria sem venda que a explique é o desvio que a devolução comum
+ *   evita lendo o preço da venda. Com o crédito, a troca acontece sozinha: a
+ *   venda nova abate o saldo, e o cliente paga só a diferença.
+ * - **O estoque volta para a loja onde a mercadoria entrou** — é onde ela está
+ *   fisicamente, seja qual for a loja da compra.
+ * - **Não há nota de devolução**: ela referencia a nota de origem, e aqui não
+ *   existe uma.
+ */
+export async function registrarDevolucaoSemVenda(entrada: {
+  loja: string
+  clienteId: string
+  itens: ItemSemVenda[]
+  motivo: string
+  operador: string
+}): Promise<ResultadoDevolucao> {
+  const motivo = entrada.motivo.trim()
+  if (!motivo) return { ok: false, erro: "Diga por que a mercadoria voltou" }
+
+  // Crédito é de alguém: sem cadastro não há onde pôr o saldo.
+  if (!OBJECT_ID.test(entrada.clienteId)) {
+    return { ok: false, erro: "Escolha o cliente — o valor vira crédito dele" }
+  }
+  const cliente = await db.cliente.findUnique({ where: { id: entrada.clienteId } })
+  if (!cliente) return { ok: false, erro: "Cliente não encontrado" }
+
+  const pedidos = entrada.itens.filter((i) => i.quantidade > 0)
+  if (pedidos.length === 0) return { ok: false, erro: "Escolha o que está voltando" }
+  if (new Set(pedidos.map((i) => i.produtoId)).size !== pedidos.length) {
+    return { ok: false, erro: "O mesmo produto aparece duas vezes — junte numa linha só" }
+  }
+  if (pedidos.some((i) => !OBJECT_ID.test(i.produtoId))) {
+    return { ok: false, erro: "Produto inválido" }
+  }
+
+  const produtos = await db.produto.findMany({
+    where: { id: { in: pedidos.map((i) => i.produtoId) } },
+    select: { id: true, codigo: true, descricao: true, unidade: true, preco: true },
+  })
+  const porId = new Map(produtos.map((p) => [p.id, p]))
+
+  const itens: ItemGravado[] = []
+  for (const pedido of pedidos) {
+    const produto = porId.get(pedido.produtoId)
+    if (!produto) return { ok: false, erro: "Produto não encontrado" }
+    if (!Number.isInteger(pedido.quantidade)) return { ok: false, erro: QUANTIDADE_INTEIRA }
+
+    // O teto é o catálogo, lido aqui: o navegador só pode pedir menos.
+    const preco = arredondar(pedido.preco)
+    if (!(preco > 0)) return { ok: false, erro: `${produto.descricao}: informe o preço` }
+    if (preco > arredondar(produto.preco)) {
+      return {
+        ok: false,
+        erro: `${produto.descricao}: o preço não passa do catálogo (${produto.preco.toFixed(2).replace(".", ",")})`,
+      }
+    }
+
+    itens.push({
+      produtoId: produto.id,
+      codigo: produto.codigo,
+      descricao: produto.descricao,
+      unidade: produto.unidade,
+      preco,
+      quantidade: pedido.quantidade,
+      subtotal: arredondar(preco * pedido.quantidade),
+    })
+  }
+
+  const total = arredondar(itens.reduce((soma, i) => soma + i.subtotal, 0))
+
+  // A mesma numeração da devolução comum: é o mesmo documento, só sem venda.
+  const contador = await db.contador.upsert({
+    where: { nome: `devolucao:${entrada.loja}` },
+    update: { valor: { increment: 1 } },
+    create: { nome: `devolucao:${entrada.loja}`, valor: 1 },
+  })
+
+  const id = await db.$transaction(async (tx) => {
+    const devolucao = await tx.devolucao.create({
+      data: {
+        numero: contador.valor,
+        loja: entrada.loja,
+        vendaId: null,
+        vendaNumero: null,
+        clienteId: cliente.id,
+        clienteNome: cliente.nome,
+        clienteCpfCnpj: cliente.cpfCnpj,
+        itens,
+        total,
+        motivo,
+        operador: entrada.operador,
+      },
+    })
+
+    await tx.movimentoEstoque.createMany({
+      data: itens.map((item) => ({
+        produtoId: item.produtoId,
+        loja: entrada.loja,
+        tipo: "devolucao" satisfies TipoMovimento,
+        quantidade: item.quantidade,
+        operador: entrada.operador,
+        devolucaoId: devolucao.id,
+        devolucaoNumero: devolucao.numero,
+        observacao: `Devolução #${devolucao.numero} sem venda: ${motivo}`,
+      })),
+    })
+
+    const credito = await tx.movimentoCredito.create({
+      data: {
+        clienteId: cliente.id,
+        loja: entrada.loja,
+        tipo: "devolucao",
+        valor: total,
+        devolucaoId: devolucao.id,
+        devolucaoNumero: devolucao.numero,
+        operador: entrada.operador,
+        observacao: `Devolução #${devolucao.numero} sem venda: ${motivo}`,
+      },
+    })
+    await tx.devolucao.update({
+      where: { id: devolucao.id },
+      data: { movimentoCreditoId: credito.id },
+    })
+
+    return devolucao.id
+  })
+
+  return { ok: true, numero: contador.valor, id, total }
+}

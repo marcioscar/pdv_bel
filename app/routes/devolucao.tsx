@@ -17,7 +17,8 @@ import {
 } from "~/lib/devolucoes.server"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { rotuloDoPagamento } from "~/lib/pdv"
-import { exigirGerente } from "~/lib/sessao.server"
+import { ehGerente } from "~/lib/permissoes"
+import { exigirUsuario } from "~/lib/sessao.server"
 import { cn } from "~/lib/utils"
 
 export function meta(_: Route.MetaArgs) {
@@ -28,12 +29,14 @@ export function meta(_: Route.MetaArgs) {
  * A devolução de parte de uma venda que já virou fato.
  *
  * Fica no turno, e não na administração, porque acontece com o cliente na
- * frente: ele chega com a mercadoria e o cupom, e quem atende resolve ali. A
- * guarda de gerente é cobrada na rota, como no cancelamento — é ele que
- * responde pelo dinheiro que sai da gaveta.
+ * frente: ele chega com a mercadoria e o cupom, e quem atende resolve ali.
+ *
+ * Qualquer usuário registra (decisão do Marcio, 22/10/2026): o vendedor que
+ * atende não precisa ir buscar o gerente. O documento guarda quem lançou, e a
+ * conferência fica com o gerente, na lista de Devoluções.
  */
 export async function loader({ params, request }: Route.LoaderArgs) {
-  const eu = await exigirGerente(request, "devolverMercadoria")
+  const eu = await exigirUsuario(request)
 
   const venda = await db.venda.findUnique({ where: { id: params.vendaId ?? "" } })
   if (!venda) throw new Response("Venda não encontrada", { status: 404 })
@@ -53,6 +56,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
   return {
     eu: { loja: eu.loja },
+    // A lista de devoluções é do gerente: o link só aparece para quem abre.
+    verLista: ehGerente(eu.papel),
     caixaAberto: await caixaAberto(venda.loja, diaDeHoje()),
     venda: {
       id: venda.id,
@@ -74,7 +79,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 }
 
 export async function action({ params, request }: Route.ActionArgs) {
-  const eu = await exigirGerente(request, "devolverMercadoria")
+  const eu = await exigirUsuario(request)
 
   const form = await request.formData()
   let itens: { produtoId: string; quantidade: number }[] = []
@@ -111,7 +116,7 @@ function destinoValido(valor: string): DestinoDaDevolucao {
 }
 
 export default function Devolucao({ loaderData }: Route.ComponentProps) {
-  const { venda, linhas, temNota, caixaAberto: aberto } = loaderData
+  const { venda, linhas, temNota, caixaAberto: aberto, verLista } = loaderData
 
   const [quantidades, setQuantidades] = useState<Record<string, string>>({})
   const [motivo, setMotivo] = useState("")
@@ -158,7 +163,15 @@ export default function Devolucao({ loaderData }: Route.ComponentProps) {
   }
 
   if (fetcher.data?.ok) {
-    return <Pronta numero={fetcher.data.numero} id={fetcher.data.id} total={fetcher.data.total} temNota={temNota} />
+    return (
+      <Pronta
+        numero={fetcher.data.numero}
+        id={fetcher.data.id}
+        total={fetcher.data.total}
+        temNota={temNota}
+        verLista={verLista}
+      />
+    )
   }
 
   return (
@@ -409,11 +422,13 @@ function Pronta({
   id,
   total,
   temNota,
+  verLista,
 }: {
   numero: number
   id: string
   total: number
   temNota: boolean
+  verLista: boolean
 }) {
   return (
     <div className="mx-auto max-w-md p-6 text-center">
@@ -430,12 +445,14 @@ function Pronta({
         </p>
 
         <div className="mt-6 flex flex-col gap-2">
-          <Link
-            to="/admin/devolucoes"
-            className="inline-flex h-10 items-center justify-center rounded-lg bg-primary text-sm font-medium text-primary-foreground"
-          >
-            Ver as devoluções
-          </Link>
+          {verLista ? (
+            <Link
+              to="/admin/devolucoes"
+              className="inline-flex h-10 items-center justify-center rounded-lg bg-primary text-sm font-medium text-primary-foreground"
+            >
+              Ver as devoluções
+            </Link>
+          ) : null}
           <Link
             to="/vendas"
             className="inline-flex h-10 items-center justify-center rounded-lg border border-border text-sm"

@@ -973,10 +973,14 @@ model Devolucao {
   numero Int
   loja   String
 
-  /// A venda de onde a mercadoria saiu. Obrigatória: devolução sem venda é
-  /// entrada de mercadoria, e para isso existe a tela de estoque.
-  vendaId     String @db.ObjectId
-  vendaNumero Int
+  /// A venda de onde a mercadoria saiu, quando se sabe qual é.
+  ///
+  /// Vazia na devolução SEM venda: o cliente volta com a mercadoria e a venda
+  /// não se acha, ou foi feita em outra loja. Aí o preço é o do catálogo (que o
+  /// gerente pode baixar, nunca subir), o valor vira crédito do cliente e não
+  /// há nota de devolução — não existe nota de origem a referenciar.
+  vendaId     String? @db.ObjectId
+  vendaNumero Int?
 
   /// Retrato do cliente no dia, como na venda — o cadastro pode mudar depois.
   clienteId      String? @db.ObjectId

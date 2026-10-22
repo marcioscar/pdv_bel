@@ -573,6 +573,11 @@ export async function emitirDaDevolucao(
 
   const devolucao = await db.devolucao.findUnique({ where: { id: devolucaoId } })
   if (!devolucao) return { ok: false, erro: "Devolução não encontrada" }
+  // Sem venda não há nota de origem, e a de devolução existe para referenciá-la.
+  if (!devolucao.vendaId) {
+    return { ok: false, erro: "Devolução sem venda não tem nota de origem a referenciar" }
+  }
+  const vendaId = devolucao.vendaId
 
   const loja = await db.loja.findUnique({ where: { codigo: devolucao.loja } })
   if (!loja) return { ok: false, erro: `Loja ${devolucao.loja} não cadastrada` }
@@ -591,7 +596,7 @@ export async function emitirDaDevolucao(
    * não existe para a SEFAZ, e referenciá-la derruba esta também.
    */
   const original = await db.notaFiscalEmitida.findFirst({
-    where: { vendaId: devolucao.vendaId, status: "autorizado", chave: { not: null } },
+    where: { vendaId, status: "autorizado", chave: { not: null } },
     orderBy: { criadaEm: "desc" },
   })
   if (!original?.chave) {
@@ -628,7 +633,7 @@ export async function emitirDaDevolucao(
    * ficou gravada na nota. Enquanto as duas leituras usarem o mesmo array, elas
    * concordam.
    */
-  const vendaOriginal = await db.venda.findUnique({ where: { id: devolucao.vendaId } })
+  const vendaOriginal = await db.venda.findUnique({ where: { id: vendaId } })
   if (!vendaOriginal) return { ok: false, erro: "Venda original não encontrada" }
   const numeroDoItemNaOriginal = new Map(
     vendaOriginal.itens.map((item, i) => [item.produtoId, String(i + 1)])

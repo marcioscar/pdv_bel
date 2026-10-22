@@ -164,7 +164,9 @@ export async function comissaoPorVendedor(
    * consulta só para todas elas: a alternativa seria uma por devolução.
    */
   const vendasDasDevolucoes = await db.venda.findMany({
-    where: { id: { in: [...new Set(devolucoes.map((d) => d.vendaId))] } },
+    where: {
+      id: { in: [...new Set(devolucoes.flatMap((d) => (d.vendaId ? [d.vendaId] : [])))] },
+    },
     select: { id: true, vendedorId: true, vendedorNome: true, forma: true, canceladaEm: true },
   })
   const porVendaId = new Map(vendasDasDevolucoes.map((v) => [v.id, v]))
@@ -206,7 +208,8 @@ export async function comissaoPorVendedor(
   }
 
   for (const devolucao of devolucoes) {
-    const venda = porVendaId.get(devolucao.vendaId)
+    // A devolução sem venda não tem vendedor a quem cobrar: não abate nada.
+    const venda = devolucao.vendaId ? porVendaId.get(devolucao.vendaId) : undefined
     // Devolução de venda cancelada não abate nada: a venda já não pagou
     // comissão nenhuma, e abater cobraria do vendedor o que ele não recebeu.
     if (!venda || !venda.vendedorId || venda.canceladaEm) continue
