@@ -174,6 +174,15 @@ export async function receberComNota(
   if (itens.some((i) => i.quantidade > 0 && !Number.isInteger(i.quantidade))) {
     return { ok: false, erro: `${QUANTIDADE_INTEIRA} — confira a conversão da unidade da nota` }
   }
+  // Do XML o custo vem sempre; digitado à mão (nota de resumo), pode faltar —
+  // e entrada sem custo é o que faz o custo médio parar de fechar.
+  if (
+    itens.some(
+      (i) => i.quantidade > 0 && !(typeof i.custoUnitario === "number" && Number.isFinite(i.custoUnitario) && i.custoUnitario >= 0)
+    )
+  ) {
+    return { ok: false, erro: "Todo item precisa do custo unitário da nota" }
+  }
 
   const lancadosPorEstaNota = await db.movimentoEstoque.findMany({
     where: { notaFiscalRecebidaId: notaId, ...(pedidoId ? { pedidoDeCompraId: pedidoId } : {}) },

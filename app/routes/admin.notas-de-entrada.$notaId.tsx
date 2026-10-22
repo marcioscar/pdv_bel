@@ -20,6 +20,7 @@ import { criarFornecedor, lerFornecedor, proximoCodigoDeFornecedor } from "~/lib
 import { resumoDoProcNFe } from "~/lib/sefaz.server"
 import { exigirGerente } from "~/lib/sessao.server"
 import { EntradaDeNota, type RespostaEntrada } from "~/components/pdv/entrada-de-nota"
+import { LancamentoManualDaNota } from "~/components/pdv/lancamento-manual-nota"
 import { percentuaisDaOperacao } from "~/lib/precificacao.server"
 import {
   itensComCustoDaNota,
@@ -56,17 +57,24 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   // A entrada no estoque só existe com o XML completo — sem itens não há o que
   // parear com o catálogo.
   const temItens = Boolean(nota.xml && nota.situacaoXml === "completa")
+  /*
+   * Só o resumo e ainda não recebida: os itens podem ser lançados à mão, do
+   * DANFE que veio com a mercadoria. Precisa do mesmo catálogo, lojas e pedidos
+   * da entrada pelo XML.
+   */
+  const manual = nota.situacaoXml !== "completa" && nota.situacao !== "recebida"
+  const precisaCatalogo = temItens || manual
   const url = new URL(request.url)
   const pedidoId = url.searchParams.get("pedido") ?? ""
 
-  const pedidos = temItens ? await pedidosAbertosDoFornecedor(nota.emitenteCnpj) : []
+  const pedidos = precisaCatalogo ? await pedidosAbertosDoFornecedor(nota.emitenteCnpj) : []
   // Um pedido só em aberto é o caso comum: já vem escolhido, para não obrigar a
   // confirmar o óbvio. Com vários, quem recebeu é que sabe qual é.
   const pedidoEscolhido = pedidoId
     ? (pedidos.find((p) => p.id === pedidoId) ?? null)
     : (pedidos.length === 1 ? pedidos[0] : null)
 
-  const [lojas, catalogo, recebidoAntes] = temItens
+  const [lojas, catalogo, recebidoAntes] = precisaCatalogo
     ? await Promise.all([
         listarLojas(),
         // O catálogo inteiro, e não só os itens do pedido: a nota pode trazer
@@ -84,6 +92,25 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     : [[], [], new Map<string, number>()]
 
   const itensComCusto = temItens ? itensComCustoDaNota(nota.xml!) : []
+
+  /*
+   * A nota de resumo já recebida mostra o que foi lançado à mão — sem XML, é o
+   * único registro dos itens dela, e mora nos movimentos de estoque.
+   */
+  const lancadosAMao =
+    nota.situacaoXml !== "completa" && nota.situacao === "recebida"
+      ? await db.movimentoEstoque.findMany({
+          where: { notaFiscalRecebidaId: nota.id, tipo: "entrada" },
+          select: { produtoId: true, loja: true, quantidade: true, custoUnitario: true },
+        })
+      : []
+  const produtosLancados = lancadosAMao.length
+    ? await db.produto.findMany({
+        where: { id: { in: lancadosAMao.map((m) => m.produtoId) } },
+        select: { id: true, codigo: true, descricao: true, unidade: true },
+      })
+    : []
+  const porProduto = new Map(produtosLancados.map((p) => [p.id, p]))
 
   /*
    * O custo de antes desta nota, por produto: é sobre ele que o preço de hoje
@@ -125,6 +152,13 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     enderecoEmitente,
     codigoSugerido,
     temItens,
+    manual,
+    lancadosAMao: lancadosAMao.map((m) => ({
+      ...m,
+      codigo: porProduto.get(m.produtoId)?.codigo ?? "",
+      descricao: porProduto.get(m.produtoId)?.descricao ?? "Produto removido",
+      unidade: porProduto.get(m.produtoId)?.unidade ?? "",
+    })),
     pedidos: pedidos.map((p) => ({
       id: p.id,
       numero: p.numero,
@@ -260,6 +294,8 @@ export default function DetalheNotaDeEntrada({ loaderData }: Route.ComponentProp
     enderecoEmitente,
     codigoSugerido,
     temItens,
+    manual,
+    lancadosAMao,
     pedidos,
     pedidoEscolhidoId,
     itensComCusto,
@@ -321,7 +357,25 @@ export default function DetalheNotaDeEntrada({ loaderData }: Route.ComponentProp
 
         <div>
           {nota.situacaoXml !== "completa" ? (
-            <SoResumo nota={nota} />
+            manual ? (
+              <>
+                <SoResumo nota={nota} />
+                <LancamentoManualDaNota
+                  notaId={nota.id}
+                  lojaPadrao={nota.loja}
+                  lojas={lojas}
+                  pedidos={pedidos}
+                  catalogo={catalogo}
+                  valorDaNota={nota.valorTotal}
+                />
+              </>
+            ) : (
+              <LancadosAMao
+                itens={lancadosAMao}
+                recebidoEm={nota.recebidoEm ? String(nota.recebidoEm) : null}
+                recebidoPor={nota.recebidoPor}
+              />
+            )
           ) : itensDaNota && itensDaNota.length > 0 ? (
             <div className="overflow-x-auto rounded-lg border">
               <table className="w-full text-xs">
@@ -472,6 +526,66 @@ function SoResumo({
         >
           {resposta.ok ? resposta.mensagem : resposta.erro}
         </p>
+      ) : null}
+    </div>
+  )
+}
+
+/** Os itens de uma nota de resumo que foram lançados à mão, já recebidos. */
+function LancadosAMao({
+  itens,
+  recebidoEm,
+  recebidoPor,
+}: {
+  itens: {
+    produtoId: string
+    codigo: string
+    descricao: string
+    unidade: string
+    loja: string
+    quantidade: number
+    custoUnitario: number | null
+  }[]
+  recebidoEm: string | null
+  recebidoPor: string | null
+}) {
+  return (
+    <div className="rounded-lg border p-4">
+      <p className="text-sm font-medium">Recebida com os itens lançados à mão</p>
+      <p className="mt-0.5 text-xs text-muted-foreground">
+        A SEFAZ só mandou o resumo desta nota.
+        {recebidoEm ? ` Entrada em ${new Date(recebidoEm).toLocaleString("pt-BR")}` : ""}
+        {recebidoPor ? ` por ${recebidoPor}` : ""}.
+      </p>
+      {itens.length > 0 ? (
+        <div className="mt-3 overflow-x-auto rounded-lg border">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b bg-muted/40 text-left text-muted-foreground">
+                <th className="px-2 py-1.5">Código</th>
+                <th className="px-2 py-1.5">Descrição</th>
+                <th className="px-2 py-1.5">Loja</th>
+                <th className="px-2 py-1.5 text-right">Qtd</th>
+                <th className="px-2 py-1.5 text-right">Custo unit.</th>
+              </tr>
+            </thead>
+            <tbody>
+              {itens.map((item, i) => (
+                <tr key={i} className="border-b last:border-0">
+                  <td className="px-2 py-1.5">{item.codigo}</td>
+                  <td className="px-2 py-1.5">{item.descricao}</td>
+                  <td className="px-2 py-1.5">{item.loja}</td>
+                  <td className="px-2 py-1.5 text-right">
+                    {formatarQuantidade(item.quantidade)} {item.unidade}
+                  </td>
+                  <td className="px-2 py-1.5 text-right">
+                    {item.custoUnitario != null ? moeda(item.custoUnitario) : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       ) : null}
     </div>
   )
