@@ -350,8 +350,13 @@ type Recusa = Exclude<ResultadoVenda, { ok: true }>
 type VendaValidada = {
   ok: true
   total: number
-  /** O que falta pagar depois do crédito abatido — é o valor do Pix. */
+  /** O que falta pagar depois do crédito abatido. */
   aPagar: number
+  /**
+   * O valor do QR: o `aPagar` inteiro na venda em Pix, só a linha do Pix na
+   * mista, zero nas outras. Sai daqui, das linhas já conferidas, e não da tela.
+   */
+  pix: number
   troco: number
   argumentos: Parameters<typeof gravar>
 }
@@ -403,10 +408,10 @@ export async function registrarVenda(recebidoDaTela: PedidoVenda): Promise<Resul
 export async function conferirVenda(
   pedido: PedidoVenda,
   opcoes: { antesDoQr?: boolean } = {}
-): Promise<Recusa | { ok: true; total: number; aPagar: number }> {
+): Promise<Recusa | { ok: true; total: number; aPagar: number; pix: number }> {
   const validada = await validarVenda(pedido, opcoes)
   if (!validada.ok) return validada
-  return { ok: true, total: validada.total, aPagar: validada.aPagar }
+  return { ok: true, total: validada.total, aPagar: validada.aPagar, pix: validada.pix }
 }
 
 async function validarVenda(
@@ -428,7 +433,10 @@ async function validarVenda(
    * E um txid já pago, reapresentado numa segunda venda de mesmo total, passava
    * na conferência — o Inter diz que ele foi pago, e foi, uma vez.
    */
-  if (pedido.forma === "pix" && !antesDoQr) {
+  const temPix =
+    pedido.forma === "pix" ||
+    (pedido.forma === FORMA_MISTA && (pedido.pagamentos ?? []).some((p) => p.forma === "pix"))
+  if (temPix && !antesDoQr) {
     if (!pedido.pixTxid) {
       return { ok: false, erro: "Pix só fecha pela cobrança conferida no Inter" }
     }
@@ -737,10 +745,16 @@ async function validarVenda(
   const troco =
     pedido.recebido === null ? 0 : arredondar(Math.max(0, pedido.recebido - (emDinheiro ?? aPagar)))
 
+  const pix =
+    pedido.forma === "pix"
+      ? aPagar
+      : (pedido.pagamentos?.find((p) => p.forma === "pix")?.valor ?? 0)
+
   return {
     ok: true,
     total,
     aPagar,
+    pix,
     troco,
     argumentos: [
       pedido, itens, subtotal, total, troco, cliente, vencimento, condicaoId, autorizacaoAUsar,

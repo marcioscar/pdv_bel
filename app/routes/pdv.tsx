@@ -89,6 +89,7 @@ import {
   FORMAS_PAGAMENTO,
   formaGeraCobranca,
   linhasDaDivisao,
+  temPixNaDivisao,
   VALOR_MINIMO_BOLETO,
   interpretarComando,
   produtosPorCodigo,
@@ -586,8 +587,20 @@ export async function action({ request }: Route.ActionArgs) {
      * Antes cada regra era repetida aqui à mão, e as que ficaram de fora
      * (cliente, liberação, crédito) simplesmente não existiam no Pix.
      */
+    /*
+     * A venda mista com Pix passa por aqui também: o QR cobra só a linha dele,
+     * e as outras partes já foram recebidas no balcão. Qualquer outra forma
+     * que chegue a este caminho vira Pix, como sempre foi.
+     */
+    const mista = pedido.forma === FORMA_MISTA
     const conferida = await conferirVenda(
-      { ...pedido, forma: "pix", loja: eu.loja, caixa: CAIXA, operador: eu.nome },
+      {
+        ...pedido,
+        forma: mista ? FORMA_MISTA : "pix",
+        loja: eu.loja,
+        caixa: CAIXA,
+        operador: eu.nome,
+      },
       { antesDoQr: true }
     )
     if (!conferida.ok) {
@@ -608,8 +621,15 @@ export async function action({ request }: Route.ActionArgs) {
       return data({ ok: false as const, tipo: "pix" as const, erro: conferida.erro }, { status: 400 })
     }
 
-    // O Pix cobra o que falta depois do crédito a favor, não o total.
-    const valorDoPix = conferida.aPagar
+    // O Pix cobra o que falta depois do crédito a favor, não o total — e, na
+    // venda mista, só a parte dele.
+    const valorDoPix = conferida.pix
+    if (mista && valorDoPix <= 0) {
+      return data(
+        { ok: false as const, tipo: "pix" as const, erro: "A divisão não tem parte em Pix" },
+        { status: 400 }
+      )
+    }
     if (valorDoPix <= 0) {
       return data(
         {
@@ -646,7 +666,11 @@ export async function action({ request }: Route.ActionArgs) {
           conta,
           operador: eu.nome,
           total: valorDoPix,
-          pedido: { ...pedido, emitirNota: Boolean((bruto as { emitirNota?: unknown }).emitirNota) },
+          pedido: {
+            ...pedido,
+            forma: mista ? FORMA_MISTA : "pix",
+            emitirNota: Boolean((bruto as { emitirNota?: unknown }).emitirNota),
+          },
           expiracaoSegundos: cobranca.expiracaoSegundos || 900,
         })
       } catch (erro) {
@@ -1029,6 +1053,11 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     motivoPendente: string | null
     /** Pix pago que não virou venda: o dinheiro pode estar na conta. */
     pagoSemVenda?: boolean
+    /**
+     * Na venda mista, a parte que já foi recebida em espécie antes do QR — para
+     * o caixa dar o troco agora e saber o que devolver se o Pix não cair.
+     */
+    dinheiro?: { parte: number; recebido: number } | null
   } | null>(null)
   const [comprovante, setComprovante] = useState<{
     vendaNumero: number
@@ -1244,6 +1273,54 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   )
 
   /**
+   * Gera o QR no balcão: a venda em Pix, ou a mista que tem parte em Pix.
+   *
+   * A venda nasce do pedido guardado com a cobrança, então tudo que a
+   * conferência decidiu vai agora — inclusive, na mista, as linhas e o
+   * dinheiro entregue, que o servidor grava quando o Pix cair.
+   */
+  const gerarPix = useCallback(
+    (valorRecebido: number | null) => {
+      const mista = forma === FORMA_MISTA
+      const linhas = mista ? linhasDaDivisao(divisao) : []
+      const parte = linhas.find((l) => l.forma === "dinheiro")?.valor ?? 0
+      tentativa.current = { recebido: valorRecebido, condicao: null }
+      setPix({
+        cobranca: null,
+        criando: true,
+        erro: null,
+        concluida: null,
+        motivoPendente: null,
+        dinheiro: mista && parte > 0 && valorRecebido !== null ? { parte, recebido: valorRecebido } : null,
+      })
+      fetcher.submit(
+        {
+          intencao: "pixCriar",
+          itens: venda.itens.map((i) => ({ produtoId: i.produtoId, quantidade: i.quantidade })),
+          desconto: totais.desconto,
+          forma: mista ? FORMA_MISTA : "pix",
+          pagamentos: mista ? linhas : null,
+          recebido: mista ? valorRecebido : null,
+          emitirNota,
+          cpfNaNota,
+          vendedorCodigo,
+          clienteId: cliente?.id ?? null,
+          // O Pix cobra o que sobra depois do crédito; o servidor confere o
+          // saldo contra o livro antes de gerar o QR.
+          creditoUsado,
+          // Depois de uma liberação, é ela que deixa o Pix passar pela trava.
+          autorizacaoId,
+        },
+        { method: "post", encType: "application/json" }
+      )
+    },
+    [
+      autorizacaoId, cliente, cpfNaNota, creditoUsado, divisao, emitirNota, fetcher, forma,
+      totais.desconto, venda.itens, vendedorCodigo,
+    ]
+  )
+
+  /**
    * O carrinho como o servidor precisa ver para decidir sobre a liberação — os
    * mesmos campos da venda, porque é a mesma venda que ele vai avaliar.
    */
@@ -1315,16 +1392,24 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
 
     if (resposta.tipo === "pix") {
       if (!resposta.ok) {
-        setPix({ cobranca: null, criando: false, erro: resposta.erro, concluida: null, motivoPendente: null })
+        setPix((atual) => ({
+          cobranca: null,
+          criando: false,
+          erro: resposta.erro,
+          concluida: null,
+          motivoPendente: null,
+          dinheiro: atual?.dinheiro ?? null,
+        }))
         return
       }
-      setPix({
+      setPix((atual) => ({
         cobranca: { ...resposta.cobranca, valor: resposta.total },
         criando: false,
         erro: null,
         concluida: null,
         motivoPendente: null,
-      })
+        dinheiro: atual?.dinheiro ?? null,
+      }))
       return
     }
 
@@ -1486,35 +1571,15 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     refazerAposLiberar.current = false
 
     // O Pix não tem o que refazer: o QR nem chegou a ser criado, porque a trava
-    // é cobrada antes disso. Recomeça o fluxo do zero.
-    if (forma === "pix") {
-      setPix({ cobranca: null, criando: true, erro: null, concluida: null, motivoPendente: null })
-      fetcher.submit(
-        {
-          intencao: "pixCriar",
-          itens: venda.itens.map((i) => ({ produtoId: i.produtoId, quantidade: i.quantidade })),
-          desconto: totais.desconto,
-          forma: "pix",
-          recebido: null,
-          emitirNota,
-          cpfNaNota,
-          vendedorCodigo,
-          clienteId: cliente?.id ?? null,
-          creditoUsado,
-          // A liberação que o gerente acabou de dar: sem ela, o Pix esbarrava
-          // na mesma trava de novo e nunca saía.
-          autorizacaoId,
-        },
-        { method: "post", encType: "application/json" }
-      )
+    // é cobrada antes disso. Recomeça o fluxo do zero — também na venda mista
+    // com parte em Pix, com o dinheiro que já tinha sido informado.
+    if (forma === "pix" || (forma === FORMA_MISTA && temPixNaDivisao(divisao))) {
+      gerarPix(tentativa.current?.recebido ?? null)
       return
     }
 
     concluir(tentativa.current?.recebido ?? null, tentativa.current?.condicao ?? null)
-  }, [
-    autorizacaoId, concluir, fetcher, forma, totais.desconto, venda.itens, emitirNota, cpfNaNota,
-    vendedorCodigo, cliente, creditoUsado,
-  ])
+  }, [autorizacaoId, concluir, divisao, forma, gerarPix])
 
   /**
    * Pergunta a situação do cliente assim que ele entra na venda.
@@ -1855,9 +1920,12 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
         )
         return
       }
+      // Com parte em Pix, a venda só nasce quando o Inter confirmar: o QR
+      // cobra essa parte, e o resto vai junto no pedido guardado.
+      const fechar = temPixNaDivisao(divisao) ? gerarPix : concluir
       const emDinheiro = linhas.find((l) => l.forma === "dinheiro")?.valor ?? 0
       if (emDinheiro === 0) {
-        concluir(null)
+        fechar(null)
         return
       }
       const valor = interpretarValor(recebidoTexto)
@@ -1869,7 +1937,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
         setErroFinalizacao(`Faltam ${moeda(emDinheiro - valor)} na parte em dinheiro`)
         return
       }
-      concluir(valor)
+      fechar(valor)
       return
     }
 
@@ -1896,27 +1964,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     }
     // Pix no balcão: gera a cobrança e espera a confirmação do banco.
     if (forma === "pix") {
-      setPix({ cobranca: null, criando: true, erro: null, concluida: null, motivoPendente: null })
-      fetcher.submit(
-        {
-          intencao: "pixCriar",
-          itens: venda.itens.map((i) => ({ produtoId: i.produtoId, quantidade: i.quantidade })),
-          desconto: totais.desconto,
-          forma: "pix",
-          recebido: null,
-          // A venda nasce deste pedido, guardado com a cobrança: o que for
-          // decidido na conferência precisa ir agora, e não na confirmação.
-          emitirNota,
-          cpfNaNota,
-          vendedorCodigo,
-          clienteId: cliente?.id ?? null,
-          // O Pix cobra o que sobra depois do crédito; o servidor confere o
-          // saldo contra o livro antes de gerar o QR.
-          creditoUsado,
-          autorizacaoId,
-        },
-        { method: "post", encType: "application/json" }
-      )
+      gerarPix(null)
       return
     }
 
@@ -1952,6 +2000,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     emitirNota,
     fetcher,
     forma,
+    gerarPix,
     gravando,
     recebidoTexto,
     totais.desconto,
@@ -2541,6 +2590,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           cancelando={cancelandoPix}
           onLiberar={liberarCaixaDoPix}
           pagoSemVenda={Boolean(pix.pagoSemVenda)}
+          dinheiro={pix.dinheiro ?? null}
           onConcluir={() => {
             if (pix.concluida) avisar(`Venda #${pix.concluida.numero} paga por Pix`, "sucesso")
             setPix(null)

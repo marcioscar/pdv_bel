@@ -385,10 +385,10 @@ export const FORMA_MISTA = "misto"
  * transferência) e continuam sozinhas na venda — misturá-las com dinheiro na
  * gaveta multiplicaria os casos sem ninguém pedir.
  *
- * O Pix fica de fora por enquanto: ele exige o QR conferido no Inter antes de a
- * venda nascer, e esse caminho ainda cobra o total, não uma parte.
+ * O Pix entra como no balcão comum: o QR cobra só a parte dele, e a venda
+ * inteira nasce quando o Inter confirma — com as outras partes já recebidas.
  */
-export const FORMAS_COMBINAVEIS = ["dinheiro", "debito", "credito"] as const
+export const FORMAS_COMBINAVEIS = ["dinheiro", "pix", "debito", "credito"] as const
 
 export function formaCombinavel(forma: string) {
   return (FORMAS_COMBINAVEIS as readonly string[]).includes(forma)
@@ -398,12 +398,12 @@ export function formaCombinavel(forma: string) {
  * O que o caixa digitou na divisão, por forma — texto, como no campo.
  *
  * Uma linha fixa para cada forma combinável, e não uma lista que cresce: são
- * três, e três campos sempre no mesmo lugar se preenchem sem mouse. Vazio é a
+ * quatro, e quatro campos sempre no mesmo lugar se preenchem sem mouse. Vazio é a
  * forma que não entrou.
  */
 export type DivisaoDoPagamento = Record<(typeof FORMAS_COMBINAVEIS)[number], string>
 
-export const DIVISAO_VAZIA: DivisaoDoPagamento = { dinheiro: "", debito: "", credito: "" }
+export const DIVISAO_VAZIA: DivisaoDoPagamento = { dinheiro: "", pix: "", debito: "", credito: "" }
 
 /** As linhas que de fato entraram: as com valor. */
 export function linhasDaDivisao(divisao: DivisaoDoPagamento): PagamentoDaVenda[] {
@@ -411,6 +411,11 @@ export function linhasDaDivisao(divisao: DivisaoDoPagamento): PagamentoDaVenda[]
     const valor = interpretarValor(divisao[forma])
     return valor !== null && valor > 0 ? [{ forma, valor: arredondar(valor) }] : []
   })
+}
+
+/** Se a divisão tem parte em Pix — aí a venda passa pelo QR antes de nascer. */
+export function temPixNaDivisao(divisao: DivisaoDoPagamento) {
+  return linhasDaDivisao(divisao).some((l) => l.forma === "pix")
 }
 
 /** Uma linha do pagamento: espelha `type VendaPagamento` do schema. */

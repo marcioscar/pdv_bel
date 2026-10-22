@@ -14,6 +14,7 @@ import { listarLojas } from "~/lib/lojas.server"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import {
   CONDICOES_PAGAMENTO,
+  FORMA_MISTA,
   FORMAS_PAGAMENTO,
   formaGeraCobranca,
   rotuloDoPagamento,
@@ -426,7 +427,7 @@ export default function AdminVendas({ loaderData }: Route.ComponentProps) {
  * caixa. Sem isso, uma venda em Pix verificada fica igual a uma só marcada como Pix.
  */
 function Pagamento({ venda }: { venda: VendaConsultada }) {
-  if (venda.forma === "pix") {
+  if (venda.forma === "pix" || (venda.forma === FORMA_MISTA && venda.pixTxid)) {
     return venda.pixPagoEm ? (
       <span className="flex items-center gap-1.5">
         <Badge className="text-[10px]">pago</Badge>

@@ -2,6 +2,7 @@ import type { Route } from "./+types/comprovante.pix"
 import { db } from "~/lib/db.server"
 import { formatarCpfCnpj } from "~/lib/documento"
 import { escapar } from "~/lib/html"
+import { pagamentosDaVenda } from "~/lib/pdv"
 import { contaDaLoja, dadosDaLoja } from "~/lib/lojas.server"
 import { moeda } from "~/lib/moeda"
 import { consultarPixImediato } from "~/lib/pix.server"
@@ -37,7 +38,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   if (!podeVerDaLoja(eu, venda.loja)) {
     throw new Response(`Venda da loja ${venda.loja}`, { status: 403 })
   }
-  if (venda.forma !== "pix" || !venda.pixTxid) {
+  // Pelo txid, e não pela forma: a venda mista com parte em Pix também tem um.
+  if (!venda.pixTxid) {
     throw new Response(`A venda #${venda.numero} não foi paga em Pix`, { status: 400 })
   }
 
@@ -62,7 +64,11 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   }
 
   const pagoEm = doBanco?.pagoEm ? new Date(doBanco.pagoEm) : venda.pixPagoEm
-  const valorPago = doBanco?.valorPago ?? venda.total
+  // Sem o banco, a linha do Pix: na venda mista ele pagou só uma parte.
+  const valorPago =
+    doBanco?.valorPago ??
+    pagamentosDaVenda(venda).find((p) => p.forma === "pix")?.valor ??
+    venda.total
 
   const logo = loja.logo ? new URL(loja.logo, request.url).href : null
 

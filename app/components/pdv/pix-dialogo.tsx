@@ -42,6 +42,11 @@ type Props = {
    * monitor com o celular. Devolve o erro, se houver, para aparecer aqui.
    */
   onImprimir: () => Promise<string | null>
+  /**
+   * Na venda mista, o dinheiro já recebido no balcão antes do QR. O troco sai
+   * agora, e o que fica na gaveta é da venda — que só existe se o Pix cair.
+   */
+  dinheiro?: { parte: number; recebido: number } | null
 }
 
 export function PixDialogo({
@@ -58,6 +63,7 @@ export function PixDialogo({
   pagoSemVenda,
   onConcluir,
   onImprimir,
+  dinheiro = null,
 }: Props) {
   const [copiado, setCopiado] = useState(false)
   const [imprimindo, setImprimindo] = useState(false)
@@ -117,7 +123,9 @@ export function PixDialogo({
             <p className="mt-2 text-xs text-muted-foreground">
               {pagoSemVenda
                 ? "O dinheiro pode já estar na conta. Confira o extrato do Inter e chame o gerente antes de cobrar de novo — o caso fica no aviso do canto."
-                : "Nenhuma venda foi gravada. Tente de novo ou escolha outra forma de pagamento."}
+                : dinheiro
+                  ? `Nenhuma venda foi gravada — devolva ao cliente os ${moeda(dinheiro.parte)} recebidos em dinheiro, ou tente de novo.`
+                  : "Nenhuma venda foi gravada. Tente de novo ou escolha outra forma de pagamento."}
             </p>
           </div>
         ) : concluida ? (
@@ -143,6 +151,22 @@ export function PixDialogo({
               <div className="font-mono text-3xl font-bold tabular-nums">
                 {moeda(cobranca.valor)}
               </div>
+              {/* A venda mista só nasce quando o Pix cai: o dinheiro já está na
+                  mão do caixa, e ele precisa saber o troco agora e o que
+                  devolver se o cliente desistir. */}
+              {dinheiro ? (
+                <p className="mx-auto mt-2 max-w-xs rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs leading-relaxed">
+                  Mais <b>{moeda(dinheiro.parte)}</b> em dinheiro
+                  {dinheiro.recebido > dinheiro.parte ? (
+                    <>
+                      {" "}· troco <b>{moeda(dinheiro.recebido - dinheiro.parte)}</b>
+                    </>
+                  ) : null}
+                  <span className="block text-muted-foreground">
+                    Se o Pix não for pago, devolva os {moeda(dinheiro.parte)}.
+                  </span>
+                </p>
+              ) : null}
               {cobranca.pixQrCode ? (
                 <img
                   src={cobranca.pixQrCode}

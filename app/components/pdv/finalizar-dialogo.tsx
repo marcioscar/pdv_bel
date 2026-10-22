@@ -791,7 +791,7 @@ export function FinalizarDialogo({
           </div>
         ) : dividido ? (
           /*
-            Uma linha fixa por forma, e não "adicionar forma": são três, e
+            Uma linha fixa por forma, e não "adicionar forma": são quatro, e
             campos sempre no mesmo lugar se preenchem só com Tab. O restante
             fica embaixo, à vista, porque é ele que diz se a venda fecha.
           */

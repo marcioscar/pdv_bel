@@ -36,6 +36,7 @@ import { interpretarValor, moeda } from "~/lib/moeda"
 import { ACOES_DE_GERENTE, ehGerente } from "~/lib/permissoes"
 import {
   ehTransferenciaEntreLojas,
+  FORMA_MISTA,
   FORMAS_PAGAMENTO,
   formaGeraCobranca,
   rotuloDoPagamento,
@@ -912,7 +913,7 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                           {/* Distingue pagamento CONFIRMADO pelo banco de pagamento
                               apenas declarado no caixa. Sem isso, uma venda em Pix
                               verificada ficava igual a uma só marcada como Pix. */}
-                          {venda.forma === "pix" ? (
+                          {venda.forma === "pix" || (venda.forma === FORMA_MISTA && venda.pixTxid) ? (
                             venda.pixPagoEm ? (
                               <span className="flex items-center gap-1.5">
                                 <Badge className="text-[10px]">pago</Badge>

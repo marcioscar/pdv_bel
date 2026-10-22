@@ -8,6 +8,7 @@ import {
   removerPixImediato,
   type PixImediato,
 } from "~/lib/pix.server"
+import { FORMA_MISTA } from "~/lib/pdv"
 import { conferirVenda, registrarVenda, type PedidoRecebido } from "~/lib/vendas.server"
 import { conferirPixDasEntregas } from "~/lib/pix-entrega.server"
 
@@ -180,10 +181,16 @@ async function gravar(p: PixPendente, pix: PixImediato): Promise<PixPendente> {
 
     const { emitirNota, ...pedido } = p.pedido as unknown as PedidoDoPix
 
+    /*
+     * A venda mista guarda as próprias linhas e o dinheiro entregue no balcão:
+     * o Pix pagou só a parte dele, e o resto já estava na gaveta ou na
+     * maquininha. As outras viram Pix inteiro, como sempre.
+     */
+    const mista = pedido.forma === FORMA_MISTA
     const pedidoDaVenda = {
       ...pedido,
-      forma: "pix",
-      recebido: p.total,
+      forma: mista ? FORMA_MISTA : "pix",
+      recebido: mista ? pedido.recebido : p.total,
       pixTxid: p.txid,
       pixPagoEm: pagoEm,
       loja: p.loja,
@@ -199,10 +206,10 @@ async function gravar(p: PixPendente, pix: PixImediato): Promise<PixPendente> {
      */
     const conferida = await conferirVenda(pedidoDaVenda)
     if (!conferida.ok) return concluir({ situacao: "falhou", erro: conferida.erro })
-    if (Math.round(conferida.aPagar * 100) !== Math.round(p.total * 100)) {
+    if (Math.round(conferida.pix * 100) !== Math.round(p.total * 100)) {
       return concluir({
         situacao: "falhou",
-        erro: `O valor mudou depois do QR: cobrado ${p.total.toFixed(2)}, hoje daria ${conferida.aPagar.toFixed(2)}`,
+        erro: `O valor mudou depois do QR: cobrado ${p.total.toFixed(2)}, hoje daria ${conferida.pix.toFixed(2)}`,
       })
     }
 
