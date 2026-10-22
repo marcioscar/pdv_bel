@@ -1,3 +1,4 @@
+import { caixaAberto } from "~/lib/caixa.server"
 import { db } from "~/lib/db.server"
 import { arredondar, QUANTIDADE_INTEIRA } from "~/lib/moeda"
 import type { TipoMovimento } from "~/lib/estoque.server"
@@ -304,10 +305,12 @@ export type ItemSemVenda = { produtoId: string; quantidade: number; preco: numbe
  *   pagou em promoção, o produto subiu desde então), nunca subir. Sem a venda
  *   não há preço praticado a ler, e um teto é o que impede o crédito de virar
  *   um número livre.
- * - **O valor vira crédito do cliente**, e só isso. Dinheiro saindo da gaveta
- *   por mercadoria sem venda que a explique é o desvio que a devolução comum
- *   evita lendo o preço da venda. Com o crédito, a troca acontece sozinha: a
+ * - **Com cliente, o valor vira crédito dele.** A troca acontece sozinha: a
  *   venda nova abate o saldo, e o cliente paga só a diferença.
+ * - **Consumidor final, sem cadastro, leva em dinheiro da gaveta** (decisão do
+ *   Marcio, 22/10/2026): sem cadastro não há onde guardar crédito. Sai como a
+ *   devolução em espécie da venda comum — exige o caixa aberto e entra no
+ *   fechamento do dia como devolução.
  * - **O estoque volta para a loja onde a mercadoria entrou** — é onde ela está
  *   fisicamente, seja qual for a loja da compra.
  * - **Não há nota de devolução**: ela referencia a nota de origem, e aqui não
@@ -315,20 +318,33 @@ export type ItemSemVenda = { produtoId: string; quantidade: number; preco: numbe
  */
 export async function registrarDevolucaoSemVenda(entrada: {
   loja: string
-  clienteId: string
+  /** Null é consumidor final: o valor sai em dinheiro, não em crédito. */
+  clienteId: string | null
   itens: ItemSemVenda[]
   motivo: string
   operador: string
+  operadorId: string
+  /** O dia do caixa, para a saída em dinheiro do consumidor final. */
+  dia: string
 }): Promise<ResultadoDevolucao> {
   const motivo = entrada.motivo.trim()
   if (!motivo) return { ok: false, erro: "Diga por que a mercadoria voltou" }
 
-  // Crédito é de alguém: sem cadastro não há onde pôr o saldo.
-  if (!OBJECT_ID.test(entrada.clienteId)) {
-    return { ok: false, erro: "Escolha o cliente — o valor vira crédito dele" }
+  let cliente: { id: string; nome: string; cpfCnpj: string } | null = null
+  if (entrada.clienteId) {
+    if (!OBJECT_ID.test(entrada.clienteId)) return { ok: false, erro: "Cliente inválido" }
+    cliente = await db.cliente.findUnique({
+      where: { id: entrada.clienteId },
+      select: { id: true, nome: true, cpfCnpj: true },
+    })
+    if (!cliente) return { ok: false, erro: "Cliente não encontrado" }
+  } else if (!(await caixaAberto(entrada.loja, entrada.dia))) {
+    // Cobrado aqui, e não só na tela: dinheiro não sai de gaveta que não abriu.
+    return {
+      ok: false,
+      erro: `O caixa de ${entrada.loja} não foi aberto hoje — sem ele o dinheiro não sai da gaveta`,
+    }
   }
-  const cliente = await db.cliente.findUnique({ where: { id: entrada.clienteId } })
-  if (!cliente) return { ok: false, erro: "Cliente não encontrado" }
 
   const pedidos = entrada.itens.filter((i) => i.quantidade > 0)
   if (pedidos.length === 0) return { ok: false, erro: "Escolha o que está voltando" }
@@ -388,9 +404,9 @@ export async function registrarDevolucaoSemVenda(entrada: {
         loja: entrada.loja,
         vendaId: null,
         vendaNumero: null,
-        clienteId: cliente.id,
-        clienteNome: cliente.nome,
-        clienteCpfCnpj: cliente.cpfCnpj,
+        clienteId: cliente?.id ?? null,
+        clienteNome: cliente?.nome ?? null,
+        clienteCpfCnpj: cliente?.cpfCnpj ?? null,
         itens,
         total,
         motivo,
@@ -410,6 +426,25 @@ export async function registrarDevolucaoSemVenda(entrada: {
         observacao: `Devolução #${devolucao.numero} sem venda: ${motivo}`,
       })),
     })
+
+    if (!cliente) {
+      const movimento = await tx.movimentoCaixa.create({
+        data: {
+          loja: entrada.loja,
+          dia: entrada.dia,
+          tipo: "devolucao",
+          valor: total,
+          operador: entrada.operador,
+          operadorId: entrada.operadorId,
+          observacao: `Devolução #${devolucao.numero} sem venda (consumidor final)`,
+        },
+      })
+      await tx.devolucao.update({
+        where: { id: devolucao.id },
+        data: { movimentoCaixaId: movimento.id },
+      })
+      return devolucao.id
+    }
 
     const credito = await tx.movimentoCredito.create({
       data: {

@@ -1,13 +1,15 @@
 import { useMemo, useState } from "react"
 import { data, Link, useFetcher } from "react-router"
-import { ArrowLeft, PackageCheck, Plus, Search, Trash2, Undo2, User } from "lucide-react"
+import { ArrowLeft, Banknote, PackageCheck, Plus, Search, Trash2, Undo2, User } from "lucide-react"
 
 import type { Route } from "./+types/devolucao.sem-venda"
 import { EscolhaDeProduto, type ProdutoDoCatalogo } from "~/components/pdv/escolha-de-produto"
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
+import { caixaAberto } from "~/lib/caixa.server"
 import { db } from "~/lib/db.server"
+import { diaDeHoje } from "~/lib/dia"
 import { registrarDevolucaoSemVenda, type ItemSemVenda } from "~/lib/devolucoes.server"
 import { formatarCpfCnpj } from "~/lib/documento"
 import { arredondar, interpretarValor, moeda } from "~/lib/moeda"
@@ -27,8 +29,9 @@ export function meta(_: Route.MetaArgs) {
  * Qualquer usuário registra, como a devolução comum (decisão do Marcio,
  * 22/10/2026). O documento e o crédito guardam quem lançou, e o gerente confere
  * na lista de Devoluções, onde elas aparecem marcadas "sem venda". As regras —
- * preço com teto no catálogo, valor só em crédito, estoque na loja de quem
- * recebe — estão em `registrarDevolucaoSemVenda`.
+ * preço com teto no catálogo, crédito para quem tem cadastro, dinheiro da
+ * gaveta para o consumidor final, estoque na loja de quem recebe — estão em
+ * `registrarDevolucaoSemVenda`.
  */
 export async function loader({ request }: Route.LoaderArgs) {
   const eu = await exigirUsuario(request)
@@ -46,8 +49,15 @@ export async function loader({ request }: Route.LoaderArgs) {
     }),
   ])
 
-  // A lista de devoluções é do gerente: o link só aparece para quem abre.
-  return { loja: eu.loja, produtos, clientes, verLista: ehGerente(eu.papel) }
+  return {
+    loja: eu.loja,
+    produtos,
+    clientes,
+    // A lista de devoluções é do gerente: o link só aparece para quem abre.
+    verLista: ehGerente(eu.papel),
+    // O consumidor final leva em dinheiro, e dinheiro só sai de caixa aberto.
+    caixaAberto: await caixaAberto(eu.loja, diaDeHoje()),
+  }
 }
 
 export async function action({ request }: Route.ActionArgs) {
@@ -76,10 +86,13 @@ export async function action({ request }: Route.ActionArgs) {
   const resultado = await registrarDevolucaoSemVenda({
     // A loja da sessão: a mercadoria entra onde fisicamente chegou.
     loja: eu.loja,
-    clienteId: String(form.get("clienteId") ?? ""),
+    // Vazio é consumidor final: o valor sai em dinheiro da gaveta.
+    clienteId: String(form.get("clienteId") ?? "") || null,
     itens,
     motivo: String(form.get("motivo") ?? ""),
     operador: eu.nome,
+    operadorId: eu.id,
+    dia: diaDeHoje(),
   })
 
   if (!resultado.ok) return data({ ok: false as const, erro: resultado.erro }, { status: 400 })
@@ -92,12 +105,14 @@ let proximaChave = 1
 const linhaVazia = (): Linha => ({ chave: proximaChave++, produtoId: null, quantidade: "1", preco: "" })
 
 export default function DevolucaoSemVenda({ loaderData }: Route.ComponentProps) {
-  const { loja, produtos, clientes, verLista } = loaderData
+  const { loja, produtos, clientes, verLista, caixaAberto: aberto } = loaderData
 
   const porId = useMemo(() => new Map(produtos.map((p) => [p.id, p])), [produtos])
   const indice = useMemo(() => criarIndice<ProdutoDoCatalogo>(produtos), [produtos])
 
   const [clienteId, setClienteId] = useState<string | null>(null)
+  // Sem cadastro: o valor não tem onde virar crédito e sai em dinheiro.
+  const [consumidorFinal, setConsumidorFinal] = useState(false)
   const [buscaCliente, setBuscaCliente] = useState("")
   const [linhas, setLinhas] = useState<Linha[]>(() => [linhaVazia()])
   const [motivo, setMotivo] = useState("")
@@ -166,14 +181,15 @@ export default function DevolucaoSemVenda({ loaderData }: Route.ComponentProps) 
   const repetido =
     new Set(validas.map((l) => l.produto!.id)).size !== validas.length
 
+  const quem = cliente !== null || (consumidorFinal && aberto)
   const pronto =
-    !gravando && cliente !== null && validas.length > 0 && !comErro && !repetido && motivo.trim() !== ""
+    !gravando && quem && validas.length > 0 && !comErro && !repetido && motivo.trim() !== ""
 
   function confirmar() {
-    if (!pronto || !cliente) return
+    if (!pronto) return
     fetcher.submit(
       {
-        clienteId: cliente.id,
+        clienteId: cliente?.id ?? "",
         motivo,
         itens: JSON.stringify(
           validas.map((l) => ({ produtoId: l.produto!.id, quantidade: l.quantidade, preco: l.preco }))
@@ -183,20 +199,35 @@ export default function DevolucaoSemVenda({ loaderData }: Route.ComponentProps) 
     )
   }
 
-  if (fetcher.data?.ok && cliente) {
+  if (fetcher.data?.ok) {
     return (
       <div className="mx-auto max-w-md p-6 text-center">
         <div className="rounded-xl border border-border p-6">
           <PackageCheck className="mx-auto size-10 text-primary" aria-hidden />
           <p className="mt-3 text-sm text-muted-foreground">Devolução registrada</p>
           <p className="mt-1 text-2xl font-bold tabular-nums">#{fetcher.data.numero}</p>
-          <p className="mt-1 font-mono text-sm">{moeda(fetcher.data.total)} de crédito</p>
-          <p className="mt-3 text-xs text-muted-foreground">
-            A mercadoria voltou ao estoque de {loja}, e o valor virou crédito de{" "}
-            <b className="text-foreground">{cliente.nome}</b>. Na troca, é só vincular o
-            cliente na venda (F6) e abater o crédito na conferência — o que passar dele
-            o cliente paga.
-          </p>
+          {cliente ? (
+            <>
+              <p className="mt-1 font-mono text-sm">{moeda(fetcher.data.total)} de crédito</p>
+              <p className="mt-3 text-xs text-muted-foreground">
+                A mercadoria voltou ao estoque de {loja}, e o valor virou crédito de{" "}
+                <b className="text-foreground">{cliente.nome}</b>. Na troca, é só vincular o
+                cliente na venda (F6) e abater o crédito na conferência — o que passar dele
+                o cliente paga.
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="mt-1 font-mono text-sm">
+                Entregue {moeda(fetcher.data.total)} em dinheiro
+              </p>
+              <p className="mt-3 text-xs text-muted-foreground">
+                A mercadoria voltou ao estoque de {loja}, e a saída da gaveta entra no
+                fechamento do dia como devolução. Na troca, faça a venda nova
+                normalmente.
+              </p>
+            </>
+          )}
           <div className="mt-6 flex flex-col gap-2">
             <Link
               to="/"
@@ -237,12 +268,13 @@ export default function DevolucaoSemVenda({ loaderData }: Route.ComponentProps) 
       </div>
       <p className="mt-3 rounded-lg bg-muted/60 px-3 py-2 text-sm text-muted-foreground">
         Para quando a venda não se acha ou foi em outra loja. A mercadoria entra no
-        estoque de <b>{loja}</b>, o preço vem do catálogo (pode baixar, não subir) e o
-        valor vira <b>crédito do cliente</b> — na troca, a venda nova abate. Não sai NF-e
-        de devolução: não há nota de origem a referenciar.
+        estoque de <b>{loja}</b> e o preço vem do catálogo (pode baixar, não subir). Com
+        cliente cadastrado o valor vira <b>crédito</b> — na troca, a venda nova abate;
+        consumidor final leva em <b>dinheiro da gaveta</b>. Não sai NF-e de devolução:
+        não há nota de origem a referenciar.
       </p>
 
-      {/* O cliente vem primeiro: sem ele não há a quem creditar. */}
+      {/* Quem devolve vem primeiro: decide se o valor vira crédito ou dinheiro. */}
       <section className="mt-4">
         <h2 className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
           Cliente
@@ -269,6 +301,32 @@ export default function DevolucaoSemVenda({ loaderData }: Route.ComponentProps) 
               Trocar
             </Button>
           </div>
+        ) : consumidorFinal ? (
+          <div
+            className={cn(
+              "flex items-center gap-3 rounded-lg border p-3",
+              aberto ? "border-primary bg-primary/5" : "border-destructive/50 bg-destructive/5"
+            )}
+          >
+            <Banknote className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-medium">Consumidor final</div>
+              <div className={cn("text-[11px]", aberto ? "text-muted-foreground" : "text-destructive")}>
+                {aberto
+                  ? "Sem cadastro: o valor sai em dinheiro da gaveta"
+                  : `O caixa de ${loja} não foi aberto hoje — sem ele o dinheiro não sai da gaveta`}
+              </div>
+            </div>
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              className="rounded-lg"
+              onClick={() => setConsumidorFinal(false)}
+            >
+              Trocar
+            </Button>
+          </div>
         ) : (
           <div className="rounded-lg border border-border p-2">
             <div className="flex items-center gap-2 px-1">
@@ -283,6 +341,15 @@ export default function DevolucaoSemVenda({ loaderData }: Route.ComponentProps) 
                 autoComplete="off"
                 className="h-9 flex-1 rounded-none border-0 bg-transparent px-0 shadow-none focus-visible:ring-0"
               />
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                className="shrink-0 rounded-lg"
+                onClick={() => setConsumidorFinal(true)}
+              >
+                <User className="size-3.5" /> Consumidor final
+              </Button>
             </div>
             {buscaCliente.trim() ? (
               <ul className="mt-1 max-h-60 overflow-y-auto">
@@ -302,7 +369,8 @@ export default function DevolucaoSemVenda({ loaderData }: Route.ComponentProps) 
                 ))}
                 {encontrados.length === 0 ? (
                   <li className="px-2 py-3 text-center text-xs text-muted-foreground">
-                    Nenhum cliente com “{buscaCliente}” — cadastre em Clientes antes
+                    Nenhum cliente com “{buscaCliente}” — cadastre em Clientes, ou devolva
+                    como consumidor final
                   </li>
                 ) : null}
               </ul>
@@ -432,16 +500,24 @@ export default function DevolucaoSemVenda({ loaderData }: Route.ComponentProps) 
       ) : null}
 
       <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-border pt-4">
-        <span className="text-sm text-muted-foreground">Crédito</span>
+        <span className="text-sm text-muted-foreground">
+          {consumidorFinal && !cliente ? "Em dinheiro" : "Crédito"}
+        </span>
         <span className="font-mono text-2xl font-bold tabular-nums">{moeda(total)}</span>
-        {!cliente ? (
-          <span className="text-xs text-muted-foreground">Falta escolher o cliente</span>
+        {!cliente && !consumidorFinal ? (
+          <span className="text-xs text-muted-foreground">
+            Falta escolher o cliente, ou consumidor final
+          </span>
         ) : !motivo.trim() && validas.length > 0 ? (
           <span className="text-xs text-muted-foreground">Falta dizer por que voltou</span>
         ) : null}
         <Button type="button" disabled={!pronto} onClick={confirmar} className="ml-auto rounded-lg">
           <PackageCheck className="size-4" />
-          {gravando ? "Registrando…" : "Registrar e gerar crédito"}
+          {gravando
+            ? "Registrando…"
+            : consumidorFinal && !cliente
+              ? "Registrar e devolver em dinheiro"
+              : "Registrar e gerar crédito"}
         </Button>
       </div>
     </div>
