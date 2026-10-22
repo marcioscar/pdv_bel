@@ -21,6 +21,11 @@ import {
 import type { EnderecoDoCep } from "~/routes/cep"
 import type { DadosDoCnpj } from "~/routes/cnpj"
 
+/** O que `/clientes/documento/:documento` responde. */
+type ClienteDoDocumento =
+  | { documento: string; cliente: { id: string; nome: string; ativo: boolean } | null }
+  | { erro: string }
+
 /**
  * O cadastro de cliente, um só, usado pela tela de Cadastros e pelo F6 do caixa.
  *
@@ -127,6 +132,7 @@ export function FormularioCliente({
   aoSalvar,
   primeiroCampo,
   rodape,
+  aoUsarExistente,
 }: {
   cliente?: ClienteEditavel | null
   gravando: boolean
@@ -136,6 +142,12 @@ export function FormularioCliente({
   primeiroCampo?: React.Ref<HTMLInputElement>
   /** Os botões, que mudam conforme a tela. Recebe a função de salvar. */
   rodape: (salvar: () => void) => React.ReactNode
+  /**
+   * Vincula o cliente que já tem este documento, em vez de cadastrar de novo.
+   * Só o caixa passa: lá o cadastro é para pôr alguém na venda, e esse alguém
+   * já existe. Sem ela, o aviso de duplicado aparece sem o botão.
+   */
+  aoUsarExistente?: (clienteId: string) => void
 }) {
   const [form, setForm] = useState<Formulario>(cliente ? doCliente(cliente) : VAZIO)
   const [nota, setNota] = useState<string | null>(null)
@@ -147,6 +159,7 @@ export function FormularioCliente({
 
   const buscaCep = useFetcher<EnderecoDoCep | { erro: string }>()
   const buscaCnpj = useFetcher<DadosDoCnpj | { erro: string }>()
+  const buscaDocumento = useFetcher<ClienteDoDocumento>()
   const buscandoCep = buscaCep.state !== "idle"
   const buscandoCnpj = buscaCnpj.state !== "idle"
 
@@ -167,14 +180,53 @@ export function FormularioCliente({
     buscaCep.load(`/cep/${limpo}`)
   }, [form.cep, buscaCep])
 
-  // E o mesmo com o CNPJ: quatorze dígitos válidos, a Receita responde o resto do
-  // cadastro. CPF não tem consulta pública — ali só vale a validação do dígito.
+  /*
+   * Documento completo e válido: primeiro a pergunta "já existe?", ao nosso
+   * banco. A gravação recusa o duplicado de qualquer jeito, mas só depois de o
+   * caixa preencher o resto — avisar aqui poupa esse trabalho. Na edição, o
+   * próprio documento do cliente não conta.
+   */
+  const proprio = cliente ? limparDocumento(cliente.cpfCnpj) : null
+  const documentoCompleto =
+    (documento.length === 11 || documento.length === 14) && validarCpfCnpj(documento)
+  const documentoBuscado = useRef<string | null>(null)
+  useEffect(() => {
+    if (!documentoCompleto || documento === proprio) return
+    if (documentoBuscado.current === documento) return
+    documentoBuscado.current = documento
+    buscaDocumento.load(`/clientes/documento/${documento}`)
+  }, [documento, documentoCompleto, proprio, buscaDocumento])
+
+  // A resposta só vale para o documento que está no campo agora.
+  const respostaDocumento =
+    buscaDocumento.state === "idle" &&
+    buscaDocumento.data &&
+    "documento" in buscaDocumento.data &&
+    buscaDocumento.data.documento === documento
+      ? buscaDocumento.data
+      : null
+  const existente =
+    documento !== proprio && respostaDocumento ? respostaDocumento.cliente : null
+
+  /*
+   * E o CNPJ vai à Receita, que responde o resto do cadastro — mas só depois de
+   * o nosso banco dizer que ele é novo: preencher o formulário com os dados de
+   * quem já está cadastrado era fazer o caixa recadastrar a mesma empresa. CPF
+   * não tem consulta pública; ali só vale a validação do dígito.
+   */
   useEffect(() => {
     if (!validarCnpj(documento) || !/^\d{14}$/.test(documento)) return
     if (cnpjBuscado.current === documento) return
+    // Se a conferência falhou (rede), a Receita segue valendo: a gravação
+    // continua recusando o duplicado.
+    const conferenciaFalhou =
+      buscaDocumento.state === "idle" && Boolean(buscaDocumento.data && "erro" in buscaDocumento.data)
+    if (documento !== proprio && !conferenciaFalhou && (!respostaDocumento || respostaDocumento.cliente)) {
+      return
+    }
     cnpjBuscado.current = documento
     buscaCnpj.load(`/cnpj/${documento}`)
-  }, [documento, buscaCnpj])
+  }, [documento, proprio, respostaDocumento, buscaCnpj, buscaDocumento.state, buscaDocumento.data])
 
   useEffect(() => {
     if (buscaCep.state !== "idle" || !buscaCep.data) return
@@ -275,6 +327,25 @@ export function FormularioCliente({
           <p className="mt-1 text-[11px] font-medium text-destructive">
             Dígito verificador não confere
           </p>
+        ) : existente ? (
+          <div className="mt-1 text-[11px] font-medium text-destructive" role="alert">
+            Já cadastrado: <b>{existente.nome}</b>
+            {existente.ativo ? null : (
+              <span className="font-normal">
+                {" "}
+                (inativo — reative em Cadastros › Clientes)
+              </span>
+            )}
+            {existente.ativo && aoUsarExistente ? (
+              <button
+                type="button"
+                onClick={() => aoUsarExistente(existente.id)}
+                className="ml-1 font-semibold text-primary underline underline-offset-2"
+              >
+                Usar este cliente
+              </button>
+            ) : null}
+          </div>
         ) : null}
       </div>
       <Campo

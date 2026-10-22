@@ -117,6 +117,8 @@ export default [
   route("saude", "routes/saude.tsx"),
   // Dados, não tela: é o diálogo do cadastro de clientes que consulta.
   route("clientes/:clienteId/historico", "routes/cliente.historico.tsx"),
+  // Dados, não tela: o formulário de cliente pergunta se o documento já existe.
+  route("clientes/documento/:documento", "routes/cliente.documento.tsx"),
   // Idem, para o produto: de quem já se comprou, por quanto e quando. O catálogo
   // e a montagem do pedido abrem o mesmo diálogo, e por isso a consulta é uma só.
   route("produtos/:produtoId/compras", "routes/produto.compras.tsx"),

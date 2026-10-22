@@ -194,6 +194,12 @@ export function ClienteDialogo({
             gravando={gravando}
             erro={erro}
             primeiroCampo={primeiroCampo}
+            // O cliente já existe: vincula à venda em vez de cadastrar de novo.
+            // Só os ativos estão na lista, e só para eles o botão aparece.
+            aoUsarExistente={(id) => {
+              const achado = clientes.find((c) => c.id === id)
+              if (achado) onEscolher(achado)
+            }}
             aoSalvar={(dados) => {
               const formulario = new FormData()
               for (const [campo, valor] of Object.entries(dados)) {
