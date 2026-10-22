@@ -12,7 +12,12 @@ import { Input } from "~/components/ui/input"
 import { diaAtras, diaDeHoje, diaEmTexto, PRIMEIRO_DIA } from "~/lib/dia"
 import { listarLojas } from "~/lib/lojas.server"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
-import { CONDICOES_PAGAMENTO, FORMAS_PAGAMENTO, formaGeraCobranca } from "~/lib/pdv"
+import {
+  CONDICOES_PAGAMENTO,
+  FORMAS_PAGAMENTO,
+  formaGeraCobranca,
+  rotuloDoPagamento,
+} from "~/lib/pdv"
 import { exigirGerente } from "~/lib/sessao.server"
 import {
   consultarVendas,
@@ -359,8 +364,7 @@ export default function AdminVendas({ loaderData }: Route.ComponentProps) {
                           <ItensDaVenda itens={venda.itens} />
                         </td>
                         <td className="px-2 py-2.5 text-xs">
-                          {FORMAS_PAGAMENTO.find((f) => f.id === venda.forma)?.rotulo ??
-                            venda.forma}
+                          {rotuloDoPagamento(venda, moeda)}
                         </td>
                         <td
                           className={cn(
@@ -459,7 +463,7 @@ function Detalhe({
   loja: string
   onFechar: () => void
 }) {
-  const forma = FORMAS_PAGAMENTO.find((f) => f.id === venda.forma)?.rotulo ?? venda.forma
+  const forma = rotuloDoPagamento(venda, moeda)
   const condicao = CONDICOES_PAGAMENTO.find((c) => c.id === venda.condicao)
 
   return (

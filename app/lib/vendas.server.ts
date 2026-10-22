@@ -28,9 +28,13 @@ import {
   DIAS_PIX_ENTREGA,
   dividirParcelas,
   ehTransferenciaEntreLojas,
+  FORMA_MISTA,
   FORMA_PIX_ENTREGA,
   FORMA_TRANSFERENCIA,
+  FORMAS_COMBINAVEIS,
   FORMAS_PAGAMENTO,
+  formaCombinavel,
+  type PagamentoDaVenda,
   parcelasDaCondicao,
   precoAplicado,
   VALOR_MINIMO_BOLETO,
@@ -47,6 +51,13 @@ export type PedidoRecebido = {
   itens: ItemRecebido[]
   desconto: number
   forma: string
+  /**
+   * As linhas do pagamento dividido, quando `forma` é "misto"; null nas outras.
+   * Os valores vêm da tela, mas a soma é conferida contra o total recalculado
+   * aqui — uma linha a mais ou a menos não passa.
+   */
+  pagamentos: PagamentoDaVenda[] | null
+  /** Na venda mista, o que o cliente entregou em espécie para a parte em dinheiro. */
   recebido: number | null
   /**
    * Quanto do total o cliente quer abater com o crédito que tem a favor.
@@ -152,6 +163,25 @@ export function lerPedido(bruto: unknown): PedidoRecebido | null {
         : NaN
   if (recebido !== null && Number.isNaN(recebido)) return null
 
+  /*
+   * Formato só: forma em texto e valor em número. Se a forma pode dividir, e se
+   * as linhas fecham o total, é a gravação que decide — ela é que sabe o total.
+   */
+  let pagamentos: PagamentoDaVenda[] | null = null
+  if (Array.isArray(corpo.pagamentos)) {
+    if (corpo.pagamentos.length > FORMAS_COMBINAVEIS.length) return null
+    pagamentos = []
+    for (const linha of corpo.pagamentos) {
+      if (typeof linha !== "object" || linha === null) return null
+      const { forma, valor } = linha as Record<string, unknown>
+      if (typeof forma !== "string") return null
+      if (typeof valor !== "number" || !Number.isFinite(valor)) return null
+      pagamentos.push({ forma, valor })
+    }
+  } else if (corpo.pagamentos != null) {
+    return null
+  }
+
   const creditoUsado = typeof corpo.creditoUsado === "number" ? corpo.creditoUsado : 0
   if (!Number.isFinite(creditoUsado) || creditoUsado < 0) return null
 
@@ -181,6 +211,7 @@ export function lerPedido(bruto: unknown): PedidoRecebido | null {
     itens,
     desconto,
     forma: typeof corpo.forma === "string" ? corpo.forma : "",
+    pagamentos,
     recebido,
     creditoUsado,
     clienteId,
@@ -512,9 +543,44 @@ async function validarVenda(
 
   const aPagar = arredondar(total - creditoUsado)
 
-  if (pedido.forma === "dinheiro") {
+  /*
+   * O pagamento dividido fecha contra o `aPagar` daqui, não contra o da tela.
+   * Na venda de uma forma só, `pagamentos` não vale nada e não é gravado: a
+   * linha única é o próprio `aPagar`, e guardá-la seria um campo a mais para
+   * discordar da forma.
+   */
+  if (pedido.forma === FORMA_MISTA) {
+    const conferido = conferirPagamentos(pedido.pagamentos ?? [], aPagar)
+    if (!conferido.ok) return conferido
+    pedido = { ...pedido, pagamentos: conferido.pagamentos }
+  } else {
+    pedido = { ...pedido, pagamentos: null }
+  }
+
+  /*
+   * A parte que passa pela gaveta. Na venda mista é só a linha em dinheiro: o
+   * troco sai do que o cliente entregou para ela, e não do total — quem paga
+   * R$ 40 de R$ 100 no dinheiro e entrega uma nota de 50 leva R$ 10.
+   */
+  const emDinheiro =
+    pedido.forma === "dinheiro"
+      ? aPagar
+      : pedido.pagamentos?.find((p) => p.forma === "dinheiro")?.valor ?? null
+
+  if (emDinheiro !== null) {
     if (pedido.recebido === null) return { ok: false, erro: "Informe o valor recebido" }
-    if (pedido.recebido < aPagar) return { ok: false, erro: "Valor recebido menor que o total" }
+    if (pedido.recebido < emDinheiro) {
+      return {
+        ok: false,
+        erro:
+          pedido.forma === FORMA_MISTA
+            ? `Valor recebido menor que a parte em dinheiro (${moeda(emDinheiro)})`
+            : "Valor recebido menor que o total",
+      }
+    }
+  } else if (pedido.forma === FORMA_MISTA) {
+    // Sem dinheiro na divisão não há o que receber nem troco a dar.
+    pedido = { ...pedido, recebido: null }
   }
 
   /**
@@ -669,7 +735,7 @@ async function validarVenda(
   // Sobre o que falta pagar, não sobre o total: com R$ 37 de crédito numa venda
   // de R$ 50, quem entrega R$ 20 leva R$ 7 de troco, não teria troco nenhum.
   const troco =
-    pedido.recebido === null ? 0 : arredondar(Math.max(0, pedido.recebido - aPagar))
+    pedido.recebido === null ? 0 : arredondar(Math.max(0, pedido.recebido - (emDinheiro ?? aPagar)))
 
   return {
     ok: true,
@@ -681,6 +747,45 @@ async function validarVenda(
       vendedor, creditoUsado, acrescimo,
     ],
   }
+}
+
+/**
+ * As linhas da venda mista: formas que podem dividir, cada uma uma vez, cada
+ * uma com valor, somando o que falta pagar.
+ *
+ * Uma linha só é recusada de propósito: venda de uma forma vai como aquela
+ * forma, senão o "misto" passaria a significar duas coisas.
+ */
+function conferirPagamentos(
+  linhas: PagamentoDaVenda[],
+  aPagar: number
+): { ok: true; pagamentos: PagamentoDaVenda[] } | { ok: false; erro: string } {
+  if (linhas.length < 2) {
+    return { ok: false, erro: "Pagamento dividido precisa de pelo menos duas formas" }
+  }
+  const vistas = new Set<string>()
+  const pagamentos: PagamentoDaVenda[] = []
+  for (const linha of linhas) {
+    if (!formaCombinavel(linha.forma)) {
+      const rotulo = FORMAS_PAGAMENTO.find((f) => f.id === linha.forma)?.rotulo ?? linha.forma
+      return { ok: false, erro: `${rotulo} não entra em pagamento dividido` }
+    }
+    if (vistas.has(linha.forma)) {
+      return { ok: false, erro: "Cada forma entra uma vez só no pagamento dividido" }
+    }
+    vistas.add(linha.forma)
+    const valor = arredondar(linha.valor)
+    if (valor <= 0) return { ok: false, erro: "Toda forma do pagamento dividido precisa de valor" }
+    pagamentos.push({ forma: linha.forma, valor })
+  }
+  const soma = arredondar(pagamentos.reduce((a, p) => a + p.valor, 0))
+  if (Math.abs(soma - aPagar) > 0.005) {
+    return {
+      ok: false,
+      erro: `As formas somam ${moeda(soma)}, mas a venda é de ${moeda(aPagar)}`,
+    }
+  }
+  return { ok: true, pagamentos }
 }
 
 const SEQUENCIA_ESGOTADA = "sequencia-de-venda-esgotada"
@@ -781,6 +886,7 @@ async function gravarUmaVez(
         acrescimo: acrescimo || null,
         total,
         forma: pedido.forma,
+        pagamentos: pedido.pagamentos ?? [],
         creditoUsado,
         recebido: pedido.recebido,
         troco: pedido.recebido === null ? null : troco,
@@ -1021,7 +1127,15 @@ export async function consultarVendas(filtro: FiltroVendas) {
   const conteudo: Prisma.VendaWhereInput[] = [{ loja: { in: filtro.lojas } }]
 
   if (filtro.numero) conteudo.push({ numero: Number(filtro.numero) })
-  if (filtro.forma) conteudo.push({ forma: filtro.forma })
+  /*
+   * A venda mista aparece em cada forma que a compôs: quem procura "as em
+   * dinheiro" para conferir a gaveta precisa dela, que também passou por lá.
+   */
+  if (filtro.forma) {
+    conteudo.push({
+      OR: [{ forma: filtro.forma }, { pagamentos: { some: { forma: filtro.forma } } }],
+    })
+  }
   if (filtro.vendedor) conteudo.push({ vendedorId: filtro.vendedor })
 
   if (filtro.valor) {

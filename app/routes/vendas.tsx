@@ -34,7 +34,12 @@ import { diaAtras, diaDeHoje, PRIMEIRO_DIA } from "~/lib/dia"
 import { Input } from "~/components/ui/input"
 import { interpretarValor, moeda } from "~/lib/moeda"
 import { ACOES_DE_GERENTE, ehGerente } from "~/lib/permissoes"
-import { ehTransferenciaEntreLojas, FORMAS_PAGAMENTO, formaGeraCobranca } from "~/lib/pdv"
+import {
+  ehTransferenciaEntreLojas,
+  FORMAS_PAGAMENTO,
+  formaGeraCobranca,
+  rotuloDoPagamento,
+} from "~/lib/pdv"
 import { useAtalhosDeSecao } from "~/lib/navegacao"
 import { useRelogio, useTema } from "~/lib/tema"
 import { cn } from "~/lib/utils"
@@ -893,8 +898,7 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                           )}
                         </td>
                         <td className="px-2 py-2.5 text-xs">
-                          {FORMAS_PAGAMENTO.find((f) => f.id === venda.forma)?.rotulo ??
-                            venda.forma}
+                          {rotuloDoPagamento(venda, moeda)}
                         </td>
                         <td
                           className={cn(

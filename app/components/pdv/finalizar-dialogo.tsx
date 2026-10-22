@@ -10,6 +10,7 @@ import {
   Printer,
   QrCode,
   Search,
+  Split,
   Truck,
   User,
   UserPlus,
@@ -23,11 +24,16 @@ import { Kbd } from "~/components/ui/kbd";
 import { Separator } from "~/components/ui/separator";
 import { formatarCpfCnpj, mascararCpfCnpj, validarCpf } from "~/lib/documento";
 import { modeloDaVenda } from "~/lib/fiscal";
-import { interpretarValor, moeda } from "~/lib/moeda";
+import { arredondar, interpretarValor, moeda } from "~/lib/moeda";
 import {
 	ehTransferenciaEntreLojas,
+	FORMA_MISTA,
+	FORMAS_COMBINAVEIS,
 	FORMAS_DE_CAIXA,
 	FORMAS_PAGAMENTO,
+	linhasDaDivisao,
+	rotuloDaForma,
+	type DivisaoDoPagamento,
 	type FormaPagamento,
 } from "~/lib/pdv";
 import type { ClienteResumo } from "~/components/pdv/cliente-dialogo";
@@ -45,6 +51,7 @@ const ICONES: Record<
   link: Link2,
   entrega: Bike,
   transferencia: Truck,
+  misto: Split,
 };
 
 type Props = {
@@ -58,6 +65,9 @@ type Props = {
   itens: number;
   forma: FormaPagamento;
   onFormaChange: (forma: FormaPagamento) => void;
+  /** O que vai em cada forma quando a forma é "misto". */
+  divisao: DivisaoDoPagamento;
+  onDivisaoChange: (divisao: DivisaoDoPagamento) => void;
   recebido: string;
   onRecebidoChange: (valor: string) => void;
   /** Quanto do saldo do cliente está sendo abatido nesta venda. */
@@ -111,6 +121,8 @@ export function FinalizarDialogo({
   itens,
   forma,
   onFormaChange,
+  divisao,
+  onDivisaoChange,
   recebido,
   onRecebidoChange,
   creditoUsado,
@@ -139,6 +151,7 @@ export function FinalizarDialogo({
   const campoCliente = useRef<HTMLInputElement>(null);
   const campoVendedor = useRef<HTMLInputElement>(null);
   const campoDesconto = useRef<HTMLInputElement>(null);
+  const camposDivisao = useRef<Partial<Record<keyof DivisaoDoPagamento, HTMLInputElement | null>>>({});
 
   /*
    * O texto do campo é local; o valor aplicado sobe a cada tecla, para o total
@@ -198,10 +211,27 @@ export function FinalizarDialogo({
   const credito = Math.min(creditoUsado, creditoDisponivel);
   const aPagar = Math.max(0, total - credito);
 
+  /*
+   * O pagamento dividido: o que cada forma leva e quanto ainda falta cobrir.
+   * A conta é a mesma que o servidor refaz — soma das linhas contra o que se
+   * paga depois do crédito —, só que aqui é para o caixa ver enquanto digita.
+   */
+  const dividido = forma === FORMA_MISTA;
+  const linhasDivididas = dividido ? linhasDaDivisao(divisao) : [];
+  const restante = arredondar(aPagar - linhasDivididas.reduce((a, l) => a + l.valor, 0));
+  const faltaDivisao =
+    dividido && (linhasDivididas.length < 2 || Math.abs(restante) > 0.005);
+
+  // A parte que passa pela gaveta: a venda toda em dinheiro, ou a linha dele.
+  const parteEmDinheiro = dividido
+    ? (linhasDivididas.find((l) => l.forma === "dinheiro")?.valor ?? 0)
+    : aPagar;
+  const recebeDinheiro = emDinheiro || (dividido && parteEmDinheiro > 0);
+
   const valorRecebido = interpretarValor(recebido);
-  const troco = valorRecebido === null ? null : valorRecebido - aPagar;
+  const troco = valorRecebido === null ? null : valorRecebido - parteEmDinheiro;
   const faltaDinheiro =
-    emDinheiro && (valorRecebido === null || troco === null || troco < 0);
+    recebeDinheiro && (valorRecebido === null || troco === null || troco < 0);
   // Pix na entrega também: a cobrança com vencimento exige o devedor.
   const naEntrega = forma === "entrega";
   const faltaCliente = (aPrazo || naEntrega) && cliente === null;
@@ -287,6 +317,12 @@ export function FinalizarDialogo({
       campoRecebido.current?.focus();
   }, [emDinheiro, pausado, escolhendoCliente]);
 
+  // Ao dividir, o cursor vai para a primeira forma: é o que se digita a seguir.
+  useEffect(() => {
+    if (dividido && !pausado && !escolhendoCliente)
+      camposDivisao.current.dinheiro?.focus();
+  }, [dividido]);
+
   /*
    * Ao ABRIR, o cursor entra no vendedor — e não no valor recebido. Toda venda
    * pede o código de quem vendeu, e ele era o campo que o caixa esquecia até o
@@ -358,8 +394,27 @@ export function FinalizarDialogo({
         onFechar();
         return;
       }
+      // F4 divide o pagamento, e de novo volta a uma forma só (o Pix, o padrão).
+      if (key === "F4" && !paraARede) {
+        evento.preventDefault();
+        onFormaChange(dividido ? "pix" : FORMA_MISTA);
+        return;
+      }
       if (key === "Enter") {
         evento.preventDefault();
+        /*
+         * Na divisão, Enter num campo vazio põe nele o que falta: "40 no
+         * dinheiro, o resto no débito" vira 40, Tab, Enter — sem conta de cabeça.
+         */
+        if (dividido && restante > 0) {
+          const vazio = FORMAS_COMBINAVEIS.find(
+            (f) => camposDivisao.current[f] === document.activeElement && !divisao[f].trim(),
+          );
+          if (vazio) {
+            onDivisaoChange({ ...divisao, [vazio]: restante.toFixed(2).replace(".", ",") });
+            return;
+          }
+        }
         // Enter anda até o que falta antes de fechar: com o vendedor vazio ele
         // leva o cursor para lá em vez de esbarrar num botão desabilitado, e a
         // venda em dinheiro vira "valor, Enter, código, Enter".
@@ -371,7 +426,7 @@ export function FinalizarDialogo({
         // Do vendedor, em dinheiro sem valor digitado, o Enter segue para o
         // valor recebido em vez de tentar fechar sem ele.
         if (
-          emDinheiro &&
+          recebeDinheiro &&
           valorRecebido === null &&
           document.activeElement === campoVendedor.current
         ) {
@@ -419,6 +474,11 @@ export function FinalizarDialogo({
   }, [
     escolhendoCliente,
     emDinheiro,
+    recebeDinheiro,
+    dividido,
+    divisao,
+    restante,
+    onDivisaoChange,
     faltaVendedor,
     valorRecebido,
     imprimir,
@@ -729,7 +789,64 @@ export function FinalizarDialogo({
               </p>
             </div>
           </div>
+        ) : dividido ? (
+          /*
+            Uma linha fixa por forma, e não "adicionar forma": são três, e
+            campos sempre no mesmo lugar se preenchem só com Tab. O restante
+            fica embaixo, à vista, porque é ele que diz se a venda fecha.
+          */
+          <div className="rounded-lg border border-primary bg-primary/5 p-3">
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="flex items-center gap-1.5 text-sm font-medium">
+                <Split className="size-4 text-muted-foreground" aria-hidden />
+                Pagamento dividido
+              </span>
+              <span className="text-[10px] text-muted-foreground">
+                <Kbd>F4</Kbd> uma forma só
+              </span>
+            </div>
+            <div className="mt-2 grid gap-1.5">
+              {FORMAS_COMBINAVEIS.map((f) => {
+                const Icone = ICONES[f];
+                return (
+                  <div key={f} className="flex items-center gap-2">
+                    <Icone className="size-4 shrink-0 text-muted-foreground" />
+                    <label htmlFor={`divisao-${f}`} className="flex-1 text-sm">
+                      {rotuloDaForma(f)}
+                    </label>
+                    <Input
+                      ref={(el) => {
+                        camposDivisao.current[f] = el;
+                      }}
+                      id={`divisao-${f}`}
+                      type="search"
+                      value={divisao[f]}
+                      onChange={(e) => onDivisaoChange({ ...divisao, [f]: e.target.value })}
+                      placeholder={restante > 0 ? `Enter: ${moeda(restante)}` : "0,00"}
+                      inputMode="decimal"
+                      autoComplete="off"
+                      data-1p-ignore=""
+                      data-lpignore="true"
+                      className="h-9 w-36 rounded-lg text-right font-mono tabular-nums"
+                    />
+                  </div>
+                );
+              })}
+            </div>
+            <div
+              className={cn(
+                "mt-2 flex items-baseline justify-between border-t border-border pt-2 text-sm",
+                Math.abs(restante) > 0.005 && "text-destructive",
+              )}
+            >
+              <span>{restante < 0 ? "Passou do total" : "Falta dividir"}</span>
+              <span className="font-mono text-lg font-bold tabular-nums">
+                {moeda(Math.abs(restante))}
+              </span>
+            </div>
+          </div>
         ) : (
+        <>
         <div className="grid grid-cols-3 gap-2">
           {FORMAS_DE_CAIXA.map((opcao, indice) => {
             const Icone = ICONES[opcao.id];
@@ -759,15 +876,27 @@ export function FinalizarDialogo({
             );
           })}
         </div>
+        <Button
+          type="button"
+          tabIndex={-1}
+          variant="ghost"
+          size="xs"
+          onClick={() => onFormaChange(FORMA_MISTA)}
+          className="mt-1.5 rounded-lg text-muted-foreground"
+        >
+          <Split className="size-3.5" aria-hidden />
+          Dividir em mais de uma forma <Kbd className="text-[9px]">F4</Kbd>
+        </Button>
+        </>
         )}
 
-        {emDinheiro ? (
+        {recebeDinheiro ? (
           <div className="mt-3 flex items-center gap-3 rounded-lg border border-border bg-muted/30 p-3">
             <label
               htmlFor="recebido"
               className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
             >
-              Recebido
+              {dividido ? "Recebido em dinheiro" : "Recebido"}
             </label>
             <Input
               ref={campoRecebido}
@@ -775,7 +904,11 @@ export function FinalizarDialogo({
               type="search"
               value={recebido}
               onChange={(e) => onRecebidoChange(e.target.value)}
-              placeholder="quanto o cliente entregou"
+              placeholder={
+                dividido
+                  ? `entregou pelos ${moeda(parteEmDinheiro)}`
+                  : "quanto o cliente entregou"
+              }
               inputMode="decimal"
               autoComplete="off"
               data-1p-ignore=""
@@ -1046,7 +1179,9 @@ export function FinalizarDialogo({
           type="button"
           tabIndex={-1}
           size="lg"
-          disabled={gravando || faltaDinheiro || faltaCliente || faltaVendedor || cpfInvalido}
+          disabled={
+            gravando || faltaDinheiro || faltaDivisao || faltaCliente || faltaVendedor || cpfInvalido
+          }
           onClick={onConfirmar}
           className="h-14 w-full rounded-xl text-base font-semibold"
         >
@@ -1068,7 +1203,15 @@ export function FinalizarDialogo({
           )}
         </Button>
 
-        {faltaDinheiro && valorRecebido !== null ? (
+        {faltaDivisao ? (
+          <p className="mt-2 text-center text-xs text-muted-foreground">
+            {linhasDivididas.length < 2
+              ? "Divida entre pelo menos duas formas"
+              : restante > 0
+                ? `Faltam ${moeda(restante)} para fechar a divisão`
+                : `A divisão passou ${moeda(-restante)} do total`}
+          </p>
+        ) : faltaDinheiro && valorRecebido !== null ? (
           <p className="mt-2 text-center text-xs text-muted-foreground">
             Faltam {moeda(Math.abs(troco ?? 0))} para fechar
           </p>

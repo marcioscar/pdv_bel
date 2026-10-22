@@ -10,7 +10,7 @@ import { fechamentoDetalhado } from "~/lib/caixa.server"
 import { diaEmTexto } from "~/lib/dia"
 import { imprimirDocumento } from "~/lib/impressao"
 import { moeda } from "~/lib/moeda"
-import { FORMAS_PAGAMENTO } from "~/lib/pdv"
+import { rotuloDoPagamento, temDinheiro } from "~/lib/pdv"
 import { exigirGerente } from "~/lib/sessao.server"
 import { cn } from "~/lib/utils"
 
@@ -48,7 +48,8 @@ export default function AdminCaixa({ loaderData }: Route.ComponentProps) {
   const { fechamento: f, movimentos, vendas } = loaderData
 
   const validas = vendas.filter((v) => !v.canceladaEm)
-  const emDinheiro = validas.filter((v) => v.forma === "dinheiro")
+  // Com alguma parte em dinheiro: a venda mista também passou pela gaveta.
+  const emDinheiro = validas.filter((v) => temDinheiro(v))
   const grave = diferencaRelevante(f.diferenca)
 
   return (
@@ -169,6 +170,9 @@ export default function AdminCaixa({ loaderData }: Route.ComponentProps) {
             <Linha rotulo="Débito" valor={f.vendasDebito} />
             <Linha rotulo="Crédito" valor={f.vendasCredito} />
             <Linha rotulo="A prazo / entrega" valor={f.vendasPrazo} />
+            {f.creditoDoCliente > 0 ? (
+              <Linha rotulo="Crédito do cliente" valor={f.creditoDoCliente} />
+            ) : null}
             <div className="mt-2 flex items-baseline justify-between border-t border-border pt-2">
               <dt className="font-semibold">Total vendido</dt>
               <dd className="font-mono text-lg font-bold tabular-nums">
@@ -256,7 +260,7 @@ export default function AdminCaixa({ loaderData }: Route.ComponentProps) {
                 <tbody>
                   {vendas.map((v) => {
                     const cancelada = Boolean(v.canceladaEm)
-                    const dinheiro = v.forma === "dinheiro" && !cancelada
+                    const dinheiro = temDinheiro(v) && !cancelada
                     return (
                       <tr
                         key={v.id}
@@ -286,8 +290,7 @@ export default function AdminCaixa({ loaderData }: Route.ComponentProps) {
                             </Badge>
                           ) : (
                             <span className={cn(dinheiro && "font-semibold")}>
-                              {FORMAS_PAGAMENTO.find((x) => x.id === v.forma)?.rotulo ??
-                                v.forma}
+                              {rotuloDoPagamento(v, moeda)}
                             </span>
                           )}
                         </td>

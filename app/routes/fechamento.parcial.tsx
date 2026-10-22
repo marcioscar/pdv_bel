@@ -100,6 +100,7 @@ export async function loader({ request }: Route.LoaderArgs) {
           ${linha("Crédito", resumo.vendasCredito)}
           ${linha("A prazo / entrega", resumo.vendasPrazo)}
           ${resumo.vendasLink > 0 ? linha("Link de pagamento", resumo.vendasLink) : ""}
+          ${resumo.creditoDoCliente > 0 ? linha("Crédito do cliente", resumo.creditoDoCliente) : ""}
           <tr class="soma">
             <td>Total vendido</td>
             <td class="valor">${moeda(resumo.totalVendido)}</td>

@@ -575,8 +575,14 @@ model Venda {
   acrescimo Float?
   total    Float
   /// Um dos ids de FORMAS_PAGAMENTO em app/lib/pdv.ts — a lista canônica vive lá
-  /// para não haver duas fontes da verdade a manter em sincronia.
+  /// para não haver duas fontes da verdade a manter em sincronia. Vale "misto"
+  /// quando o pagamento foi dividido; aí o detalhe está em `pagamentos`.
   forma    String
+  /// As linhas do pagamento dividido — o que entrou por cada forma, somando
+  /// `total − creditoUsado`. Só a venda mista grava: na de uma forma a linha
+  /// única é óbvia, e as vendas anteriores ao campo não têm. Quem soma por
+  /// forma lê por `pagamentosDaVenda` (app/lib/pdv.ts), que cobre os três casos.
+  pagamentos VendaPagamento[]
   /// Quanto do total foi abatido com o crédito que o cliente tinha a favor.
   ///
   /// NÃO é desconto: o desconto reduz o que a mercadoria valeu, e isto não —
@@ -699,6 +705,12 @@ model PixPendente {
 /// Itens ficam embutidos na venda: são imutáveis depois do fechamento e nunca
 /// consultados fora dela. Preço e descrição são copiados para o histórico não
 /// mudar quando o cadastro do produto mudar.
+/// Uma linha do pagamento dividido: quanto entrou por uma forma.
+type VendaPagamento {
+  forma String
+  valor Float
+}
+
 type VendaItem {
   produtoId  String @db.ObjectId
   codigo     String
@@ -1132,6 +1144,9 @@ model FechamentoCaixa {
   /// O crédito abatido em vendas em dinheiro: a venda vale o total, mas essa
   /// parte não entrou na gaveta. `@default(0)` como a devolução — fechamento
   /// assinado não se reescreve para caber em campo novo.
+  ///
+  /// Só os fechamentos antigos têm valor aqui: desde o pagamento dividido,
+  /// `vendasDinheiro` já vem líquido e o crédito vai em `creditoDoCliente`.
   creditoEmDinheiro Float @default(0)
   esperado     Float
   /// O que a pessoa contou na gaveta. É o único número que o sistema não sabe.
@@ -1149,6 +1164,13 @@ model FechamentoCaixa {
   /// entra no papel, senão as parcelas não somam o total vendido e quem
   /// confere fica procurando a diferença.
   vendasLink    Float @default(0)
+  /// O crédito do cliente abatido nas vendas do dia, em qualquer forma.
+  ///
+  /// A partir deste campo, `vendas*` é o que ENTROU por cada forma (o crédito
+  /// já fora), e esta linha fecha a conta: as formas mais ela somam o total
+  /// vendido. Antes, `vendasDinheiro` era bruto e `creditoEmDinheiro` o
+  /// descontava; os fechamentos daquela época seguem assim, com este campo em 0.
+  creditoDoCliente Float @default(0)
   totalVendido  Float @default(0)
   quantidadeVendas Int @default(0)
   canceladas       Int @default(0)

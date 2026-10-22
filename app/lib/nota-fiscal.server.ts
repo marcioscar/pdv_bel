@@ -17,7 +17,7 @@ import {
   modalidadeFreteValida,
   modeloDaVenda,
   PIS_COFINS_SIMPLES,
-  pagamentoNaNota,
+  formasDePagamentoDaNota,
   pendenciasDoEmitente,
   tributacaoDoItem,
 } from "~/lib/fiscal"
@@ -346,9 +346,7 @@ export async function emitirDaVenda(
                 ...(cliente ? { nome_destinatario: cliente.nome } : {}),
               }
             : {}),
-          formas_pagamento: [
-            { forma_pagamento: pagamentoNaNota(venda.forma), valor_pagamento: arredondar(venda.total) },
-          ],
+          formas_pagamento: formasDePagamentoDaNota(venda),
         }
       : {
           ...comum,

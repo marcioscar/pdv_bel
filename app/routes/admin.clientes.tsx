@@ -33,7 +33,7 @@ import {
   lerCliente,
 } from "~/lib/clientes.server"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
-import { FORMAS_PAGAMENTO } from "~/lib/pdv"
+import { rotuloDoPagamento } from "~/lib/pdv"
 import { exigirUsuario } from "~/lib/sessao.server"
 import type { HistoricoDoCliente } from "~/routes/cliente.historico"
 import { cn } from "~/lib/utils"
@@ -571,7 +571,7 @@ function DialogoHistorico({ cliente }: { cliente: Cliente }) {
                       ? `Sistema antigo · ${compra.antiga.documento}`
                       : `Venda #${compra.numero}`}{" "}
                     ·{" "}
-                    {FORMAS_PAGAMENTO.find((f) => f.id === compra.forma)?.rotulo ?? compra.forma}
+                    {rotuloDoPagamento(compra, moeda)}
                     {compra.desconto > 0 ? ` · desconto ${moeda(compra.desconto)}` : ""}
                     {compra.vendedorNome ? ` · ${compra.vendedorNome}` : ""}
                   </p>

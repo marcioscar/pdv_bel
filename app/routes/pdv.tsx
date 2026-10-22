@@ -82,10 +82,13 @@ import {
   condicaoCabeNoTotal,
   CONDICOES_ATIVAS,
   criarIndice,
+  DIVISAO_VAZIA,
+  FORMA_MISTA,
   FORMA_TRANSFERENCIA,
   FORMAS_DE_CAIXA,
   FORMAS_PAGAMENTO,
   formaGeraCobranca,
+  linhasDaDivisao,
   VALOR_MINIMO_BOLETO,
   interpretarComando,
   produtosPorCodigo,
@@ -94,6 +97,7 @@ import {
   totaisDaVenda,
   vendaVazia,
   type CondicaoPagamento,
+  type DivisaoDoPagamento,
   type FormaPagamento,
   type ItemVenda,
   type ProdutoCatalogo,
@@ -918,6 +922,8 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   // comando — assim a barra volta a ser só busca de produto.
   const [finalizando, setFinalizando] = useState(false)
   const [recebidoTexto, setRecebidoTexto] = useState("")
+  // O que vai em cada forma quando o pagamento é dividido (forma "misto").
+  const [divisao, setDivisao] = useState<DivisaoDoPagamento>(DIVISAO_VAZIA)
   // Nasce vazio a cada venda, de propósito: ver `faltaVendedor` no diálogo.
   const [vendedorCodigo, setVendedorCodigo] = useState("")
   const [imprimirCupom, setImprimirCupom] = useState(true)
@@ -1211,6 +1217,8 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           })),
           desconto: totais.desconto,
           forma,
+          // Só na venda mista; o servidor confere a soma contra o total dele.
+          pagamentos: forma === FORMA_MISTA ? linhasDaDivisao(divisao) : null,
           recebido: valorRecebido,
           // Quanto o cliente quer abater do saldo que tem a favor. O servidor
           // confere contra o livro — aqui é só a escolha dele.
@@ -1230,7 +1238,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       )
     },
     [
-      autorizacaoId, cliente, cpfNaNota, creditoUsado, emitirNota, fetcher, forma,
+      autorizacaoId, cliente, cpfNaNota, creditoUsado, divisao, emitirNota, fetcher, forma,
       gravando, totais.desconto, venda.itens, vendedorCodigo,
     ]
   )
@@ -1812,6 +1820,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     }
     setErroFinalizacao(null)
     setRecebidoTexto("")
+    setDivisao(DIVISAO_VAZIA)
     // Sempre em branco: é aqui que se garante que a comissão nunca herda o
     // vendedor da venda anterior. Quem fecha é um caixa fixo, e quem vendeu
     // muda de cliente para cliente.
@@ -1824,6 +1833,45 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   const confirmarFinalizacao = useCallback(() => {
     if (gravando) return
     setErroFinalizacao(null)
+
+    /*
+     * Pagamento dividido: as formas precisam fechar o que falta pagar, e a
+     * parte em dinheiro, se houver, precisa do valor entregue — o troco sai
+     * dela, não do total.
+     */
+    if (forma === FORMA_MISTA) {
+      const linhas = linhasDaDivisao(divisao)
+      const aPagar = arredondar(Math.max(0, totais.total - creditoUsado))
+      const soma = arredondar(linhas.reduce((a, l) => a + l.valor, 0))
+      if (linhas.length < 2) {
+        setErroFinalizacao("Divida entre pelo menos duas formas, ou F4 para uma só")
+        return
+      }
+      if (Math.abs(soma - aPagar) > 0.005) {
+        setErroFinalizacao(
+          soma < aPagar
+            ? `Faltam ${moeda(aPagar - soma)} para fechar a divisão`
+            : `A divisão passou ${moeda(soma - aPagar)} do total`
+        )
+        return
+      }
+      const emDinheiro = linhas.find((l) => l.forma === "dinheiro")?.valor ?? 0
+      if (emDinheiro === 0) {
+        concluir(null)
+        return
+      }
+      const valor = interpretarValor(recebidoTexto)
+      if (valor === null) {
+        setErroFinalizacao("Informe o valor recebido em dinheiro")
+        return
+      }
+      if (valor < emDinheiro) {
+        setErroFinalizacao(`Faltam ${moeda(emDinheiro - valor)} na parte em dinheiro`)
+        return
+      }
+      concluir(valor)
+      return
+    }
 
     if (forma === "dinheiro") {
       const valor = interpretarValor(recebidoTexto)
@@ -1900,6 +1948,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     concluir,
     cpfNaNota,
     creditoUsado,
+    divisao,
     emitirNota,
     fetcher,
     forma,
@@ -2387,6 +2436,11 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           onFormaChange={(nova) => {
             setForma(nova)
             setImprimirCupom(cupomPadrao(nova))
+            setErroFinalizacao(null)
+          }}
+          divisao={divisao}
+          onDivisaoChange={(nova) => {
+            setDivisao(nova)
             setErroFinalizacao(null)
           }}
           recebido={recebidoTexto}

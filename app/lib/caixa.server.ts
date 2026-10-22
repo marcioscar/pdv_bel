@@ -11,6 +11,7 @@ import {
 } from "~/lib/caixa"
 import { moeda } from "~/lib/moeda"
 import { conferirGerente } from "~/lib/sessao.server"
+import { pagamentosDaVenda } from "~/lib/pdv"
 import { NAO_CANCELADA, NAO_E_TRANSFERENCIA } from "~/lib/vendas.server"
 
 /**
@@ -50,18 +51,20 @@ export async function resumoDoDia(loja: string, dia: string) {
     criadaEm: { gte: inicioDoDia(dia), lt: depoisDoDia(dia) },
   }
 
-  const [porForma, canceladas, movimentos, fechamento] = await Promise.all([
+  const [vendas, canceladas, movimentos, fechamento] = await Promise.all([
     /*
      * A transferência para outra loja da rede fica fora do fechamento inteiro.
      * Não mexeria no esperado em espécie — nada em dinheiro entra por ela —,
      * mas entraria no "total vendido" do dia, e quem confere o caixa leria um
      * faturamento que não existiu.
+     *
+     * As vendas uma a uma, e não um groupBy por forma: a venda mista divide o
+     * total entre formas, e só `pagamentosDaVenda` sabe quanto foi para cada.
+     * O dia de uma loja tem dezenas de vendas, não milhares.
      */
-    db.venda.groupBy({
-      by: ["forma"],
+    db.venda.findMany({
       where: { AND: [periodo, NAO_CANCELADA, NAO_E_TRANSFERENCIA] },
-      _sum: { total: true, creditoUsado: true },
-      _count: { _all: true },
+      select: { forma: true, total: true, creditoUsado: true, pagamentos: true },
     }),
     db.venda.count({ where: { AND: [periodo, { NOT: NAO_CANCELADA }] } }),
     db.movimentoCaixa.findMany({
@@ -74,23 +77,20 @@ export async function resumoDoDia(loja: string, dia: string) {
   // Cancelado continua na lista para quem lê a tela, mas fora de toda soma.
   const valendo = movimentos.filter((m) => !m.canceladoEm)
 
-  const por = (forma: string) =>
-    arredondar(porForma.find((f) => f.forma === forma)?._sum.total ?? 0)
-
-  /**
-   * O crédito abatido em vendas EM DINHEIRO — e só nelas.
+  /*
+   * O que ENTROU por cada forma, já sem o crédito do cliente.
    *
-   * Numa venda de R$ 50 com R$ 37 de crédito, a gaveta recebeu R$ 13. A venda
-   * vale R$ 50 (a mercadoria saiu por isso), mas o que se conta no fim do dia é
-   * o que está na gaveta.
-   *
-   * Só as em dinheiro porque só elas passam pela gaveta: crédito abatido numa
-   * venda no Pix reduz o que caiu no banco, não o que há na caixa, e descontar
-   * aqui faria o caixa acusar sobra todo dia.
+   * Numa venda de R$ 50 com R$ 37 de crédito, a gaveta recebeu R$ 13 — e é isso
+   * que conta como dinheiro. Os R$ 37 vão numa linha própria, o crédito do
+   * cliente, para as formas mais ela continuarem somando o total vendido.
    */
-  const creditoEmDinheiro = arredondar(
-    porForma.find((f) => f.forma === "dinheiro")?._sum.creditoUsado ?? 0
-  )
+  const porForma = new Map<string, number>()
+  for (const v of vendas) {
+    for (const p of pagamentosDaVenda(v)) {
+      porForma.set(p.forma, (porForma.get(p.forma) ?? 0) + p.valor)
+    }
+  }
+  const por = (forma: string) => arredondar(porForma.get(forma) ?? 0)
 
   const soma = (tipo: TipoMovimentoDeCaixa) =>
     arredondar(valendo.filter((m) => m.tipo === tipo).reduce((acc, m) => acc + m.valor, 0))
@@ -115,10 +115,14 @@ export async function resumoDoDia(loja: string, dia: string) {
     suprimentos,
     devolucoes,
     vendasDinheiro,
-    creditoEmDinheiro,
-    esperado: arredondar(
-      abertura + vendasDinheiro - creditoEmDinheiro - sangrias + suprimentos - devolucoes
-    ),
+    /*
+     * Zero de propósito: o dinheiro já vem líquido do crédito. O campo segue no
+     * resumo porque os fechamentos antigos, gravados com o dinheiro bruto, o
+     * têm — e as telas que os mostram são as mesmas.
+     */
+    creditoEmDinheiro: 0,
+    creditoDoCliente: arredondar(vendas.reduce((a, v) => a + (v.creditoUsado ?? 0), 0)),
+    esperado: arredondar(abertura + vendasDinheiro - sangrias + suprimentos - devolucoes),
     vendasPix: por("pix"),
     vendasDebito: por("debito"),
     vendasCredito: por("credito"),
@@ -126,8 +130,8 @@ export async function resumoDoDia(loja: string, dia: string) {
     // gaveta: entra na mesma linha, em vez de um campo novo no fechamento.
     vendasPrazo: arredondar(por("prazo") + por("entrega")),
     vendasLink: por("link"),
-    totalVendido: arredondar(porForma.reduce((a, f) => a + (f._sum.total ?? 0), 0)),
-    quantidadeVendas: porForma.reduce((a, f) => a + f._count._all, 0),
+    totalVendido: arredondar(vendas.reduce((a, v) => a + v.total, 0)),
+    quantidadeVendas: vendas.length,
     canceladas,
     movimentos,
     /**
@@ -396,6 +400,7 @@ export async function fecharCaixa(entrada: {
         suprimentos: resumo.suprimentos,
         devolucoes: resumo.devolucoes,
         creditoEmDinheiro: resumo.creditoEmDinheiro,
+        creditoDoCliente: resumo.creditoDoCliente,
         vendasLink: resumo.vendasLink,
         esperado: resumo.esperado,
         contado,
@@ -509,6 +514,8 @@ export async function fechamentoDetalhado(id: string) {
         operador: true,
         forma: true,
         total: true,
+        creditoUsado: true,
+        pagamentos: true,
         clienteNome: true,
         canceladaEm: true,
       },

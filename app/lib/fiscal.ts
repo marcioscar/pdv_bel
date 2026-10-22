@@ -1,3 +1,6 @@
+import { arredondar } from "~/lib/moeda"
+import { FORMA_MISTA, pagamentosDaVenda, type PagamentoDaVenda } from "~/lib/pdv"
+
 /**
  * As regras fiscais que a nota exige, num lugar só.
  *
@@ -247,6 +250,38 @@ export const PAGAMENTO_NA_NOTA: Record<string, string> = {
 
 export function pagamentoNaNota(forma: string) {
   return PAGAMENTO_NA_NOTA[forma] ?? "99"
+}
+
+/** "Crédito loja" na tabela da SEFAZ: o saldo a favor que o cliente tinha aqui. */
+const CREDITO_LOJA = "05"
+
+/**
+ * As formas de pagamento da NFC-e, que precisam somar o total da nota.
+ *
+ * A venda de uma forma só segue como sempre foi: o total inteiro nela. A
+ * mista vai linha por linha — a NFC-e aceita várias —, e como as linhas somam
+ * o que entrou (`total − creditoUsado`), o crédito do cliente entra como linha
+ * própria, senão a SEFAZ recusa a nota por pagamento menor que o total.
+ */
+export function formasDePagamentoDaNota(venda: {
+  forma: string
+  total: number
+  creditoUsado: number
+  pagamentos: PagamentoDaVenda[]
+}) {
+  if (venda.forma !== FORMA_MISTA) {
+    return [
+      { forma_pagamento: pagamentoNaNota(venda.forma), valor_pagamento: arredondar(venda.total) },
+    ]
+  }
+  const linhas = pagamentosDaVenda(venda).map((p) => ({
+    forma_pagamento: pagamentoNaNota(p.forma),
+    valor_pagamento: arredondar(p.valor),
+  }))
+  if (venda.creditoUsado > 0) {
+    linhas.push({ forma_pagamento: CREDITO_LOJA, valor_pagamento: arredondar(venda.creditoUsado) })
+  }
+  return linhas
 }
 
 const SO_DIGITOS = /^\d+$/

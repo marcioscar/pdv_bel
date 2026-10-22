@@ -16,7 +16,7 @@ import {
   type LinhaDevolvivel,
 } from "~/lib/devolucoes.server"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
-import { FORMAS_PAGAMENTO } from "~/lib/pdv"
+import { rotuloDoPagamento } from "~/lib/pdv"
 import { exigirGerente } from "~/lib/sessao.server"
 import { cn } from "~/lib/utils"
 
@@ -61,6 +61,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       criadaEm: venda.criadaEm.toISOString(),
       total: venda.total,
       forma: venda.forma,
+      creditoUsado: venda.creditoUsado,
+      pagamentos: venda.pagamentos,
       clienteNome: venda.clienteNome,
       // O crédito precisa de conta onde cair; a tela desliga o botão sem ela.
       temCliente: Boolean(venda.clienteId),
@@ -181,7 +183,7 @@ export default function Devolucao({ loaderData }: Route.ComponentProps) {
             timeStyle: "short",
           })}{" "}
           · {moeda(venda.total)} em{" "}
-          {FORMAS_PAGAMENTO.find((f) => f.id === venda.forma)?.rotulo ?? venda.forma}
+          {rotuloDoPagamento(venda, moeda)}
           {venda.clienteNome ? ` · ${venda.clienteNome}` : ""}
         </span>
       </div>

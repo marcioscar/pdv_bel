@@ -1,4 +1,4 @@
-import { arredondar } from "~/lib/moeda"
+import { arredondar, interpretarValor } from "~/lib/moeda"
 
 export type ProdutoCatalogo = {
   id: string
@@ -363,9 +363,95 @@ export const FORMAS_PAGAMENTO = [
    * loja da rede.
    */
   { id: "transferencia", rotulo: "Transferência entre lojas" },
+  /*
+   * A venda paga em mais de uma forma — parte no dinheiro, parte no cartão. O
+   * detalhe mora em `pagamentos`; esta é só a marca, para as telas que mostram
+   * uma forma por venda terem o que escrever. Também não é botão: decorre de o
+   * caixa dividir o pagamento.
+   */
+  { id: "misto", rotulo: "Misto" },
 ] as const
 
 export type FormaPagamento = (typeof FORMAS_PAGAMENTO)[number]["id"]
+
+/** A forma gravada quando o pagamento foi dividido entre várias. */
+export const FORMA_MISTA = "misto"
+
+/**
+ * As formas que podem dividir uma venda entre si.
+ *
+ * Só as do balcão, que fecham na hora. Prazo, link, Pix na entrega e
+ * transferência têm fluxo próprio (boleto, cobrança, gerente liberando, nota de
+ * transferência) e continuam sozinhas na venda — misturá-las com dinheiro na
+ * gaveta multiplicaria os casos sem ninguém pedir.
+ *
+ * O Pix fica de fora por enquanto: ele exige o QR conferido no Inter antes de a
+ * venda nascer, e esse caminho ainda cobra o total, não uma parte.
+ */
+export const FORMAS_COMBINAVEIS = ["dinheiro", "debito", "credito"] as const
+
+export function formaCombinavel(forma: string) {
+  return (FORMAS_COMBINAVEIS as readonly string[]).includes(forma)
+}
+
+/**
+ * O que o caixa digitou na divisão, por forma — texto, como no campo.
+ *
+ * Uma linha fixa para cada forma combinável, e não uma lista que cresce: são
+ * três, e três campos sempre no mesmo lugar se preenchem sem mouse. Vazio é a
+ * forma que não entrou.
+ */
+export type DivisaoDoPagamento = Record<(typeof FORMAS_COMBINAVEIS)[number], string>
+
+export const DIVISAO_VAZIA: DivisaoDoPagamento = { dinheiro: "", debito: "", credito: "" }
+
+/** As linhas que de fato entraram: as com valor. */
+export function linhasDaDivisao(divisao: DivisaoDoPagamento): PagamentoDaVenda[] {
+  return FORMAS_COMBINAVEIS.flatMap((forma) => {
+    const valor = interpretarValor(divisao[forma])
+    return valor !== null && valor > 0 ? [{ forma, valor: arredondar(valor) }] : []
+  })
+}
+
+/** Uma linha do pagamento: espelha `type VendaPagamento` do schema. */
+export type PagamentoDaVenda = { forma: string; valor: number }
+
+/**
+ * Como a venda foi paga, linha por linha — o que de fato entrou por cada forma.
+ *
+ * A soma é `total − creditoUsado`: o crédito do cliente não é pagamento que
+ * entrou, e continua no campo dele. Venda com uma forma só não grava
+ * `pagamentos`, e a venda anterior ao campo também não tem: nas duas a linha
+ * única é montada aqui, para quem soma por forma ler toda venda do mesmo jeito.
+ */
+export function pagamentosDaVenda(venda: {
+  forma: string
+  total: number
+  creditoUsado?: number | null
+  pagamentos?: PagamentoDaVenda[] | null
+}): PagamentoDaVenda[] {
+  if (venda.pagamentos && venda.pagamentos.length > 0) return venda.pagamentos
+  return [{ forma: venda.forma, valor: arredondar(venda.total - (venda.creditoUsado ?? 0)) }]
+}
+
+/** Se alguma parte da venda entrou em espécie — passou pela gaveta. */
+export function temDinheiro(venda: Parameters<typeof pagamentosDaVenda>[0]) {
+  return pagamentosDaVenda(venda).some((p) => p.forma === "dinheiro")
+}
+
+/** "Dinheiro R$ 40,00 + Débito R$ 60,00", ou só o rótulo quando é uma forma. */
+export function rotuloDoPagamento(
+  venda: Parameters<typeof pagamentosDaVenda>[0],
+  formatar: (valor: number) => string
+) {
+  const linhas = pagamentosDaVenda(venda)
+  if (linhas.length === 1) return rotuloDaForma(venda.forma)
+  return linhas.map((l) => `${rotuloDaForma(l.forma)} ${formatar(l.valor)}`).join(" + ")
+}
+
+export function rotuloDaForma(forma: string) {
+  return FORMAS_PAGAMENTO.find((f) => f.id === forma)?.rotulo ?? forma
+}
 
 /**
  * A forma que marca a saída para a própria rede.
@@ -382,7 +468,7 @@ export function ehTransferenciaEntreLojas(forma: string) {
 
 /** As que o caixa escolhe de fato — a transferência decorre do cliente. */
 export const FORMAS_DE_CAIXA = FORMAS_PAGAMENTO.filter(
-  (f) => f.id !== FORMA_TRANSFERENCIA
+  (f) => f.id !== FORMA_TRANSFERENCIA && f.id !== FORMA_MISTA
 )
 
 /** A forma do Pix na entrega: venda fechada, Pix com vencimento a receber. */

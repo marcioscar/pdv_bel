@@ -497,6 +497,9 @@ export default function Fechamento({ loaderData, actionData }: Route.ComponentPr
               {resumo.vendasLink > 0 ? (
                 <Cartao rotulo="Link" valor={resumo.vendasLink} />
               ) : null}
+              {resumo.creditoDoCliente > 0 ? (
+                <Cartao rotulo="Crédito do cliente" valor={resumo.creditoDoCliente} />
+              ) : null}
               <Cartao rotulo="Total vendido" valor={resumo.totalVendido} destaque />
             </div>
 

@@ -3,7 +3,13 @@ import { db } from "~/lib/db.server"
 import { escapar } from "~/lib/html"
 import { dadosDaLoja } from "~/lib/lojas.server"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
-import { CONDICOES_PAGAMENTO, FORMAS_PAGAMENTO, formaGeraCobranca } from "~/lib/pdv"
+import {
+  CONDICOES_PAGAMENTO,
+  FORMA_MISTA,
+  formaGeraCobranca,
+  pagamentosDaVenda,
+  rotuloDaForma,
+} from "~/lib/pdv"
 import { exigirUsuario, podeVerDaLoja } from "~/lib/sessao.server"
 
 const OBJECT_ID = /^[0-9a-fA-F]{24}$/
@@ -56,8 +62,13 @@ export async function loader({ params, request }: Route.LoaderArgs) {
    */
   const logo = loja.logo ? new URL(loja.logo, request.url).href : null
 
-  const forma =
-    FORMAS_PAGAMENTO.find((f) => f.id === venda.forma)?.rotulo ?? venda.forma
+  const forma = rotuloDaForma(venda.forma)
+  // A venda mista lista o que entrou por cada forma, logo abaixo do "a pagar".
+  const linhasDoPagamento = venda.forma === FORMA_MISTA
+    ? pagamentosDaVenda(venda)
+        .map((p) => `<tr><td>${escapar(rotuloDaForma(p.forma))}</td><td class="dir">${moeda(p.valor)}</td></tr>`)
+        .join("")
+    : ""
   const condicao = CONDICOES_PAGAMENTO.find((c) => c.id === venda.condicao)
 
   const itens = venda.itens
@@ -169,7 +180,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   <table>
     <tr><td>Pagamento</td><td class="dir forte">${escapar(forma)}</td></tr>
     ${venda.creditoUsado > 0 ? `<tr><td>Cr&eacute;dito abatido</td><td class="dir">- ${moeda(venda.creditoUsado)}</td></tr><tr><td>A pagar</td><td class="dir forte">${moeda(venda.total - venda.creditoUsado)}</td></tr>` : ""}
-    ${venda.recebido !== null ? `<tr><td>Recebido</td><td class="dir">${moeda(venda.recebido)}</td></tr>` : ""}
+    ${linhasDoPagamento}
+    ${venda.recebido !== null ? `<tr><td>${venda.forma === FORMA_MISTA ? "Recebido em dinheiro" : "Recebido"}</td><td class="dir">${moeda(venda.recebido)}</td></tr>` : ""}
     ${venda.troco !== null && venda.troco > 0 ? `<tr><td>Troco</td><td class="dir forte">${moeda(venda.troco)}</td></tr>` : ""}
     ${condicao ? `<tr><td colspan="2">Condição: ${escapar(condicao.rotulo)}</td></tr>` : ""}
   </table>

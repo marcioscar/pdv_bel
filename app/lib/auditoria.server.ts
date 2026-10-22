@@ -1,6 +1,7 @@
 import { db } from "~/lib/db.server"
 import { emDia } from "~/lib/dia"
 import { arredondar } from "~/lib/moeda"
+import { pagamentosDaVenda, temDinheiro } from "~/lib/pdv"
 import { NAO_CANCELADA, NAO_E_TRANSFERENCIA } from "~/lib/vendas.server"
 
 /**
@@ -37,6 +38,8 @@ export async function auditoriaDoCaixa(
         loja: true,
         criadaEm: true,
         forma: true,
+        creditoUsado: true,
+        pagamentos: true,
         subtotal: true,
         desconto: true,
         total: true,
@@ -60,10 +63,14 @@ export async function auditoriaDoCaixa(
     const linha =
       porDia.get(chave) ??
       { loja: v.loja, dia, debito: 0, credito: 0, pix: 0, dinheiro: 0, vendas: 0 }
-    if (v.forma === "debito") linha.debito += v.total
-    if (v.forma === "credito") linha.credito += v.total
-    if (v.forma === "pix") linha.pix += v.total
-    if (v.forma === "dinheiro") linha.dinheiro += v.total
+    // Por linha de pagamento: a venda mista põe uma parte em cada coluna, e o
+    // que conta é o que passou pela maquininha, já sem o crédito do cliente.
+    for (const p of pagamentosDaVenda(v)) {
+      if (p.forma === "debito") linha.debito += p.valor
+      if (p.forma === "credito") linha.credito += p.valor
+      if (p.forma === "pix") linha.pix += p.valor
+      if (p.forma === "dinheiro") linha.dinheiro += p.valor
+    }
     linha.vendas++
     porDia.set(chave, linha)
   }
@@ -107,7 +114,7 @@ export async function auditoriaDoCaixa(
     if (v.desconto > 0) {
       linha.comDesconto++
       linha.desconto += v.desconto
-      if (v.forma === "dinheiro") {
+      if (temDinheiro(v)) {
         linha.descontoEmDinheiro += v.desconto
         linha.vendasEmDinheiroComDesconto++
       }
