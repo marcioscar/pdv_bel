@@ -3,7 +3,6 @@ import { TriangleAlert } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { Kbd } from "~/components/ui/kbd"
 import { Separator } from "~/components/ui/separator"
-import { cn } from "~/lib/utils"
 import { formatarCpfCnpj } from "~/lib/documento"
 import { moeda } from "~/lib/moeda"
 
@@ -52,19 +51,17 @@ export function PainelPagamento({
           <span>Subtotal</span>
           <span className="font-mono tabular-nums">{moeda(subtotal)}</span>
         </div>
-        <div className="mt-1.5 flex justify-between text-xs text-muted-foreground">
-          <span>
-            Desconto <Kbd className="ml-1">F3</Kbd>
-          </span>
-          <span
-            className={cn(
-              "font-mono tabular-nums",
-              desconto > 0 && "text-destructive"
-            )}
-          >
-            {desconto > 0 ? `− ${moeda(desconto)}` : moeda(0)}
-          </span>
-        </div>
+        {/* O desconto é dado no fechamento (F10 › F3), não aqui. A linha só
+            aparece quando já há um — na venda retomada depois da liberação do
+            gerente, que volta com o desconto negociado. */}
+        {desconto > 0 ? (
+          <div className="mt-1.5 flex justify-between text-xs text-muted-foreground">
+            <span>Desconto</span>
+            <span className="font-mono tabular-nums text-destructive">
+              − {moeda(desconto)}
+            </span>
+          </div>
+        ) : null}
         <div className="mt-1.5 flex justify-between text-xs text-muted-foreground">
           <span>Volumes</span>
           <span className="font-mono tabular-nums">{volumes}</span>

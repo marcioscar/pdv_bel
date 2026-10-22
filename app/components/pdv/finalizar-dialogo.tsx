@@ -578,22 +578,23 @@ export function FinalizarDialogo({
   })();
 
   /**
-   * Gira o ciclo. A loja que ainda não emite pula o primeiro estado: oferecer
+   * Gira o ciclo: cupom → documento fiscal → nada → cupom. O cupom não fiscal
+   * é o padrão, então a primeira tecla leva ao que o cliente mais pede depois
+   * dele — a nota. A loja que ainda não emite pula esse estado: oferecer
    * "emitir" onde a emissão está desligada seria prometer o que não acontece.
    */
   function girarSaida() {
-    if (estado === "fiscal") {
-      onEmitirNotaChange(false);
-      onImprimirChange(true);
-      return;
-    }
     if (estado === "cupom") {
+      if (fiscal.emite) {
+        onEmitirNotaChange(true);
+        return;
+      }
       onImprimirChange(false);
       return;
     }
-    if (fiscal.emite) {
-      onEmitirNotaChange(true);
-      onImprimirChange(true);
+    if (estado === "fiscal") {
+      onEmitirNotaChange(false);
+      onImprimirChange(false);
       return;
     }
     onImprimirChange(true);

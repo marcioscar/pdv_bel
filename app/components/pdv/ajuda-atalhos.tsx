@@ -32,7 +32,7 @@ const GRUPOS = [
       { tecla: "F3", texto: "na conferência, desconto em reais (15,50) ou percentual (10%)" },
       { tecla: "F4", texto: "na conferência, divide o pagamento entre dinheiro, Pix, débito e crédito" },
       { tecla: "F6", texto: "na conferência, escolhe o cliente (F2 cadastra um novo)" },
-      { tecla: "F7", texto: "na conferência, liga e desliga o cupom" },
+      { tecla: "F7", texto: "na conferência, gira o papel: cupom não fiscal → nota fiscal → não imprimir" },
       { tecla: "Enter", texto: "na conferência, fecha a venda" },
       { tecla: "F2", texto: "volta o foco para a busca" },
     ],

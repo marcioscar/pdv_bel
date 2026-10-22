@@ -952,9 +952,9 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   const [vendedorCodigo, setVendedorCodigo] = useState("")
   const [imprimirCupom, setImprimirCupom] = useState(true)
   /*
-   * Emitir a nota é decisão desta venda, não do sistema. Começa ligada onde a
-   * loja emite — o documento fiscal é a regra, não a exceção — e o operador
-   * desliga quando não quer: conferência, teste, cliente que não quer nota.
+   * Emitir a nota é decisão desta venda, não do sistema. Começa DESLIGADA: o
+   * padrão do balcão é o cupom não fiscal (decisão do Marcio, 22/10/2026), e o
+   * operador liga com F7 quando o cliente pede a nota.
    */
   const [emitirNota, setEmitirNota] = useState(false)
   /*
@@ -1871,11 +1871,11 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
    */
   const cupomPadrao = (f: FormaPagamento) => f !== "prazo"
 
-  // A conferência abre com a nota ligada quando a loja emite; a escolha vale
-  // para esta venda e some com ela.
+  // A conferência abre sempre no cupom não fiscal, sem a nota: a escolha de
+  // emitir vale para esta venda e some com ela.
   useEffect(() => {
-    if (finalizando) setEmitirNota(fiscal.emite)
-  }, [finalizando, fiscal.emite])
+    if (finalizando) setEmitirNota(false)
+  }, [finalizando])
 
   /** F10: abre a conferência. Nada é gravado aqui. */
   const abrirFinalizacao = useCallback(() => {
