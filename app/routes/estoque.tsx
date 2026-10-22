@@ -3,6 +3,7 @@ import { Link } from "react-router"
 import { PackageSearch, ScanLine } from "lucide-react"
 
 import type { Route } from "./+types/estoque"
+import { ESTILO_CAMPO } from "~/components/pdv/filtros"
 import { Topo } from "~/components/pdv/topo"
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
@@ -13,7 +14,7 @@ import { movimentosRecentes, saldosPorProdutoELoja } from "~/lib/estoque.server"
 import { listarLojas } from "~/lib/lojas.server"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { useAtalhosDeSecao } from "~/lib/navegacao"
-import { buscarProdutos, criarIndice } from "~/lib/pdv"
+import { buscarProdutos, criarIndice, LIMITE_BUSCA_CAIXA } from "~/lib/pdv"
 import { SOMENTE_ATIVOS } from "~/lib/produtos.server"
 import { ehGerente } from "~/lib/permissoes"
 import { exigirUsuario } from "~/lib/sessao.server"
@@ -27,14 +28,31 @@ export function meta(_: Route.MetaArgs) {
 export async function loader({ request }: Route.LoaderArgs) {
   const eu = await exigirUsuario(request)
 
-  const [cadastro, saldos, movimentos, lojas] = await Promise.all([
+  const [cadastro, saldos, movimentos, lojas, fornecimentos, fornecedores] = await Promise.all([
     db.produto.findMany({ where: SOMENTE_ATIVOS, orderBy: { descricao: "asc" } }),
     // Uma agregação para as quatro lojas. É o que um banco único entrega de graça:
     // com banco por loja, isto seria quatro conexões e uma junção na aplicação.
     saldosPorProdutoELoja(),
     movimentosRecentes(eu.loja),
     listarLojas(),
+    /*
+     * Quem fornece o quê, das compras já lançadas — é o que responde "o que
+     * temos do fornecedor X?" quando o representante chega ou na hora de
+     * montar o pedido. Pouco dado (centenas de linhas), então vem junto.
+     */
+    db.fornecimento.findMany({ select: { produtoId: true, fornecedorId: true } }),
+    db.fornecedor.findMany({ select: { id: true, razaoSocial: true, nomeFantasia: true } }),
   ])
+
+  const fornecedoresPorProduto = new Map<string, string[]>()
+  for (const f of fornecimentos) {
+    const lista = fornecedoresPorProduto.get(f.produtoId) ?? []
+    lista.push(f.fornecedorId)
+    fornecedoresPorProduto.set(f.produtoId, lista)
+  }
+  // Só os fornecedores que têm produto: os outros deixariam a lista longa e
+  // a escolha sempre vazia.
+  const comProduto = new Set(fornecimentos.map((f) => f.fornecedorId))
 
   const produtos = cadastro.map((produto) => {
     const porLoja = saldos.get(produto.id)
@@ -55,6 +73,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       estoque: saldoPorLoja[eu.loja] ?? 0,
       saldoPorLoja,
       rede,
+      fornecedores: fornecedoresPorProduto.get(produto.id) ?? [],
     }
   })
 
@@ -63,6 +82,10 @@ export async function loader({ request }: Route.LoaderArgs) {
     lojas,
     produtos,
     movimentos,
+    fornecedores: fornecedores
+      .filter((f) => comProduto.has(f.id))
+      .map((f) => ({ id: f.id, nome: f.nomeFantasia || f.razaoSocial }))
+      .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR")),
     semEstoque: produtos.filter((p) => p.estoque <= 0).length,
     faltamAqui: produtos.filter((p) => p.estoque <= 0 && p.rede > 0).length,
   }
@@ -80,15 +103,23 @@ export async function loader({ request }: Route.LoaderArgs) {
  * **escreve** no saldo na tela que se abre com cliente esperando convida ao acidente.
  */
 export default function Estoque({ loaderData }: Route.ComponentProps) {
-  const { eu, lojas, produtos, movimentos, semEstoque, faltamAqui } = loaderData
+  const { eu, lojas, produtos, movimentos, fornecedores, semEstoque, faltamAqui } = loaderData
 
   const [busca, setBusca] = useState("")
+  // "" é todos. Com um escolhido, a lista é o que ele fornece — inteira.
+  const [fornecedorId, setFornecedorId] = useState("")
   const campo = useRef<HTMLInputElement>(null)
   const { escuro, alternar } = useTema()
   const relogio = useRelogio()
   useAtalhosDeSecao(eu.papel)
 
-  const indice = useMemo(() => criarIndice(produtos), [produtos])
+  // O filtro de fornecedor vem antes da busca: buscar "zip" com a Plastizip
+  // escolhida acha os zip DELA.
+  const doFornecedor = useMemo(
+    () => (fornecedorId ? produtos.filter((p) => p.fornecedores.includes(fornecedorId)) : produtos),
+    [fornecedorId, produtos]
+  )
+  const indice = useMemo(() => criarIndice(doFornecedor), [doFornecedor])
   const porId = useMemo(() => new Map(produtos.map((p) => [p.id, p])), [produtos])
 
   /**
@@ -98,10 +129,12 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
    */
   const encontrados = useMemo(() => {
     if (busca.trim()) {
-      return buscarProdutos(indice, busca, 40)
+      return buscarProdutos(indice, busca, LIMITE_BUSCA_CAIXA)
         .map((p) => porId.get(p.id)!)
         .filter(Boolean)
     }
+    // Fornecedor escolhido e sem busca: tudo dele, em ordem de descrição.
+    if (fornecedorId) return doFornecedor
     const temNoutra = produtos
       .filter((p) => p.estoque <= 0 && p.rede > 0)
       .sort((a, b) => b.rede - a.rede)
@@ -109,7 +142,7 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
       0,
       40
     )
-  }, [busca, indice, porId, produtos])
+  }, [busca, doFornecedor, fornecedorId, indice, porId, produtos])
 
   useEffect(() => {
     function aoTeclar(evento: KeyboardEvent) {
@@ -169,6 +202,19 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
           data-lpignore="true"
           className="h-9 flex-1 rounded-none border-0 bg-transparent px-0 font-mono text-lg tracking-tight tabular-nums shadow-none placeholder:font-sans placeholder:text-sm placeholder:tracking-normal focus-visible:border-transparent focus-visible:ring-0 md:text-lg"
         />
+        <select
+          value={fornecedorId}
+          onChange={(e) => setFornecedorId(e.target.value)}
+          aria-label="Fornecedor"
+          className={cn(ESTILO_CAMPO, "w-56 shrink-0")}
+        >
+          <option value="">Todos os fornecedores</option>
+          {fornecedores.map((f) => (
+            <option key={f.id} value={f.id}>
+              {f.nome}
+            </option>
+          ))}
+        </select>
         {/* Entrada manual é do gerente; para o operador o botão levaria a um 403. */}
         {ehGerente(eu.papel) ? (
           <Button
@@ -230,7 +276,9 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
                     <p className="mt-3 text-sm text-muted-foreground">
                       {busca.trim()
                         ? `Nada encontrado para “${busca}”`
-                        : "Nada faltando nesta loja."}
+                        : fornecedorId
+                          ? "Nenhum produto deste fornecedor"
+                          : "Nada faltando nesta loja."}
                     </p>
                   </td>
                 </tr>
@@ -352,9 +400,13 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
 
       <div className="border-t border-border px-5 py-2.5 text-xs text-muted-foreground">
         Só consulta · <Kbd>Esc</Kbd> limpa a busca ·{" "}
-        {busca.trim()
-          ? "a coluna da sua loja está em destaque"
-          : "sem busca, mostra o que falta aqui e tem em outra loja"}
+        {fornecedorId
+          ? `${encontrados.length} ${encontrados.length === 1 ? "produto" : "produtos"} de ${
+              fornecedores.find((f) => f.id === fornecedorId)?.nome ?? "fornecedor"
+            } — pelas compras já lançadas`
+          : busca.trim()
+            ? "a coluna da sua loja está em destaque"
+            : "sem busca, mostra o que falta aqui e tem em outra loja"}
       </div>
     </main>
   )

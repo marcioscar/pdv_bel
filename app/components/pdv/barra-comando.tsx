@@ -5,7 +5,7 @@ import { Input } from "~/components/ui/input";
 import { Kbd } from "~/components/ui/kbd";
 import { cn } from "~/lib/utils";
 import { moeda, quantidade } from "~/lib/moeda";
-import { precoAplicado, type ProdutoCatalogo } from "~/lib/pdv";
+import { LIMITE_BUSCA_CAIXA, precoAplicado, type ProdutoCatalogo } from "~/lib/pdv";
 
 export type ModoComando =
 	| "busca"
@@ -132,7 +132,13 @@ export function BarraComando({
 					{resultados.map((produto, indice) => {
 						const ativo = indice === indiceResultado;
 						return (
-							<li key={produto.id} role='option' aria-selected={ativo}>
+							<li
+								key={produto.id}
+								role='option'
+								aria-selected={ativo}
+								// Com a lista inteira, o item escolhido pelas setas pode
+								// estar abaixo da dobra: rola até ele.
+								ref={ativo ? (el) => el?.scrollIntoView({ block: "nearest" }) : undefined}>
 								<button
 									type='button'
 									tabIndex={-1}
@@ -170,6 +176,11 @@ export function BarraComando({
 							</li>
 						);
 					})}
+					{resultados.length >= LIMITE_BUSCA_CAIXA ? (
+						<li className='px-5 py-2 text-center text-xs text-muted-foreground'>
+							Mostrando os {LIMITE_BUSCA_CAIXA} primeiros — digite mais para refinar
+						</li>
+					) : null}
 				</ul>
 			) : null}
 		</div>

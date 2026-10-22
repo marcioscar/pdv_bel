@@ -322,6 +322,14 @@ export function buscarProdutos<T extends Buscavel>(
     .map((e) => e.produto)
 }
 
+/**
+ * Quantos resultados a busca do caixa mostra. Antes eram 7, e "zip" — que acha
+ * 14 produtos — escondia metade: quem procura pela família quer ver a família
+ * inteira. O teto só existe para uma letra solta não desenhar o catálogo todo
+ * a cada tecla; quando ele é atingido, a lista pede para refinar.
+ */
+export const LIMITE_BUSCA_CAIXA = 200
+
 export function produtosPorCodigo(catalogo: ProdutoCatalogo[], codigo: string) {
   return catalogo.filter((produto) => produto.codigo === codigo)
 }

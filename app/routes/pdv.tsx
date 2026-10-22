@@ -89,6 +89,7 @@ import {
   FORMAS_PAGAMENTO,
   formaGeraCobranca,
   linhasDaDivisao,
+  LIMITE_BUSCA_CAIXA,
   temPixNaDivisao,
   VALOR_MINIMO_BOLETO,
   interpretarComando,
@@ -1118,7 +1119,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
 
   const resultados = useMemo(() => {
     if (modo !== "busca") return []
-    if (comando.tipo === "texto") return buscarProdutos(indice, comando.termo)
+    if (comando.tipo === "texto") return buscarProdutos(indice, comando.termo, LIMITE_BUSCA_CAIXA)
     if (comando.tipo === "codigo") {
       // 55 códigos do catálogo se repetem: quando o código é ambíguo o operador
       // escolhe na lista em vez de a venda receber o produto errado.
