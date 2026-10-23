@@ -120,7 +120,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   const jaLancadosPelaNota = temItens
     ? await db.movimentoEstoque.findMany({
         where: { notaFiscalRecebidaId: nota.id, tipo: "entrada" },
-        select: { produtoId: true, loja: true, quantidade: true },
+        select: { produtoId: true, loja: true, quantidade: true, notaFiscalItens: true },
       })
     : []
 
@@ -439,6 +439,7 @@ export default function DetalheNotaDeEntrada({ loaderData }: Route.ComponentProp
               recebidoAntes={recebidoAntes}
               lojaPadrao={nota.loja}
               jaLancados={jaLancadosPelaNota}
+              recebida={nota.situacao === "recebida"}
               recebidoEm={nota.recebidoEm ? String(nota.recebidoEm) : null}
               recebidoPor={nota.recebidoPor}
             />

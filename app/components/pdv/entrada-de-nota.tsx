@@ -75,6 +75,7 @@ export function EntradaDeNota({
   recebidoAntes,
   lojaPadrao,
   jaLancados,
+  recebida,
   recebidoEm,
   recebidoPor,
 }: {
@@ -91,7 +92,8 @@ export function EntradaDeNota({
   /** A loja destinatária da nota — quase sempre é ela que recebeu. */
   lojaPadrao: string
   /** O que esta nota já lançou no estoque, por movimento. Vazio antes da primeira entrada. */
-  jaLancados: { produtoId: string; loja: string; quantidade: number }[]
+  jaLancados: { produtoId: string; loja: string; quantidade: number; notaFiscalItens: number[] }[]
+  recebida: boolean
   recebidoEm: string | null
   recebidoPor: string | null
 }) {
@@ -163,6 +165,22 @@ export function EntradaDeNota({
     setCadastrando(null)
   }, [cadastroFetcher.data])
 
+  /*
+   * Os itens da nota que já entraram no estoque, e com qual produto. Ficam
+   * travados no produto com que entraram: trocar o produto de um item já
+   * lançado o faria entrar de novo com outro nome.
+   */
+  const produtoDaLinhaLancada = useMemo(() => {
+    const mapa = new Map<number, string>()
+    for (const m of jaLancados) for (const linha of m.notaFiscalItens) mapa.set(linha, m.produtoId)
+    return mapa
+  }, [jaLancados])
+  // Entradas de antes do registro por item só sabem o produto.
+  const produtosLancadosSemLinha = useMemo(
+    () => new Set(jaLancados.filter((m) => m.notaFiscalItens.length === 0).map((m) => m.produtoId)),
+    [jaLancados]
+  )
+
   // Cada item da nota, com a quantidade e o custo unitário já recalculados pela
   // edição do gerente — o custo TOTAL do item (o que a nota cobrou) não muda; o
   // que muda é por quantas unidades do catálogo ele se divide.
@@ -171,15 +189,17 @@ export function EntradaDeNota({
       itensDaNota.map((item, i) => {
         const valor = interpretarValor(quantidades[i] ?? "")
         const quantidade = valor != null && valor > 0 ? valor : item.quantidade
+        const produtoId = produtoDaLinhaLancada.get(i) ?? pareamento[i] ?? ""
         return {
           ...item,
-          produtoId: pareamento[i] ?? "",
+          produtoId,
+          lancada: produtoDaLinhaLancada.has(i) || produtosLancadosSemLinha.has(produtoId),
           quantidadeEfetiva: quantidade,
           custoUnitarioEfetivo:
             quantidade > 0 ? item.custoTotalReal / quantidade : item.custoUnitarioReal,
         }
       }),
-    [itensDaNota, quantidades, pareamento]
+    [itensDaNota, quantidades, pareamento, produtoDaLinhaLancada, produtosLancadosSemLinha]
   )
 
   // Soma por produto: é assim que dois itens da nota (caixa de 12 e pacote de 6
@@ -196,6 +216,23 @@ export function EntradaDeNota({
     return mapa
   }, [linhasEfetivas])
 
+  /*
+   * Só os itens que ainda não entraram, por produto — é o que pode ser lançado
+   * agora. O custo continua vindo de todos os itens (acima), para o preço de
+   * venda de um produto já lançado ainda poder ser revisto.
+   */
+  const pendentesPorProduto = useMemo(() => {
+    const mapa = new Map<string, { quantidade: number; linhas: number[] }>()
+    linhasEfetivas.forEach((linha, i) => {
+      if (!linha.produtoId || linha.lancada) return
+      const atual = mapa.get(linha.produtoId) ?? { quantidade: 0, linhas: [] }
+      atual.quantidade += linha.quantidadeEfetiva
+      atual.linhas.push(i)
+      mapa.set(linha.produtoId, atual)
+    })
+    return mapa
+  }, [linhasEfetivas])
+
   /**
    * O que de fato entra no estoque, por produto — editável.
    *
@@ -209,7 +246,7 @@ export function EntradaDeNota({
   function quantidadeAReceber(produtoId: string) {
     const texto = quantidadeRecebida[produtoId]
     if (texto !== undefined && texto !== "") return interpretarValor(texto) ?? 0
-    return gruposPorProduto.get(produtoId)?.quantidade ?? 0
+    return pendentesPorProduto.get(produtoId)?.quantidade ?? 0
   }
 
   function custoUnitarioDe(produtoId: string) {
@@ -272,15 +309,17 @@ export function EntradaDeNota({
     return mapa
   }, [jaLancados])
 
-  const pendentes = linhasDaComparacao.filter((l) => !lancadosPorProduto.has(l.produtoId))
-  const aLancar = pendentes.filter((l) => quantidadeAReceber(l.produtoId) > 0)
+  const aLancar = linhasDaComparacao.filter(
+    (l) => pendentesPorProduto.has(l.produtoId) && quantidadeAReceber(l.produtoId) > 0
+  )
   const nadaPareado = aLancar.length === 0
 
-  const linhasPareadas = itensDaNota.filter((_, i) => pareamento[i]).length
-  const linhasJaLancadas = itensDaNota.filter((_, i) => lancadosPorProduto.has(pareamento[i] ?? "")).length
-  // Sem saber qual linha virou qual produto (o movimento guarda o produto, não a
-  // linha da nota), "tudo lançado" é ter tantos produtos lançados quanto linhas.
-  const tudoLancado = lancadosPorProduto.size > 0 && lancadosPorProduto.size >= itensDaNota.length
+  const linhasPareadas = linhasEfetivas.filter((l) => l.produtoId).length
+  const linhasJaLancadas = linhasEfetivas.filter((l) => l.lancada).length
+  // Recebida sem movimento nenhum: marcada antes de a entrada guardar o vínculo
+  // com a nota. Não dá para saber o que entrou, e o servidor recusa de novo.
+  const recebidaSemRegistro = recebida && jaLancados.length === 0
+  const tudoLancado = recebidaSemRegistro || linhasEfetivas.every((l) => l.lancada)
 
   /** O ponto de partida de cada linha: manter o markup que o produto tinha. */
   function propostaDe(produtoId: string): { markup: string; preco: string } {
@@ -349,6 +388,7 @@ export function EntradaDeNota({
       produtoId: linha.produtoId,
       quantidade: quantidadeAReceber(linha.produtoId),
       custoUnitario: custoUnitarioDe(linha.produtoId),
+      linhas: pendentesPorProduto.get(linha.produtoId)?.linhas ?? [],
     }))
 
     fetcher.submit(
@@ -364,7 +404,7 @@ export function EntradaDeNota({
   }
 
   const recebimento =
-    jaLancados.length > 0 ? (
+    jaLancados.length > 0 || recebidaSemRegistro ? (
       <div
         className={cn(
           "flex items-start gap-2 rounded-lg border p-3 text-sm",
@@ -384,14 +424,17 @@ export function EntradaDeNota({
           <p className="font-medium">
             {tudoLancado
               ? "Todos os itens desta nota já entraram no estoque"
-              : `Entrada parcial: ${lancadosPorProduto.size} de ${itensDaNota.length} ${itensDaNota.length === 1 ? "item lançado" : "itens lançados"}`}
+              : `Entrada parcial: ${linhasJaLancadas} de ${itensDaNota.length} ${itensDaNota.length === 1 ? "item lançado" : "itens lançados"}`}
           </p>
           <p className="mt-0.5 text-xs text-muted-foreground">
+            {recebidaSemRegistro
+              ? "Recebida antes de o sistema guardar quais itens entraram — não dá para lançar de novo. "
+              : ""}
             {recebidoEm ? `Última entrada em ${new Date(recebidoEm).toLocaleString("pt-BR")}` : ""}
             {recebidoPor ? ` por ${recebidoPor}` : ""}.
             {tudoLancado
               ? ""
-              : " Ligue os itens que faltam a um produto do catálogo e dê entrada — o que já entrou não é lançado de novo."}
+              : " Os itens que já entraram ficam travados; ligue os que faltam e dê entrada."}
           </p>
         </div>
       </div>
@@ -473,8 +516,12 @@ export function EntradaDeNota({
                   destacados={idsDoPedido}
                   indice={indiceDoCatalogo}
                   catalogoPorId={catalogoPorId}
-                  produtoIdEscolhido={pareamento[i] ?? ""}
-                  jaLancado={lancadosPorProduto.get(pareamento[i] ?? "") ?? null}
+                  produtoIdEscolhido={linhasEfetivas[i].produtoId}
+                  jaLancado={
+                    linhasEfetivas[i].lancada
+                      ? (lancadosPorProduto.get(linhasEfetivas[i].produtoId) ?? null)
+                      : null
+                  }
                   quantidadeTexto={quantidades[i] ?? ""}
                   custoUnitarioEfetivo={linhasEfetivas[i].custoUnitarioEfetivo}
                   cadastrando={cadastrando === i}
@@ -579,11 +626,15 @@ export function EntradaDeNota({
                     linha={linha}
                     temPedido={pedidoEscolhido != null}
                     jaRecebido={recebidoAntes[linha.produtoId] ?? 0}
-                    jaLancadoPelaNota={lancadosPorProduto.get(linha.produtoId) ?? null}
+                    jaLancadoPelaNota={
+                      pendentesPorProduto.has(linha.produtoId)
+                        ? null
+                        : (lancadosPorProduto.get(linha.produtoId) ?? null)
+                    }
                     grupo={gruposPorProduto.get(linha.produtoId)}
                     quantidadeTexto={
                       quantidadeRecebida[linha.produtoId] ??
-                      formatarQuantidade(gruposPorProduto.get(linha.produtoId)?.quantidade ?? 0)
+                      formatarQuantidade(pendentesPorProduto.get(linha.produtoId)?.quantidade ?? 0)
                     }
                     custoUnitario={custoUnitarioDe(linha.produtoId)}
                     percentuais={percentuais}
@@ -782,13 +833,23 @@ function LinhaItemDaNota({
       </td>
       <td className="px-3 py-2 align-top">
         <div className="flex flex-wrap items-center gap-2">
-          <EscolhaDeProduto
-            escolhido={catalogoPorId.get(produtoIdEscolhido) ?? null}
-            destacados={destacados}
-            indice={indice}
-            onEscolher={onEscolherProduto}
-            grande
-          />
+          {jaLancado ? (
+            <div className="flex h-9 w-80 items-center rounded-lg border border-emerald-600/30 bg-background px-2.5 text-sm">
+              <span className="truncate">
+                {catalogoPorId.get(produtoIdEscolhido)
+                  ? `${catalogoPorId.get(produtoIdEscolhido)!.codigo} — ${catalogoPorId.get(produtoIdEscolhido)!.descricao}`
+                  : "Produto lançado"}
+              </span>
+            </div>
+          ) : (
+            <EscolhaDeProduto
+              escolhido={catalogoPorId.get(produtoIdEscolhido) ?? null}
+              destacados={destacados}
+              indice={indice}
+              onEscolher={onEscolherProduto}
+              grande
+            />
+          )}
           {jaLancado ? null : (
             <Button
               type="button"

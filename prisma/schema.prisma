@@ -445,6 +445,12 @@ model MovimentoEstoque {
   /// até o documento, não só ler um número solto na observação.
   notaFiscalRecebidaId String? @db.ObjectId
   notaFiscalNumero     Int?
+  /// Quais itens da nota (posição no XML, a partir de 0) este movimento cobre.
+  /// Lista porque duas linhas da nota podem ser o mesmo produto e virar uma
+  /// entrada só. É o que impede o mesmo item de entrar duas vezes, mesmo
+  /// ligado a outro produto na segunda vez. Vazio nas entradas de antes disto
+  /// e na nota digitada à mão, que só sabem o produto.
+  notaFiscalItens      Int[]
   /// A AF (autorização de faturamento) que gerou este movimento, quando a
   /// mercadoria chegou sem NF-e. Mesmo padrão dos outros documentos: navegar
   /// até ele, não só ler um número solto na observação. O número é texto

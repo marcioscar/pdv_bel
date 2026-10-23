@@ -114,7 +114,13 @@ export function itensComCustoDaNota(xml: string): ItemDaNotaParaConciliar[] {
   }))
 }
 
-export type ItemReconciliado = { produtoId: string; quantidade: number; custoUnitario: number }
+export type ItemReconciliado = {
+  produtoId: string
+  quantidade: number
+  custoUnitario: number
+  /** Os itens da nota (posição no XML) que somam neste produto. Ausente na nota digitada à mão. */
+  linhas?: number[]
+}
 
 export type ResultadoReceberComNota =
   | { ok: true; situacao: "recebido" | "parcial" | "sem-pedido" }
@@ -137,10 +143,16 @@ export type ResultadoReceberComNota =
  * `MovimentoEstoque` deste pedido, nunca um contador à parte que pudesse ficar
  * defasado.
  *
- * Recusa lançar de novo os produtos que ESTA MESMA nota já lançou — protege
- * contra reprocessar a nota por engano, sem impedir que uma segunda nota
- * complete o que falta.
+ * Recusa lançar de novo o que ESTA MESMA nota já lançou — protege contra
+ * reprocessar a nota por engano, sem impedir que uma segunda nota complete o
+ * que falta. A guarda é pelo item da nota (`notaFiscalItens`), não só pelo
+ * produto: ligado a outro produto na segunda vez, o mesmo item entraria de
+ * novo. Entradas de antes desse registro só sabem o produto, e por isso o
+ * produto delas também fica bloqueado.
  */
+/** Recusa de regra dentro da transação — vira mensagem para a tela, não erro 500. */
+class EntradaRecusada extends Error {}
+
 export async function receberComNota(
   pedidoId: string | null,
   notaId: string,
@@ -184,58 +196,89 @@ export async function receberComNota(
     return { ok: false, erro: "Todo item precisa do custo unitário da nota" }
   }
 
-  const lancadosPorEstaNota = await db.movimentoEstoque.findMany({
-    where: { notaFiscalRecebidaId: notaId, ...(pedidoId ? { pedidoDeCompraId: pedidoId } : {}) },
-    select: { produtoId: true },
-  })
-  const jaLancadosPorEstaNota = new Set(lancadosPorEstaNota.map((m) => m.produtoId))
-
-  const itensParaGravar = itens.filter(
-    (item) => item.quantidade > 0 && !jaLancadosPorEstaNota.has(item.produtoId)
-  )
-  if (itensParaGravar.length === 0) {
-    return {
-      ok: false,
-      erro: "Nada para lançar — pareie ao menos um item que esta nota ainda não lançou",
-    }
+  const itensComQuantidade = itens.filter((item) => item.quantidade > 0)
+  if (itensComQuantidade.length === 0) {
+    return { ok: false, erro: "Nada para lançar — pareie ao menos um item da nota" }
   }
 
-  // Sem pedido não existe "esperado" contra o que fechar — a nota entra e pronto.
-  const completo = pedido ? await pedidoFechaCom(pedido, itensParaGravar) : false
-
-  await db.$transaction(async (tx) => {
-    await tx.movimentoEstoque.createMany({
-      data: itensParaGravar.map((item) => ({
-        produtoId: item.produtoId,
-        loja,
-        tipo: "entrada",
-        quantidade: item.quantidade,
-        custoUnitario: item.custoUnitario,
-        operador,
-        pedidoDeCompraId: pedido?.id ?? null,
-        pedidoDeCompraNumero: pedido?.numero ?? null,
-        notaFiscalRecebidaId: nota.id,
-        notaFiscalNumero: nota.numero,
-        observacao: pedido
-          ? `Pedido de compra #${pedido.numero} — NF nº ${nota.numero ?? "?"} — ${pedido.fornecedorNome}`
-          : `NF nº ${nota.numero ?? "?"} — ${nota.emitenteNome}`,
-      })),
-    })
-
-    if (pedido) {
-      await tx.pedidoDeCompra.update({
-        where: { id: pedido.id },
-        data: completo
-          ? { situacao: "recebido", recebidoEm: new Date(), recebidoPor: operador }
-          : { situacao: "parcial" },
+  /*
+   * A leitura do que já entrou mora dentro da transação: duas entradas da
+   * mesma nota ao mesmo tempo (duas abas, dois gerentes) leriam as duas "nada
+   * lançado" fora dela. Dentro, as duas gravam a mesma nota no fim, e o Mongo
+   * derruba uma por conflito de escrita.
+   */
+  let completo = false
+  try {
+    await db.$transaction(async (tx) => {
+      const lancadosPorEstaNota = await tx.movimentoEstoque.findMany({
+        where: { notaFiscalRecebidaId: notaId },
+        select: { produtoId: true, notaFiscalItens: true },
       })
-    }
 
-    await tx.notaFiscalRecebida.update({
-      where: { id: notaId },
-      data: { situacao: "recebida", recebidoEm: new Date(), recebidoPor: operador },
+      // Recebida e sem movimento nenhum: nota marcada como recebida antes de a
+      // entrada guardar o vínculo com a nota. Não há como saber o que entrou —
+      // lançar de novo arriscaria estoque em dobro.
+      if (nota.situacao === "recebida" && lancadosPorEstaNota.length === 0) {
+        throw new EntradaRecusada("Esta nota já foi recebida — não dá para dar entrada de novo")
+      }
+
+      const linhasLancadas = new Set(lancadosPorEstaNota.flatMap((m) => m.notaFiscalItens))
+      const repetido = itensComQuantidade.find((item) =>
+        (item.linhas ?? []).some((linha) => linhasLancadas.has(linha))
+      )
+      if (repetido) {
+        throw new EntradaRecusada(
+          "Um dos itens já entrou no estoque por esta nota — recarregue a página para ver o que falta"
+        )
+      }
+      const produtosSemLinha = new Set(
+        lancadosPorEstaNota.filter((m) => m.notaFiscalItens.length === 0).map((m) => m.produtoId)
+      )
+      const itensParaGravar = itensComQuantidade.filter((item) => !produtosSemLinha.has(item.produtoId))
+      if (itensParaGravar.length === 0) {
+        throw new EntradaRecusada("Esses produtos já entraram no estoque por esta nota")
+      }
+
+      // Sem pedido não existe "esperado" contra o que fechar — a nota entra e pronto.
+      completo = pedido ? await pedidoFechaCom(pedido, itensParaGravar) : false
+
+      await tx.movimentoEstoque.createMany({
+        data: itensParaGravar.map((item) => ({
+          produtoId: item.produtoId,
+          loja,
+          tipo: "entrada",
+          quantidade: item.quantidade,
+          custoUnitario: item.custoUnitario,
+          operador,
+          pedidoDeCompraId: pedido?.id ?? null,
+          pedidoDeCompraNumero: pedido?.numero ?? null,
+          notaFiscalRecebidaId: nota.id,
+          notaFiscalNumero: nota.numero,
+          notaFiscalItens: item.linhas ?? [],
+          observacao: pedido
+            ? `Pedido de compra #${pedido.numero} — NF nº ${nota.numero ?? "?"} — ${pedido.fornecedorNome}`
+            : `NF nº ${nota.numero ?? "?"} — ${nota.emitenteNome}`,
+        })),
+      })
+
+      if (pedido) {
+        await tx.pedidoDeCompra.update({
+          where: { id: pedido.id },
+          data: completo
+            ? { situacao: "recebido", recebidoEm: new Date(), recebidoPor: operador }
+            : { situacao: "parcial" },
+        })
+      }
+
+      await tx.notaFiscalRecebida.update({
+        where: { id: notaId },
+        data: { situacao: "recebida", recebidoEm: new Date(), recebidoPor: operador },
+      })
     })
-  })
+  } catch (erro) {
+    if (erro instanceof EntradaRecusada) return { ok: false, erro: erro.message }
+    throw erro
+  }
 
   return { ok: true, situacao: pedido ? (completo ? "recebido" : "parcial") : "sem-pedido" }
 }
