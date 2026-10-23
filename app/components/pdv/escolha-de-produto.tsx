@@ -35,6 +35,7 @@ export function EscolhaDeProduto({
   rotuloDoDestaque = "do pedido",
   indice,
   onEscolher,
+  grande = false,
 }: {
   escolhido: ProdutoDoCatalogo | null
   /**
@@ -45,6 +46,8 @@ export function EscolhaDeProduto({
   rotuloDoDestaque?: string
   indice: EntradaIndice<ProdutoDoCatalogo>[]
   onEscolher: (produtoId: string) => void
+  /** Campo e lista em tamanho de toque — para telas onde parear é o trabalho principal. */
+  grande?: boolean
 }) {
   const [aberta, setAberta] = useState(false)
   const [termo, setTermo] = useState("")
@@ -65,7 +68,7 @@ export function EscolhaDeProduto({
    */
   const [posicao, setPosicao] = useState<{ topo: number; esquerda: number } | null>(null)
 
-  const LARGURA = 320
+  const LARGURA = grande ? 400 : 320
   const ALTURA_ESTIMADA = 300
 
   function posicionar() {
@@ -137,14 +140,19 @@ export function EscolhaDeProduto({
           setAberta((v) => !v)
         }}
         className={cn(
-          "flex h-7 w-56 items-center gap-1 rounded border bg-background px-1.5 text-left text-xs",
+          "flex items-center gap-1 rounded border bg-background text-left",
+          grande ? "h-9 w-80 gap-2 rounded-lg px-2.5 text-sm" : "h-7 w-56 px-1.5 text-xs",
           escolhido ? "border-border" : "border-destructive/50 text-destructive"
         )}
       >
         <span className="min-w-0 flex-1 truncate">
-          {escolhido ? `${escolhido.codigo} — ${escolhido.descricao}` : "Escolher…"}
+          {escolhido
+            ? `${escolhido.codigo} — ${escolhido.descricao}`
+            : grande
+              ? "Procurar produto do catálogo…"
+              : "Escolher…"}
         </span>
-        <Search className="size-3 shrink-0 text-muted-foreground" aria-hidden />
+        <Search className={cn("shrink-0 text-muted-foreground", grande ? "size-4" : "size-3")} aria-hidden />
       </button>
 
       {aberta && posicao ? (
@@ -166,7 +174,10 @@ export function EscolhaDeProduto({
               }
             }}
             placeholder="código ou descrição…"
-            className="h-8 w-full border-b border-border bg-transparent px-2.5 text-xs outline-none placeholder:text-muted-foreground"
+            className={cn(
+              "w-full border-b border-border bg-transparent px-2.5 outline-none placeholder:text-muted-foreground",
+              grande ? "h-10 text-sm" : "h-8 text-xs"
+            )}
           />
           <ul className="max-h-60 overflow-y-auto py-1">
             {achados.length === 0 ? (
@@ -185,7 +196,8 @@ export function EscolhaDeProduto({
                       setAberta(false)
                     }}
                     className={cn(
-                      "flex w-full items-baseline gap-1.5 px-2.5 py-1 text-left text-xs hover:bg-accent",
+                      "flex w-full items-baseline gap-1.5 px-2.5 text-left hover:bg-accent",
+                      grande ? "py-2 text-sm" : "py-1 text-xs",
                       escolhido?.id === p.id && "bg-accent"
                     )}
                   >

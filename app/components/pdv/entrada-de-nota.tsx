@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useFetcher } from "react-router"
-import { Plus, Search } from "lucide-react"
+import { CircleCheck, PackageCheck, Plus } from "lucide-react"
 
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
@@ -10,7 +10,6 @@ import {
   EscolhaDeProduto,
   type ProdutoDoCatalogo,
 } from "~/components/pdv/escolha-de-produto"
-import { ReceberPedido } from "~/components/pdv/pedido-compra"
 import type { ItemDaNotaParaConciliar, ItemReconciliado } from "~/lib/conciliacao.server"
 import { interpretarValor, moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { conferirPrecoVenda } from "~/lib/precificacao"
@@ -74,7 +73,8 @@ export function EntradaDeNota({
   percentuais,
   lojas,
   recebidoAntes,
-  jaRecebida,
+  lojaPadrao,
+  jaLancados,
   recebidoEm,
   recebidoPor,
 }: {
@@ -88,11 +88,15 @@ export function EntradaDeNota({
   percentuais: PercentuaisDaOperacao | null
   lojas: string[]
   recebidoAntes: Record<string, number>
-  jaRecebida: boolean
+  /** A loja destinatária da nota — quase sempre é ela que recebeu. */
+  lojaPadrao: string
+  /** O que esta nota já lançou no estoque, por movimento. Vazio antes da primeira entrada. */
+  jaLancados: { produtoId: string; loja: string; quantidade: number }[]
   recebidoEm: string | null
   recebidoPor: string | null
 }) {
   const fetcher = useFetcher<RespostaEntrada>()
+  const [loja, setLoja] = useState(lojas.includes(lojaPadrao) ? lojaPadrao : "")
   const cadastroFetcher = useFetcher<RespostaEntrada>()
   const recebendo = fetcher.state !== "idle"
 
@@ -252,7 +256,31 @@ export function EntradaDeNota({
     return [...doPedido, ...extras]
   }, [itensDoPedido, idsDoPedido, linhasEfetivas, catalogoPorId])
 
-  const nadaPareado = linhasDaComparacao.every((l) => quantidadeAReceber(l.produtoId) <= 0)
+  /*
+   * O que esta nota já pôs no estoque, por produto. A entrada pode ser feita em
+   * partes — um item hoje, o resto quando se acha o produto certo —, e o
+   * servidor já pula o que foi lançado; aqui a tela mostra isso e não manda de novo.
+   */
+  const lancadosPorProduto = useMemo(() => {
+    const mapa = new Map<string, { quantidade: number; lojas: string[] }>()
+    for (const m of jaLancados) {
+      const atual = mapa.get(m.produtoId) ?? { quantidade: 0, lojas: [] }
+      atual.quantidade += m.quantidade
+      if (!atual.lojas.includes(m.loja)) atual.lojas.push(m.loja)
+      mapa.set(m.produtoId, atual)
+    }
+    return mapa
+  }, [jaLancados])
+
+  const pendentes = linhasDaComparacao.filter((l) => !lancadosPorProduto.has(l.produtoId))
+  const aLancar = pendentes.filter((l) => quantidadeAReceber(l.produtoId) > 0)
+  const nadaPareado = aLancar.length === 0
+
+  const linhasPareadas = itensDaNota.filter((_, i) => pareamento[i]).length
+  const linhasJaLancadas = itensDaNota.filter((_, i) => lancadosPorProduto.has(pareamento[i] ?? "")).length
+  // Sem saber qual linha virou qual produto (o movimento guarda o produto, não a
+  // linha da nota), "tudo lançado" é ter tantos produtos lançados quanto linhas.
+  const tudoLancado = lancadosPorProduto.size > 0 && lancadosPorProduto.size >= itensDaNota.length
 
   /** O ponto de partida de cada linha: manter o markup que o produto tinha. */
   function propostaDe(produtoId: string): { markup: string; preco: string } {
@@ -316,8 +344,8 @@ export function EntradaDeNota({
     )
   }
 
-  function receber(loja: string) {
-    const itens: ItemReconciliado[] = linhasDaComparacao.map((linha) => ({
+  function receber() {
+    const itens: ItemReconciliado[] = aLancar.map((linha) => ({
       produtoId: linha.produtoId,
       quantidade: quantidadeAReceber(linha.produtoId),
       custoUnitario: custoUnitarioDe(linha.produtoId),
@@ -335,21 +363,52 @@ export function EntradaDeNota({
     )
   }
 
-  if (jaRecebida) {
-    return (
-      <div className="rounded-lg border border-emerald-600/30 bg-emerald-600/5 p-3 text-xs">
-        Mercadoria já lançada no estoque
-        {recebidoEm ? ` em ${new Date(recebidoEm).toLocaleString("pt-BR")}` : ""}
-        {recebidoPor ? ` por ${recebidoPor}` : ""}.
+  const recebimento =
+    jaLancados.length > 0 ? (
+      <div
+        className={cn(
+          "flex items-start gap-2 rounded-lg border p-3 text-sm",
+          tudoLancado
+            ? "border-emerald-600/30 bg-emerald-600/5"
+            : "border-amber-500/40 bg-amber-500/5"
+        )}
+      >
+        <CircleCheck
+          className={cn(
+            "mt-0.5 size-4 shrink-0",
+            tudoLancado ? "text-emerald-600" : "text-amber-600 dark:text-amber-500"
+          )}
+          aria-hidden
+        />
+        <div>
+          <p className="font-medium">
+            {tudoLancado
+              ? "Todos os itens desta nota já entraram no estoque"
+              : `Entrada parcial: ${lancadosPorProduto.size} de ${itensDaNota.length} ${itensDaNota.length === 1 ? "item lançado" : "itens lançados"}`}
+          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {recebidoEm ? `Última entrada em ${new Date(recebidoEm).toLocaleString("pt-BR")}` : ""}
+            {recebidoPor ? ` por ${recebidoPor}` : ""}.
+            {tudoLancado
+              ? ""
+              : " Ligue os itens que faltam a um produto do catálogo e dê entrada — o que já entrou não é lançado de novo."}
+          </p>
+        </div>
       </div>
-    )
-  }
+    ) : null
+
+  if (tudoLancado) return recebimento
 
   return (
-    <div>
+    <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <h3 className="text-sm font-medium">Entrada no estoque</h3>
-        <label className="flex items-center gap-2">
+        <div>
+          <h3 className="text-base font-semibold">Entrada no estoque</h3>
+          <p className="text-xs text-muted-foreground">
+            Três passos: ligar os itens da nota aos produtos, conferir o que entra e dar entrada.
+          </p>
+        </div>
+        <label className="flex flex-col gap-1">
           <span className="text-xs text-muted-foreground">Pedido de compra</span>
           <select
             value={pedidoEscolhido?.id ?? ""}
@@ -366,218 +425,312 @@ export function EntradaDeNota({
         </label>
       </div>
 
-      {pedidos.length === 0 ? (
-        <p className="mt-1 text-xs text-muted-foreground">
-          Nenhum pedido em aberto deste fornecedor — a mercadoria entra pelo custo da nota,
-          sem comparação com o que tinha sido combinado.
-        </p>
-      ) : null}
+      {recebimento}
 
-      <div className="mt-3 overflow-x-auto rounded-lg border">
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="border-b bg-muted/40 text-left text-muted-foreground">
-              <th className="px-2 py-1.5">Item da nota</th>
-              <th className="px-2 py-1.5">Produto no catálogo</th>
-              <th className="px-2 py-1.5 text-right">Qtd na nota</th>
-              <th className="px-2 py-1.5 text-right">Qtd no catálogo</th>
-              <th className="px-2 py-1.5 text-right">Custo unitário real</th>
-            </tr>
-          </thead>
-          <tbody>
-            {itensDaNota.map((item, i) => (
-              <LinhaItemDaNota
-                key={i}
-                item={item}
-                destacados={idsDoPedido}
-                indice={indiceDoCatalogo}
-                catalogoPorId={catalogoPorId}
-                produtoIdEscolhido={pareamento[i] ?? ""}
-                quantidadeTexto={quantidades[i] ?? ""}
-                custoUnitarioEfetivo={linhasEfetivas[i].custoUnitarioEfetivo}
-                cadastrando={cadastrando === i}
-                cadastroFetcher={cadastroFetcher}
-                onEscolherProduto={(produtoId) =>
-                  setPareamento((atual) => ({ ...atual, [i]: produtoId }))
-                }
-                onMudarQuantidade={(texto) =>
-                  setQuantidades((atual) => ({ ...atual, [i]: texto.replace(/\D/g, "") }))
-                }
-                onAbrirCadastro={() => setCadastrando(cadastrando === i ? null : i)}
-                onCadastrar={(dados) =>
-                  cadastroFetcher.submit(
-                    { intencao: "cadastrarProduto", linha: i, ...dados },
-                    { method: "post" }
-                  )
-                }
+      <section>
+        <TituloDoPasso numero={1} titulo="Ligue cada item da nota a um produto do catálogo">
+          Clique em <strong className="font-medium text-foreground">Procurar produto</strong> e
+          digite o código ou parte do nome. Se o produto ainda não existe, use{" "}
+          <strong className="font-medium text-foreground">Cadastrar novo</strong>. Não precisa
+          ligar tudo agora: o que ficar sem produto pode ser lançado depois.
+          {pedidos.length === 0
+            ? " Não há pedido em aberto deste fornecedor — a mercadoria entra pelo custo da nota."
+            : ""}
+        </TituloDoPasso>
+
+        <div className="mt-2 flex items-center gap-2 text-sm">
+          <Badge variant={linhasPareadas === itensDaNota.length ? "outline" : "secondary"}>
+            {linhasPareadas} de {itensDaNota.length} ligados
+          </Badge>
+          {linhasJaLancadas > 0 ? (
+            <span className="text-xs text-muted-foreground">
+              {linhasJaLancadas} já {linhasJaLancadas === 1 ? "lançado" : "lançados"} no estoque
+            </span>
+          ) : null}
+        </div>
+
+        <div className="mt-3 overflow-x-auto rounded-lg border">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b bg-muted/40 text-left text-xs text-muted-foreground">
+                <th className="px-3 py-2">Item da nota</th>
+                <th className="px-3 py-2">Produto no catálogo</th>
+                <th className="px-3 py-2 text-right">Qtd na nota</th>
+                <th
+                  className="px-3 py-2 text-right"
+                  title="A quantidade da nota convertida para a unidade do catálogo (caixa, pacote, unidade)"
+                >
+                  Qtd na unidade do catálogo
+                </th>
+                <th className="px-3 py-2 text-right">Custo unitário real</th>
+              </tr>
+            </thead>
+            <tbody>
+              {itensDaNota.map((item, i) => (
+                <LinhaItemDaNota
+                  key={i}
+                  item={item}
+                  destacados={idsDoPedido}
+                  indice={indiceDoCatalogo}
+                  catalogoPorId={catalogoPorId}
+                  produtoIdEscolhido={pareamento[i] ?? ""}
+                  jaLancado={lancadosPorProduto.get(pareamento[i] ?? "") ?? null}
+                  quantidadeTexto={quantidades[i] ?? ""}
+                  custoUnitarioEfetivo={linhasEfetivas[i].custoUnitarioEfetivo}
+                  cadastrando={cadastrando === i}
+                  cadastroFetcher={cadastroFetcher}
+                  onEscolherProduto={(produtoId) =>
+                    setPareamento((atual) => ({ ...atual, [i]: produtoId }))
+                  }
+                  onMudarQuantidade={(texto) =>
+                    setQuantidades((atual) => ({ ...atual, [i]: texto.replace(/\D/g, "") }))
+                  }
+                  onAbrirCadastro={() => setCadastrando(cadastrando === i ? null : i)}
+                  onCadastrar={(dados) =>
+                    cadastroFetcher.submit(
+                      { intencao: "cadastrarProduto", linha: i, ...dados },
+                      { method: "post" }
+                    )
+                  }
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <TituloDoPasso numero={2} titulo="Confira o que entra e, se quiser, os preços de venda">
+            "Recebendo agora" é o que entra no estoque: corrija para o que você contou na porta.
+            {pedidoEscolhido
+              ? " O que faltar deixa o pedido parcial, e você lança de novo quando o resto chegar."
+              : ""}{" "}
+            Os preços de venda são opcionais e têm botão próprio — não dão entrada no estoque.
+          </TituloDoPasso>
+
+          {/*
+            O markup para todas as linhas de uma vez — o atalho de quem trabalha
+            com um percentual só. Cada linha continua editável depois.
+          */}
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <label className="flex items-center gap-1.5">
+              <span className="text-muted-foreground">Markup para todos</span>
+              <Input
+                value={markupTodosTexto}
+                onChange={(e) => setMarkupTodosTexto(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault()
+                    aplicarMarkupATodos()
+                  }
+                }}
+                inputMode="decimal"
+                placeholder="ex. 40"
+                className="h-9 w-20 text-right font-mono text-sm"
               />
-            ))}
-          </tbody>
-        </table>
-      </div>
+              <span className="text-muted-foreground">%</span>
+            </label>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={interpretarValor(markupTodosTexto) == null}
+              onClick={aplicarMarkupATodos}
+              className="rounded-lg"
+            >
+              Aplicar a todos
+            </Button>
+          </div>
+        </div>
 
-      <div className="mt-5 flex flex-wrap items-end justify-between gap-3">
-        <h4 className="text-sm font-medium">O que entra no estoque</h4>
+        <div className="mt-3 overflow-x-auto rounded-lg border">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b bg-muted/40 text-left text-xs text-muted-foreground">
+                <th className="px-3 py-2">Produto</th>
+                {/* Sem pedido não há o que comparar: as colunas do pedido seriam só traços. */}
+                {pedidoEscolhido ? (
+                  <>
+                    <th className="px-3 py-2 text-right">Qtd esperada</th>
+                    <th className="px-3 py-2 text-right">Já recebido do pedido</th>
+                  </>
+                ) : null}
+                <th className="px-3 py-2 text-right">Recebendo agora</th>
+                {pedidoEscolhido ? <th className="px-3 py-2 text-right">Custo esperado</th> : null}
+                <th className="px-3 py-2 text-right">Custo real</th>
+                {pedidoEscolhido ? <th className="px-3 py-2 text-right">Diferença</th> : null}
+                <th className="px-3 py-2 text-right">Preço hoje</th>
+                <th className="px-3 py-2 text-right">Markup</th>
+                <th className="px-3 py-2 text-right">Novo preço</th>
+              </tr>
+            </thead>
+            <tbody>
+              {linhasDaComparacao.length === 0 ? (
+                <tr>
+                  <td colSpan={pedidoEscolhido ? 10 : 6} className="px-3 py-6 text-center text-muted-foreground">
+                    Ligue os itens da nota no passo 1 para ver o que vai entrar.
+                  </td>
+                </tr>
+              ) : (
+                linhasDaComparacao.map((linha) => (
+                  <LinhaResumoProduto
+                    key={linha.produtoId}
+                    linha={linha}
+                    temPedido={pedidoEscolhido != null}
+                    jaRecebido={recebidoAntes[linha.produtoId] ?? 0}
+                    jaLancadoPelaNota={lancadosPorProduto.get(linha.produtoId) ?? null}
+                    grupo={gruposPorProduto.get(linha.produtoId)}
+                    quantidadeTexto={
+                      quantidadeRecebida[linha.produtoId] ??
+                      formatarQuantidade(gruposPorProduto.get(linha.produtoId)?.quantidade ?? 0)
+                    }
+                    custoUnitario={custoUnitarioDe(linha.produtoId)}
+                    percentuais={percentuais}
+                    precoAtual={catalogoPorId.get(linha.produtoId)?.preco ?? null}
+                    markupTexto={precoDaLinha(linha.produtoId).markup}
+                    precoTexto={precoDaLinha(linha.produtoId).preco}
+                    manter={manterPreco.has(linha.produtoId)}
+                    onMudarMarkup={(texto) => mudarMarkup(linha.produtoId, texto)}
+                    onMudarPreco={(texto) => mudarPreco(linha.produtoId, texto)}
+                    onManter={(manter) =>
+                      setManterPreco((atual) => {
+                        const novo = new Set(atual)
+                        if (manter) novo.add(linha.produtoId)
+                        else novo.delete(linha.produtoId)
+                        return novo
+                      })
+                    }
+                    quantidade={quantidadeAReceber(linha.produtoId)}
+                    onMudarQuantidade={(texto) =>
+                      setQuantidadeRecebida((atual) => ({ ...atual, [linha.produtoId]: texto }))
+                    }
+                  />
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
 
-        {/*
-          O markup para todas as linhas de uma vez — o atalho de quem trabalha
-          com um percentual só. Cada linha continua editável depois.
-        */}
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          <label className="flex items-center gap-1.5">
-            <span className="text-muted-foreground">Markup para todos</span>
-            <Input
-              value={markupTodosTexto}
-              onChange={(e) => setMarkupTodosTexto(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault()
-                  aplicarMarkupATodos()
-                }
-              }}
-              inputMode="decimal"
-              placeholder="ex. 40"
-              className="h-7 w-16 text-right font-mono text-xs"
-            />
-            <span className="text-muted-foreground">%</span>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <Button
+            type="button"
+            variant="outline"
+            disabled={precosAAtualizar.length === 0 || precoFetcher.state !== "idle"}
+            onClick={atualizarPrecos}
+            className="rounded-lg"
+          >
+            {precoFetcher.state !== "idle"
+              ? "Salvando preços…"
+              : precosAAtualizar.length === 0
+                ? "Nenhum preço de venda a mudar"
+                : `Salvar ${precosAAtualizar.length} ${precosAAtualizar.length === 1 ? "novo preço" : "novos preços"} de venda no catálogo`}
+          </Button>
+          {precoFetcher.data?.intencao === "atualizarPrecos" ? (
+            precoFetcher.data.ok ? (
+              <span className="text-sm text-emerald-700 dark:text-emerald-500">
+                {precoFetcher.data.alterados}{" "}
+                {precoFetcher.data.alterados === 1 ? "preço atualizado" : "preços atualizados"} no catálogo
+              </span>
+            ) : (
+              <span className="text-sm text-destructive">{precoFetcher.data.erro}</span>
+            )
+          ) : null}
+        </div>
+        <p className="mt-1.5 text-xs text-muted-foreground">
+          Novo preço = custo real × (1 + markup). Começa no markup que o produto já tinha, para a
+          margem se manter com o custo novo. Desmarque a caixinha ao lado do preço para não mexer
+          nele.
+        </p>
+      </section>
+
+      <section className="rounded-lg border-2 border-primary/30 bg-primary/5 p-4">
+        <TituloDoPasso numero={3} titulo="Dê entrada no estoque">
+          Grava a quantidade de "Recebendo agora" no estoque da loja escolhida, com o custo real
+          desta nota. Aparece na ficha do produto na hora.
+        </TituloDoPasso>
+
+        <div className="mt-3 flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">Loja que recebeu a mercadoria</span>
+            <select
+              value={loja}
+              onChange={(e) => setLoja(e.target.value)}
+              className={cn(ESTILO_CAMPO, "w-40", !loja && "border-destructive/50")}
+            >
+              <option value="">Escolha a loja…</option>
+              {lojas.map((l) => (
+                <option key={l} value={l}>
+                  {l}
+                </option>
+              ))}
+            </select>
           </label>
           <Button
             type="button"
-            size="xs"
-            variant="outline"
-            disabled={interpretarValor(markupTodosTexto) == null}
-            onClick={aplicarMarkupATodos}
+            size="lg"
+            disabled={recebendo || nadaPareado || !loja}
+            onClick={receber}
+            className="rounded-lg"
           >
-            Aplicar
+            <PackageCheck className="size-5" />
+            {recebendo
+              ? "Gravando entrada…"
+              : nadaPareado
+                ? "Nada para lançar ainda"
+                : `Dar entrada de ${aLancar.length} ${aLancar.length === 1 ? "produto" : "produtos"}${loja ? ` na ${loja}` : ""}`}
           </Button>
         </div>
-      </div>
-      <div className="mt-2 overflow-x-auto rounded-lg border">
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="border-b bg-muted/40 text-left text-muted-foreground">
-              <th className="px-2 py-1.5">Produto</th>
-              <th className="px-2 py-1.5 text-right">Qtd esperada</th>
-              <th className="px-2 py-1.5 text-right">Já recebido</th>
-              <th className="px-2 py-1.5 text-right">Recebendo agora</th>
-              <th className="px-2 py-1.5 text-right">Custo esperado</th>
-              <th className="px-2 py-1.5 text-right">Custo real</th>
-              <th className="px-2 py-1.5 text-right">Diferença</th>
-              <th className="px-2 py-1.5 text-right">Preço hoje</th>
-              <th className="px-2 py-1.5 text-right">Markup</th>
-              <th className="px-2 py-1.5 text-right">Novo preço</th>
-            </tr>
-          </thead>
-          <tbody>
-            {linhasDaComparacao.length === 0 ? (
-              <tr>
-                <td
-                  colSpan={10}
-                  className="px-2 py-4 text-center text-muted-foreground"
-                >
-                  Pareie os itens da nota acima para ver o que vai entrar.
-                </td>
-              </tr>
-            ) : (
-              linhasDaComparacao.map((linha) => (
-                <LinhaResumoProduto
-                  key={linha.produtoId}
-                  linha={linha}
-                  temPedido={pedidoEscolhido != null}
-                  jaRecebido={recebidoAntes[linha.produtoId] ?? 0}
-                  grupo={gruposPorProduto.get(linha.produtoId)}
-                  quantidadeTexto={
-                    quantidadeRecebida[linha.produtoId] ??
-                    formatarQuantidade(gruposPorProduto.get(linha.produtoId)?.quantidade ?? 0)
-                  }
-                  custoUnitario={custoUnitarioDe(linha.produtoId)}
-                  percentuais={percentuais}
-                  precoAtual={catalogoPorId.get(linha.produtoId)?.preco ?? null}
-                  markupTexto={precoDaLinha(linha.produtoId).markup}
-                  precoTexto={precoDaLinha(linha.produtoId).preco}
-                  manter={manterPreco.has(linha.produtoId)}
-                  onMudarMarkup={(texto) => mudarMarkup(linha.produtoId, texto)}
-                  onMudarPreco={(texto) => mudarPreco(linha.produtoId, texto)}
-                  onManter={(manter) =>
-                    setManterPreco((atual) => {
-                      const novo = new Set(atual)
-                      if (manter) novo.add(linha.produtoId)
-                      else novo.delete(linha.produtoId)
-                      return novo
-                    })
-                  }
-                  quantidade={quantidadeAReceber(linha.produtoId)}
-                  onMudarQuantidade={(texto) =>
-                    setQuantidadeRecebida((atual) => ({ ...atual, [linha.produtoId]: texto }))
-                  }
-                />
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
 
-      <div className="mt-2 flex flex-wrap items-center gap-3">
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={precosAAtualizar.length === 0 || precoFetcher.state !== "idle"}
-          onClick={atualizarPrecos}
-        >
-          {precoFetcher.state !== "idle"
-            ? "Atualizando…"
-            : precosAAtualizar.length === 0
-              ? "Nenhum preço de venda a mudar"
-              : `Atualizar ${precosAAtualizar.length} ${precosAAtualizar.length === 1 ? "preço" : "preços"} de venda`}
-        </Button>
-        {precoFetcher.data?.intencao === "atualizarPrecos" ? (
-          precoFetcher.data.ok ? (
-            <span className="text-xs text-muted-foreground">
-              {precoFetcher.data.alterados} {precoFetcher.data.alterados === 1 ? "preço atualizado" : "preços atualizados"} no catálogo
-            </span>
-          ) : (
-            <span className="text-xs text-destructive">{precoFetcher.data.erro}</span>
-          )
-        ) : null}
-        <span className="text-xs text-muted-foreground">
-          Markup sobre o custo real desta nota: preço = custo × (1 + markup). Começa no markup
-          que o produto já tinha, para a margem se manter com o custo novo.
-        </span>
-      </div>
-
-      <p className="mt-2 text-xs text-muted-foreground">
-        Na tabela de cima, "Qtd no catálogo" converte a embalagem do fornecedor para a unidade
-        do catálogo (caixa, pacote, fracionado) — é o que define o custo unitário. Aqui embaixo,
-        "Recebendo agora" é o que de fato entra no estoque: corrija para o que você contou na
-        porta.
-        {pedidoEscolhido
-          ? " O que faltar deixa o pedido parcial, e você lança de novo quando o resto chegar."
-          : ""}
-      </p>
-
-      <div className="mt-4 flex flex-wrap items-center gap-3">
         {nadaPareado ? (
-          <span className="text-xs text-amber-600 dark:text-amber-500">
-            Pareie ao menos um item da nota para dar entrada — não precisa ser tudo.
-          </span>
-        ) : (
-          <ReceberPedido lojas={lojas} gravando={recebendo} onReceber={receber} />
-        )}
+          <p className="mt-2 text-sm text-amber-700 dark:text-amber-500">
+            {linhasJaLancadas > 0 && linhasPareadas === linhasJaLancadas
+              ? "Os itens ligados já foram lançados. Ligue os que faltam no passo 1."
+              : "Ligue ao menos um item da nota a um produto no passo 1 — não precisa ser tudo."}
+          </p>
+        ) : !loja ? (
+          <p className="mt-2 text-sm text-amber-700 dark:text-amber-500">
+            Escolha a loja que recebeu a mercadoria.
+          </p>
+        ) : null}
 
         {fetcher.data?.intencao === "receber" && !fetcher.data.ok ? (
-          <span className="text-xs text-destructive">{fetcher.data.erro}</span>
+          <p className="mt-3 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm font-medium text-destructive">
+            Não gravou: {fetcher.data.erro}
+          </p>
         ) : null}
         {fetcher.data?.intencao === "receber" && fetcher.data.ok ? (
-          <span className="text-xs text-muted-foreground">
-            Entrada gravada —{" "}
+          <p className="mt-3 rounded-lg border border-emerald-600/30 bg-emerald-600/10 p-3 text-sm font-medium text-emerald-800 dark:text-emerald-400">
+            Entrada gravada no estoque —{" "}
             {fetcher.data.situacao === "recebido"
               ? "pedido totalmente recebido."
               : fetcher.data.situacao === "parcial"
                 ? "pedido fica parcial; lance de novo quando o resto chegar."
-                : "sem pedido para fechar."}
-          </span>
+                : "confira na ficha do produto."}
+          </p>
         ) : null}
+      </section>
+    </div>
+  )
+}
+
+function TituloDoPasso({
+  numero,
+  titulo,
+  children,
+}: {
+  numero: number
+  titulo: string
+  children: React.ReactNode
+}) {
+  return (
+    <div className="flex items-start gap-2.5">
+      <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+        {numero}
+      </span>
+      <div>
+        <h4 className="text-sm font-semibold">{titulo}</h4>
+        <p className="mt-0.5 max-w-3xl text-xs text-muted-foreground">{children}</p>
       </div>
     </div>
   )
@@ -589,6 +742,7 @@ function LinhaItemDaNota({
   indice,
   catalogoPorId,
   produtoIdEscolhido,
+  jaLancado,
   quantidadeTexto,
   custoUnitarioEfetivo,
   cadastrando,
@@ -603,6 +757,8 @@ function LinhaItemDaNota({
   indice: EntradaIndice<ProdutoDoCatalogo>[]
   catalogoPorId: Map<string, ProdutoDoCatalogo>
   produtoIdEscolhido: string
+  /** O produto ligado a esta linha já entrou no estoque por esta nota. */
+  jaLancado: { quantidade: number; lojas: string[] } | null
   quantidadeTexto: string
   custoUnitarioEfetivo: number
   cadastrando: boolean
@@ -619,29 +775,40 @@ function LinhaItemDaNota({
   }) => void
 }) {
   return (
-    <tr className="border-b last:border-0">
-      <td className="px-2 py-1.5 align-top">
+    <tr className={cn("border-b last:border-0", jaLancado && "bg-emerald-600/5")}>
+      <td className="px-3 py-2 align-top">
         <div className="font-medium">{item.descricao}</div>
-        <div className="text-muted-foreground">cód. fornecedor {item.codigo}</div>
+        <div className="text-xs text-muted-foreground">cód. fornecedor {item.codigo}</div>
       </td>
-      <td className="px-2 py-1.5 align-top">
-        <div className="flex items-center gap-1">
+      <td className="px-3 py-2 align-top">
+        <div className="flex flex-wrap items-center gap-2">
           <EscolhaDeProduto
             escolhido={catalogoPorId.get(produtoIdEscolhido) ?? null}
             destacados={destacados}
             indice={indice}
             onEscolher={onEscolherProduto}
+            grande
           />
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            onClick={onAbrirCadastro}
-            title="Produto que ainda não existe no catálogo: cadastre agora, sem sair daqui"
-          >
-            <Plus className="size-3.5" />
-          </Button>
+          {jaLancado ? null : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onAbrirCadastro}
+              className="rounded-lg"
+              title="Produto que ainda não existe no catálogo: cadastre agora, sem sair daqui"
+            >
+              <Plus className="size-4" />
+              Cadastrar novo
+            </Button>
+          )}
         </div>
+        {jaLancado ? (
+          <div className="mt-1 flex items-center gap-1 text-xs font-medium text-emerald-700 dark:text-emerald-500">
+            <CircleCheck className="size-3.5" aria-hidden />
+            Já lançado: {formatarQuantidade(jaLancado.quantidade)} na {jaLancado.lojas.join(", ")}
+          </div>
+        ) : null}
 
         {cadastrando ? (
           <CadastroRapido
@@ -652,17 +819,19 @@ function LinhaItemDaNota({
           />
         ) : null}
       </td>
-      <td className="px-2 py-1.5 text-right align-top text-muted-foreground">
+      <td className="px-3 py-2 text-right align-top text-muted-foreground">
         {formatarQuantidade(item.quantidade)}
       </td>
-      <td className="px-2 py-1.5 text-right align-top">
+      <td className="px-3 py-2 text-right align-top">
         <Input
           value={quantidadeTexto}
           onChange={(e) => onMudarQuantidade(e.target.value)}
-          className="h-7 w-24 text-right font-mono text-xs"
+          disabled={Boolean(jaLancado)}
+          inputMode="numeric"
+          className="ml-auto h-9 w-24 text-right font-mono text-sm"
         />
       </td>
-      <td className="px-2 py-1.5 text-right align-top font-medium">
+      <td className="px-3 py-2 text-right align-top font-medium">
         {moeda(custoUnitarioEfetivo)}
       </td>
     </tr>
@@ -710,55 +879,56 @@ function CadastroRapido({
   const erro = resposta?.intencao === "cadastrarProduto" && !resposta.ok ? resposta.erro : null
 
   return (
-    <div className="mt-2 w-72 space-y-1.5 rounded-lg border bg-muted/30 p-2">
-      <div className="text-[11px] font-medium text-muted-foreground">Cadastrar no catálogo</div>
+    <div className="mt-2 w-80 space-y-2 rounded-lg border bg-muted/30 p-3">
+      <div className="text-xs font-medium text-muted-foreground">Cadastrar no catálogo</div>
       <div className="flex gap-1.5">
         <Input
           value={codigo}
           onChange={(e) => setCodigo(e.target.value)}
           placeholder="Código"
-          className="h-7 w-24 text-xs"
+          className="h-9 w-24 text-sm"
         />
         <Input
           value={unidade}
           onChange={(e) => setUnidade(e.target.value)}
           placeholder="UN"
-          className="h-7 w-16 text-xs"
+          className="h-9 w-16 text-sm"
         />
         <Input
           value={preco}
           onChange={(e) => setPreco(e.target.value)}
           placeholder="Preço"
-          className="h-7 flex-1 text-right font-mono text-xs"
+          className="h-9 flex-1 text-right font-mono text-sm"
         />
       </div>
       <Input
         value={ncm}
         onChange={(e) => setNcm(e.target.value.replace(/\D/g, "").slice(0, 8))}
         placeholder="NCM (8 dígitos)"
-        className="h-7 font-mono text-xs"
+        className="h-9 font-mono text-sm"
       />
       <Input
         value={descricao}
         onChange={(e) => setDescricao(e.target.value)}
         placeholder="Descrição"
-        className="h-7 text-xs"
+        className="h-9 text-sm"
       />
       <div className="flex items-center gap-1.5">
         <Button
           type="button"
-          size="xs"
+          size="sm"
           disabled={fetcher.state !== "idle"}
           onClick={() => onCadastrar({ codigo, descricao, unidade, preco, ncm })}
+          className="rounded-lg"
         >
-          Cadastrar
+          {fetcher.state !== "idle" ? "Cadastrando…" : "Cadastrar e ligar a este item"}
         </Button>
-        <Button type="button" variant="ghost" size="xs" onClick={onCancelar}>
+        <Button type="button" variant="ghost" size="sm" onClick={onCancelar} className="rounded-lg">
           Cancelar
         </Button>
       </div>
-      {erro ? <p className="text-[11px] text-destructive">{erro}</p> : null}
-      <p className="text-[11px] text-muted-foreground">
+      {erro ? <p className="text-xs text-destructive">{erro}</p> : null}
+      <p className="text-xs text-muted-foreground">
         O preço de venda pode ficar zerado agora e ser definido depois, com o custo real desta
         nota.
       </p>
@@ -780,6 +950,7 @@ function LinhaResumoProduto({
   linha,
   temPedido,
   jaRecebido,
+  jaLancadoPelaNota,
   grupo,
   quantidadeTexto,
   quantidade,
@@ -797,6 +968,8 @@ function LinhaResumoProduto({
   linha: LinhaDaComparacao
   temPedido: boolean
   jaRecebido: number
+  /** Já entrou no estoque por esta nota: a linha fica só para consulta e preço. */
+  jaLancadoPelaNota: { quantidade: number; lojas: string[] } | null
   grupo: { quantidade: number; custoTotal: number } | undefined
   quantidadeTexto: string
   quantidade: number
@@ -849,52 +1022,67 @@ function LinhaResumoProduto({
 
   return (
     <tr className="border-b last:border-0">
-      <td className="px-2 py-1.5">
+      <td className="px-3 py-2">
         <div className="font-medium">{linha.descricao}</div>
         <div className="flex items-center gap-1.5 text-muted-foreground">
           {linha.codigo}
           {/* Sem pedido, tudo estaria "fora do pedido" — o aviso viraria ruído. */}
           {linha.foraDoPedido && temPedido ? (
-            <Badge variant="secondary" className="text-[10px]">
+            <Badge variant="secondary" className="text-xs">
               fora do pedido
             </Badge>
           ) : null}
         </div>
       </td>
-      <td className="px-2 py-1.5 text-right">
+      {temPedido ? (
+        <>
+      <td className="px-3 py-2 text-right">
         {linha.foraDoPedido ? (
           <span className="text-muted-foreground">—</span>
         ) : (
           `${formatarQuantidade(linha.quantidadeEsperada)} ${linha.unidade}`
         )}
       </td>
-      <td className="px-2 py-1.5 text-right">
+      <td className="px-3 py-2 text-right">
         <span className={completoSemEsta ? "text-muted-foreground" : ""}>
           {formatarQuantidade(jaRecebido)} {linha.unidade}
         </span>
       </td>
-      <td className="px-2 py-1.5 text-right">
-        <div className="flex items-center justify-end gap-1">
-          <Input
-            value={quantidadeTexto}
-            onChange={(e) => onMudarQuantidade(e.target.value)}
-            className="h-7 w-24 text-right font-mono text-xs"
-          />
-          <span className="text-muted-foreground">{linha.unidade}</span>
-        </div>
-        {faltaDepois > 0.001 ? (
-          <div className="mt-0.5 text-[11px] text-amber-600 dark:text-amber-500">
+        </>
+      ) : null}
+      <td className="px-3 py-2 text-right">
+        {jaLancadoPelaNota ? (
+          <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 dark:text-emerald-500">
+            <CircleCheck className="size-3.5" aria-hidden />
+            já lançado ({formatarQuantidade(jaLancadoPelaNota.quantidade)} {linha.unidade})
+          </span>
+        ) : (
+          <div className="flex items-center justify-end gap-1">
+            <Input
+              value={quantidadeTexto}
+              onChange={(e) => onMudarQuantidade(e.target.value)}
+              inputMode="numeric"
+              className="h-9 w-24 text-right font-mono text-sm"
+            />
+            <span className="text-muted-foreground">{linha.unidade}</span>
+          </div>
+        )}
+        {!jaLancadoPelaNota && faltaDepois > 0.001 ? (
+          <div className="mt-0.5 text-xs text-amber-600 dark:text-amber-500">
             faltam {formatarQuantidade(faltaDepois)}
           </div>
         ) : null}
       </td>
-      <td className="px-2 py-1.5 text-right text-muted-foreground">
-        {linha.foraDoPedido ? "—" : moeda(custoEsperadoTotal)}
-      </td>
-      <td className="px-2 py-1.5 text-right font-medium">
+      {temPedido ? (
+        <td className="px-3 py-2 text-right text-muted-foreground">
+          {linha.foraDoPedido ? "—" : moeda(custoEsperadoTotal)}
+        </td>
+      ) : null}
+      <td className="px-3 py-2 text-right font-medium">
         {grupo ? moeda(custoUnitario * quantidade) : "—"}
       </td>
-      <td className="px-2 py-1.5 text-right">
+      {temPedido ? (
+      <td className="px-3 py-2 text-right">
         {diferenca == null ? (
           <span className="text-muted-foreground">
             {linha.foraDoPedido
@@ -917,14 +1105,15 @@ function LinhaResumoProduto({
         )}
       </td>
 
-      <td className="px-2 py-1.5 text-right">
+      ) : null}
+      <td className="px-3 py-2 text-right">
         {precoAtual != null && precoAtual > 0 ? (
           <>
             <div>{moeda(precoAtual)}</div>
             {markupHoje != null ? (
               <div
                 className={cn(
-                  "text-[11px]",
+                  "text-xs",
                   markupHoje <= 0 ? "font-medium text-destructive" : "text-muted-foreground"
                 )}
                 title="O markup que o preço de hoje dá sobre o custo desta nota"
@@ -937,19 +1126,19 @@ function LinhaResumoProduto({
           <span className="text-muted-foreground">sem preço</span>
         )}
       </td>
-      <td className="px-2 py-1.5 text-right">
+      <td className="px-3 py-2 text-right">
         <div className="flex items-center justify-end gap-1">
           <Input
             value={markupTexto}
             onChange={(e) => onMudarMarkup(e.target.value)}
             disabled={!(custoUnitario > 0)}
             inputMode="decimal"
-            className="h-7 w-16 text-right font-mono text-xs"
+            className="h-9 w-20 text-right font-mono text-sm"
           />
           <span className="text-muted-foreground">%</span>
         </div>
       </td>
-      <td className="px-2 py-1.5 text-right">
+      <td className="px-3 py-2 text-right">
         <div className="flex items-center justify-end gap-1.5">
           {/*
             Marcado = este preço vai para o catálogo no "Atualizar preços".
@@ -960,7 +1149,7 @@ function LinhaResumoProduto({
             checked={!manter}
             onChange={(e) => onManter(!e.target.checked)}
             title="Atualizar o preço de venda deste produto"
-            className="size-3.5"
+            className="size-4"
           />
           <Input
             value={precoTexto}
@@ -968,12 +1157,12 @@ function LinhaResumoProduto({
             disabled={!(custoUnitario > 0)}
             inputMode="decimal"
             className={cn(
-              "h-7 w-24 text-right font-mono text-xs",
+              "h-9 w-24 text-right font-mono text-sm",
               muda && "border-primary font-semibold"
             )}
           />
         </div>
-        <div className="text-[11px] text-muted-foreground">
+        <div className="text-xs text-muted-foreground">
           {/* A unidade junto: o custo vem na embalagem da nota até a "Qtd no
               catálogo" lá em cima converter — dizer "/PC" deixa isso à vista. */}
           /{linha.unidade}

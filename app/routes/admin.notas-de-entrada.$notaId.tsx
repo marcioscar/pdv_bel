@@ -113,14 +113,25 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   const porProduto = new Map(produtosLancados.map((p) => [p.id, p]))
 
   /*
+   * O que esta nota já pôs no estoque, por produto. A entrada pode ser feita
+   * aos poucos (um item hoje, o resto quando se acha o produto certo no
+   * catálogo), e a nota marcada como recebida não pode esconder o que falta.
+   */
+  const jaLancadosPelaNota = temItens
+    ? await db.movimentoEstoque.findMany({
+        where: { notaFiscalRecebidaId: nota.id, tipo: "entrada" },
+        select: { produtoId: true, loja: true, quantidade: true },
+      })
+    : []
+
+  /*
    * O custo de antes desta nota, por produto: é sobre ele que o preço de hoje
    * foi formado, e daí sai o markup que a tela propõe manter com o custo novo.
-   * Nota já recebida não precisa — a precificação só aparece antes da entrada.
+   * Vale também para a nota já recebida em parte: o resto ainda vai ser precificado.
    */
-  const custoAnterior =
-    temItens && nota.situacao !== "recebida"
-      ? await ultimoCustoPorProduto(catalogo.map((p) => p.id))
-      : new Map<string, number>()
+  const custoAnterior = temItens
+    ? await ultimoCustoPorProduto(catalogo.map((p) => p.id))
+    : new Map<string, number>()
 
   /*
    * Quanto a operação custa, em percentual do faturamento — é o que transforma
@@ -159,6 +170,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
       descricao: porProduto.get(m.produtoId)?.descricao ?? "Produto removido",
       unidade: porProduto.get(m.produtoId)?.unidade ?? "",
     })),
+    jaLancadosPelaNota,
     pedidos: pedidos.map((p) => ({
       id: p.id,
       numero: p.numero,
@@ -296,6 +308,7 @@ export default function DetalheNotaDeEntrada({ loaderData }: Route.ComponentProp
     temItens,
     manual,
     lancadosAMao,
+    jaLancadosPelaNota,
     pedidos,
     pedidoEscolhidoId,
     itensComCusto,
@@ -424,7 +437,8 @@ export default function DetalheNotaDeEntrada({ loaderData }: Route.ComponentProp
               percentuais={percentuais}
               lojas={lojas}
               recebidoAntes={recebidoAntes}
-              jaRecebida={nota.situacao === "recebida"}
+              lojaPadrao={nota.loja}
+              jaLancados={jaLancadosPelaNota}
               recebidoEm={nota.recebidoEm ? String(nota.recebidoEm) : null}
               recebidoPor={nota.recebidoPor}
             />
