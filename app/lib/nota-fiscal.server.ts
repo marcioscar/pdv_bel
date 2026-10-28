@@ -346,6 +346,14 @@ export async function emitirDaVenda(
                 ...(cliente ? { nome_destinatario: cliente.nome } : {}),
               }
             : {}),
+          // Empresa também pode levar o cupom fiscal, quando quem fecha escolhe
+          // NFC-e para ela: aí o documento vai como CNPJ, com o nome do cadastro.
+          ...(documentoCliente.length === 14
+            ? {
+                cnpj_destinatario: documentoCliente,
+                ...(cliente ? { nome_destinatario: cliente.nome } : {}),
+              }
+            : {}),
           formas_pagamento: formasDePagamentoDaNota(venda),
         }
       : {

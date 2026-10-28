@@ -441,9 +441,9 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
   /**
    * Emite a nota da venda selecionada.
    *
-   * O modelo não é escolha de quem clica: cliente empresa e venda a prazo vão de
-   * NF-e, o resto do balcão de NFC-e. Oferecer a escolha seria oferecer a chance
-   * de emitir o documento errado.
+   * O modelo não é escolha de quem clica aqui: é o que ficou gravado na venda
+   * (escolhido no F7 do caixa) ou, sem isso, o padrão — cliente empresa e venda
+   * a prazo de NF-e, o resto do balcão de NFC-e.
    */
   const emitirNotaFiscal = useCallback(() => {
     if (!ativa || cancelando) return

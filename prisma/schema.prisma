@@ -556,6 +556,11 @@ model Venda {
   /// quem emitir de novo precisa do mesmo CPF que foi dito no balcão.
   cpfNaNota      String?
 
+  /// "nfce" ou "nfe": o documento que quem fechou a venda escolheu. Null é o
+  /// padrão de `modeloDaVenda` (app/lib/fiscal.ts) — e é o que as vendas
+  /// anteriores ao campo têm.
+  modeloNota     String?
+
   /// Cliente é obrigatório na venda a prazo (o boleto precisa do pagador).
   /// Nome e documento ficam copiados para o histórico não mudar se o cadastro mudar.
   clienteId      String?   @db.ObjectId

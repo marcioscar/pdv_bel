@@ -34,7 +34,7 @@ import { saldosPorProduto } from "~/lib/estoque.server"
 import { contaDaLoja, lojaPeloDocumento, lojasPorCnpj } from "~/lib/lojas.server"
 import { ultimoCustoPorProduto } from "~/lib/compras.server"
 import { saldosDeCredito } from "~/lib/creditos.server"
-import { modeloDaVenda } from "~/lib/fiscal"
+import { modeloDaVenda, type ModeloNota } from "~/lib/fiscal"
 import { ambienteFocus, focusConfigurada } from "~/lib/focus.server"
 import { emitirDaVenda } from "~/lib/nota-fiscal.server"
 import { SOMENTE_ATIVOS } from "~/lib/produtos.server"
@@ -959,6 +959,11 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
    */
   const [emitirNota, setEmitirNota] = useState(false)
   /*
+   * NFC-e ou NF-e, quando quem fecha escolhe com F7. Null é o padrão de
+   * `modeloDaVenda`: empresa e prazo de NF-e, o resto de NFC-e.
+   */
+  const [modeloNota, setModeloNota] = useState<ModeloNota | null>(null)
+  /*
    * O CPF que o consumidor pede na nota, sem cadastro. Vive na venda, não no
    * cliente: quem pede crédito da Nota Legal informa o CPF e vai embora.
    */
@@ -1262,13 +1267,14 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           // A escolha da conferência viaja com a venda: o servidor não tem como
           // saber se este cliente quis nota.
           emitirNota,
+          modeloNota,
           cpfNaNota,
         },
         { method: "post", encType: "application/json" }
       )
     },
     [
-      autorizacaoId, cliente, cpfNaNota, creditoUsado, divisao, emitirNota, fetcher, forma,
+      autorizacaoId, cliente, cpfNaNota, creditoUsado, divisao, emitirNota, fetcher, forma, modeloNota,
       gravando, totais.desconto, venda.itens, vendedorCodigo,
     ]
   )
@@ -1303,6 +1309,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           pagamentos: mista ? linhas : null,
           recebido: mista ? valorRecebido : null,
           emitirNota,
+          modeloNota,
           cpfNaNota,
           vendedorCodigo,
           clienteId: cliente?.id ?? null,
@@ -1316,7 +1323,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       )
     },
     [
-      autorizacaoId, cliente, cpfNaNota, creditoUsado, divisao, emitirNota, fetcher, forma,
+      autorizacaoId, cliente, cpfNaNota, creditoUsado, divisao, emitirNota, fetcher, forma, modeloNota,
       totais.desconto, venda.itens, vendedorCodigo,
     ]
   )
@@ -1875,7 +1882,10 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   // A conferência abre sempre no cupom não fiscal, sem a nota: a escolha de
   // emitir vale para esta venda e some com ela.
   useEffect(() => {
-    if (finalizando) setEmitirNota(false)
+    if (finalizando) {
+      setEmitirNota(false)
+      setModeloNota(null)
+    }
   }, [finalizando])
 
   /** F10: abre a conferência. Nada é gravado aqui. */
@@ -2524,6 +2534,8 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           fiscal={fiscal}
           emitirNota={emitirNota}
           onEmitirNotaChange={setEmitirNota}
+          modeloNota={modeloNota}
+          onModeloNotaChange={setModeloNota}
           cpfNaNota={cpfNaNota}
           onCpfNaNotaChange={setCpfNaNota}
           onImprimirChange={setImprimirCupom}

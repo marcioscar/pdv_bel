@@ -205,7 +205,13 @@ export type ModeloNota = "nfce" | "nfe"
 /**
  * Qual documento a venda pede.
  *
- * Cliente empresa e venda a prazo vão de NF-e: a primeira porque o comprador
+ * Quem fecha a venda escolhe (F7 na conferência), e a escolha fica gravada em
+ * `modeloNota`: cliente com CPF pode querer NF-e, e empresa pode levar só o
+ * cupom fiscal. A única recusa é NF-e sem cliente vinculado — ela precisa de
+ * nome e endereço, que o CPF avulso da Nota Legal não tem.
+ *
+ * Sem escolha gravada (vendas antigas, ou quem não mexeu), vale o padrão:
+ * cliente empresa e venda a prazo vão de NF-e — a primeira porque o comprador
  * precisa da nota para se creditar, a segunda porque a cobrança fica registrada
  * no nome dele. O resto do balcão é NFC-e, que é o cupom fiscal.
  *
@@ -216,8 +222,11 @@ export type ModeloNota = "nfce" | "nfe"
 export function modeloDaVenda(venda: {
   forma: string
   clienteCpfCnpj: string | null
+  modeloNota?: string | null
 }): ModeloNota {
   const documento = (venda.clienteCpfCnpj ?? "").replace(/\D/g, "")
+  if (venda.modeloNota === "nfce") return "nfce"
+  if (venda.modeloNota === "nfe" && documento) return "nfe"
   if (documento.length === 14) return "nfe"
   if (venda.forma === "prazo") return "nfe"
   return "nfce"

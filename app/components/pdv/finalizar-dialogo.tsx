@@ -23,7 +23,7 @@ import { Input } from "~/components/ui/input";
 import { Kbd } from "~/components/ui/kbd";
 import { Separator } from "~/components/ui/separator";
 import { formatarCpfCnpj, mascararCpfCnpj, validarCpf } from "~/lib/documento";
-import { modeloDaVenda } from "~/lib/fiscal";
+import { modeloDaVenda, type ModeloNota } from "~/lib/fiscal";
 import { arredondar, interpretarValor, moeda } from "~/lib/moeda";
 import {
 	ehTransferenciaEntreLojas,
@@ -90,6 +90,9 @@ type Props = {
   fiscal: { emite: boolean; producao: boolean };
   emitirNota: boolean;
   onEmitirNotaChange: (emitir: boolean) => void;
+  /** NFC-e ou NF-e escolhido no F7; null deixa o padrão de `modeloDaVenda`. */
+  modeloNota: ModeloNota | null;
+  onModeloNotaChange: (modelo: ModeloNota | null) => void;
   /** CPF que o consumidor pediu na nota, sem virar cadastro (Nota Legal). */
   cpfNaNota: string;
   onCpfNaNotaChange: (cpf: string) => void;
@@ -139,6 +142,8 @@ export function FinalizarDialogo({
   fiscal,
   emitirNota,
   onEmitirNotaChange,
+  modeloNota,
+  onModeloNotaChange,
   cpfNaNota,
   onCpfNaNotaChange,
   gravando,
@@ -491,6 +496,9 @@ export function FinalizarDialogo({
     onImprimirChange,
     onEmitirNotaChange,
     emitirNota,
+    modeloNota,
+    onModeloNotaChange,
+    forma,
     fiscal.emite,
     cliente,
     opcoes,
@@ -519,10 +527,16 @@ export function FinalizarDialogo({
    * valendo, o papel É o DANFE dela. Então é um ciclo de três: o documento
    * fiscal, o cupom não fiscal, e nada.
    *
-   * O modelo continua sem se escolher: NFC-e ou NF-e sai do cliente e da forma
-   * de pagamento.
+   * O modelo abre no padrão (empresa e prazo de NF-e, o resto de NFC-e), e o
+   * F7 passa pelo outro antes de chegar em "nada" — CPF pode querer NF-e e
+   * empresa pode querer o cupom fiscal. Só com cliente vinculado: a NF-e pede
+   * nome e endereço. A transferência para a rede é sempre NF-e.
    */
-  const modelo = modeloDaVenda({ forma, clienteCpfCnpj: cliente?.cpfCnpj ?? null });
+  const clienteCpfCnpj = cliente?.cpfCnpj ?? null;
+  const modeloPadrao = modeloDaVenda({ forma, clienteCpfCnpj });
+  const modelo = modeloDaVenda({ forma, clienteCpfCnpj, modeloNota });
+  const outroModelo: ModeloNota | null =
+    clienteCpfCnpj && !paraARede ? (modeloPadrao === "nfe" ? "nfce" : "nfe") : null;
   const nomeDoModelo = modelo === "nfe" ? "NF-e" : "NFC-e";
 
   const estado: "fiscal" | "cupom" | "nada" = emitirNota
@@ -586,6 +600,7 @@ export function FinalizarDialogo({
   function girarSaida() {
     if (estado === "cupom") {
       if (fiscal.emite) {
+        onModeloNotaChange(null);
         onEmitirNotaChange(true);
         return;
       }
@@ -593,6 +608,11 @@ export function FinalizarDialogo({
       return;
     }
     if (estado === "fiscal") {
+      if (outroModelo && modelo !== outroModelo) {
+        onModeloNotaChange(outroModelo);
+        return;
+      }
+      onModeloNotaChange(null);
       onEmitirNotaChange(false);
       onImprimirChange(false);
       return;

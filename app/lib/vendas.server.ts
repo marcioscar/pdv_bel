@@ -70,6 +70,8 @@ export type PedidoRecebido = {
   clienteId: string | null
   /** CPF pedido na nota, sem cadastro. Só dígitos, ou null. */
   cpfNaNota: string | null
+  /** "nfce" ou "nfe" escolhido na conferência; null deixa o padrão decidir. */
+  modeloNota?: "nfce" | "nfe" | null
   /**
    * Id de uma condição de CONDICOES_PAGAMENTO; só usado na venda a prazo.
    *
@@ -216,6 +218,7 @@ export function lerPedido(bruto: unknown): PedidoRecebido | null {
     creditoUsado,
     clienteId,
     cpfNaNota,
+    modeloNota: corpo.modeloNota === "nfe" || corpo.modeloNota === "nfce" ? corpo.modeloNota : null,
     condicao: typeof corpo.condicao === "string" ? corpo.condicao : null,
     // Aceito como texto e conferido contra o banco na gravação: aqui só se
     // garante o formato, não de quem é o código.
@@ -908,6 +911,7 @@ async function gravarUmaVez(
         clienteNome: cliente?.nome ?? null,
         clienteCpfCnpj: cliente?.cpfCnpj ?? null,
         cpfNaNota: pedido.cpfNaNota,
+        modeloNota: pedido.modeloNota ?? null,
         vencimento,
         condicao,
         pixTxid: pedido.pixTxid ?? null,
