@@ -72,6 +72,8 @@ export default [
       route("afs/nova", "routes/admin.afs.nova.tsx"),
       route("afs/:afId", "routes/admin.afs.$afId.tsx"),
       route("vendas", "routes/admin.vendas.tsx"),
+      // A nota de uma venda antiga, achada pelo cliente em qualquer loja.
+      route("notas", "routes/admin.notas.tsx"),
       // A lista mora aqui, e não no turno: registrar a devolução é com o
       // cliente na frente, conferi-las e emitir a nota é trabalho sentado.
       route("devolucoes", "routes/admin.devolucoes.tsx"),

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { data, Link, useFetcher, useNavigate, useRevalidator, useSearchParams } from "react-router"
-import { FileText, Loader2, Mail, Printer, Receipt, Repeat, Undo2 } from "lucide-react"
+import { FileText, Loader2, Printer, Receipt, Repeat, Undo2 } from "lucide-react"
 
 import type { Route } from "./+types/vendas"
+import { EmailDaNota } from "~/components/pdv/email-da-nota"
 import { Topo } from "~/components/pdv/topo"
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
@@ -1504,86 +1505,5 @@ function BotaoComprovantePix({ vendaId }: { vendaId: string }) {
         <Printer className="size-3.5" aria-hidden />
       )}
     </Button>
-  )
-}
-
-/**
- * Manda o DANFE e o XML ao cliente pela caixa da empresa. O endereço vem do
- * cadastro e pode ser trocado na hora — o cliente às vezes pede para mandar
- * para o contador. Diz quando e para quem foi o último envio.
- */
-function EmailDaNota({ nota }: { nota: NotaDaVenda }) {
-  const fetcher = useFetcher<typeof action>()
-  const [aberto, setAberto] = useState(false)
-  const [para, setPara] = useState(nota.emailEnviadoPara ?? nota.emailDoCliente ?? "")
-  const enviando = fetcher.state !== "idle"
-  const resposta =
-    fetcher.data && "tipo" in fetcher.data && fetcher.data.tipo === "emailNota" ? fetcher.data : null
-
-  const ultimo = nota.emailEnviadoEm
-    ? `enviada para ${nota.emailEnviadoPara} em ${new Date(nota.emailEnviadoEm).toLocaleString("pt-BR", {
-        day: "2-digit",
-        month: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-      })}${nota.emailEnviadoPor === "automático" ? " (automático)" : ""}`
-    : null
-
-  return (
-    <div className="relative">
-      <Button
-        type="button"
-        tabIndex={-1}
-        variant="outline"
-        size="sm"
-        className="rounded-lg"
-        onClick={() => setAberto((a) => !a)}
-        title={ultimo ?? (nota.emailErro ? `Último envio falhou: ${nota.emailErro}` : undefined)}
-      >
-        <Mail className="size-4" />
-        {nota.emailEnviadoEm ? "Reenviar por e-mail" : "Enviar por e-mail"}
-      </Button>
-      {aberto ? (
-        <div className="absolute bottom-full left-0 z-20 mb-2 w-80 rounded-xl border border-border bg-card p-3 shadow-lg">
-          <fetcher.Form method="post" className="grid gap-2">
-            <input type="hidden" name="acao" value="emailNota" />
-            <input type="hidden" name="notaId" value={nota.id} />
-            <label className="grid gap-1 text-xs text-muted-foreground">
-              Para
-              <Input
-                name="para"
-                type="email"
-                value={para}
-                onChange={(e) => setPara(e.target.value)}
-                placeholder="email@cliente.com.br"
-                autoFocus
-                required
-              />
-            </label>
-            <p className="text-[11px] text-muted-foreground">
-              Vai o DANFE e o XML da nota, de brassaco@brassaco.com.br.
-            </p>
-            {ultimo ? <p className="text-[11px] text-muted-foreground">Último: {ultimo}</p> : null}
-            {resposta?.ok ? (
-              <p className="text-xs font-medium text-emerald-700 dark:text-emerald-400">
-                Enviada para {resposta.para}
-              </p>
-            ) : resposta && !resposta.ok ? (
-              <p className="text-xs text-destructive">{resposta.erro}</p>
-            ) : nota.emailErro && !nota.emailEnviadoEm ? (
-              <p className="text-xs text-destructive">Último envio falhou: {nota.emailErro}</p>
-            ) : null}
-            <div className="flex gap-2">
-              <Button type="submit" size="sm" disabled={enviando || !para.trim()}>
-                {enviando ? "Enviando…" : "Enviar"}
-              </Button>
-              <Button type="button" size="sm" variant="ghost" onClick={() => setAberto(false)}>
-                Fechar
-              </Button>
-            </div>
-          </fetcher.Form>
-        </div>
-      ) : null}
-    </div>
   )
 }
