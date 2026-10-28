@@ -29,7 +29,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
   const nota = await db.notaFiscalEmitida.findUnique({ where: { id: params.notaId } })
   if (!nota) throw new Response("Nota não encontrada", { status: 404 })
-  if (!podeVerDaLoja(eu, nota.loja)) {
+  // As lojas permitidas, e não só a do turno: Notas emitidas é aberta ao
+  // vendedor e procura a nota em qualquer loja da rede onde ele trabalha.
+  if (!podeVerDaLoja(eu, nota.loja) && !eu.lojasPermitidas.includes(nota.loja)) {
     throw new Response(`Nota da loja ${nota.loja}`, { status: 403 })
   }
   if (!nota.caminhoDanfe) {

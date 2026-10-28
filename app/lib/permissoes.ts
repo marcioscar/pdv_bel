@@ -198,7 +198,9 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         para: "/admin/notas",
         rotulo: "Notas emitidas",
         descricao: "NF-e e NFC-e por cliente, em todas as lojas: abrir o DANFE e reenviar",
-        somenteGerente: true,
+        // Aberta ao vendedor, como Inadimplentes: é ele quem atende o cliente que
+        // volta pedindo a nota, e os vendedores revezam entre as lojas.
+        somenteGerente: false,
       },
       {
         para: "/admin/devolucoes",

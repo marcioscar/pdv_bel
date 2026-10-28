@@ -16,7 +16,7 @@ import { urlDoArquivo } from "~/lib/focus.server"
 import { listarLojas } from "~/lib/lojas.server"
 import { moeda } from "~/lib/moeda"
 import { enviarNotaPorEmail } from "~/lib/nota-email.server"
-import { exigirGerente } from "~/lib/sessao.server"
+import { exigirUsuario } from "~/lib/sessao.server"
 import { cn } from "~/lib/utils"
 
 export function meta(_: Route.MetaArgs) {
@@ -90,7 +90,7 @@ function literal(busca: string) {
 }
 
 export async function loader({ request }: Route.LoaderArgs) {
-  const eu = await exigirGerente(request, "verVendasDaRede")
+  const eu = await exigirUsuario(request)
   const filtro = lerFiltro(new URL(request.url), eu.lojasPermitidas)
   const lojas = filtro.loja === "todas" ? eu.lojasPermitidas : [filtro.loja]
 
@@ -187,7 +187,7 @@ export async function loader({ request }: Route.LoaderArgs) {
 }
 
 export async function action({ request }: Route.ActionArgs) {
-  const eu = await exigirGerente(request, "verVendasDaRede")
+  const eu = await exigirUsuario(request)
   const form = await request.formData()
   if (form.get("acao") !== "emailNota") {
     return data({ ok: false as const, tipo: "?", erro: "Ação desconhecida" }, { status: 400 })
