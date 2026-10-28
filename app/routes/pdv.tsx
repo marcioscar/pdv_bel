@@ -2058,7 +2058,13 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     venda.itens,
   ])
 
-  const confirmar = useCallback(() => {
+  /*
+   * O clique na lista passa o índice clicado: o `setIndiceResultado` só vale na
+   * próxima renderização, e sem isto o mouse adicionava o produto que estava
+   * marcado (o primeiro), e não o que foi clicado.
+   */
+  const confirmar = useCallback((indiceClicado?: number) => {
+    const indice = indiceClicado ?? indiceResultado
     if (modo === "busca") {
       if (comando.tipo === "vazio") return
       // "2,4*141" casa com o multiplicador, mas não é quantidade que exista.
@@ -2077,12 +2083,12 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           return
         }
         const escolhido =
-          achados.length === 1 ? achados[0] : achados[indiceResultado]
+          achados.length === 1 ? achados[0] : achados[indice]
         if (escolhido) adicionar(escolhido, comando.quantidade)
         return
       }
 
-      const escolhido = resultados[indiceResultado]
+      const escolhido = resultados[indice]
       if (!escolhido) {
         avisar(`Nada encontrado para “${comando.termo}”`, "erro")
         return
@@ -2443,7 +2449,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
             indiceResultado={indiceResultado}
             onEscolherResultado={(i) => {
               setIndiceResultado(i)
-              confirmar()
+              confirmar(i)
             }}
             multiplicador={comando.tipo === "vazio" ? 1 : comando.quantidade}
             previa={previa}

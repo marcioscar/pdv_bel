@@ -210,7 +210,13 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
     }
   }, [fetcher.state, fetcher.data, avisar])
 
-  const confirmar = useCallback(() => {
+  /*
+   * O clique na lista passa o índice clicado: o `setIndiceResultado` só vale na
+   * próxima renderização, e sem isto o mouse adicionava o produto que estava
+   * marcado (o primeiro), e não o que foi clicado.
+   */
+  const confirmar = useCallback((indiceClicado?: number) => {
+    const indice = indiceClicado ?? indiceResultado
     if (gravando) return
 
     // Primeiro passo: escolher o produto. Segundo: informar a quantidade.
@@ -224,7 +230,7 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
           avisar(`Código ${comando.codigo} não encontrado`, "erro")
           return
         }
-        const escolhido = achados.length === 1 ? achados[0] : achados[indiceResultado]
+        const escolhido = achados.length === 1 ? achados[0] : achados[indice]
         if (escolhido) {
           setSelecionado(escolhido)
           setEntrada("")
@@ -232,7 +238,7 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
         return
       }
 
-      const escolhido = resultados[indiceResultado]
+      const escolhido = resultados[indice]
       if (!escolhido) {
         avisar(`Nada encontrado para “${comando.termo}”`, "erro")
         return
@@ -425,7 +431,7 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
             indiceResultado={indiceResultado}
             onEscolherResultado={(i) => {
               setIndiceResultado(i)
-              confirmar()
+              confirmar(i)
             }}
             multiplicador={1}
           />
