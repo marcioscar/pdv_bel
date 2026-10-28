@@ -809,15 +809,17 @@ export function FinalizarDialogo({
       className="absolute inset-0 z-40 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm sm:p-6"
     >
       {/*
-        Três faixas em vez de uma coluna que cresce: cabeçalho e botão ficam
-        parados, e só o meio rola. O botão de fechar a venda é a única coisa que
-        SEMPRE precisa estar à mão — com tudo numa coluna só, bastava a venda
-        ter cliente, vendedor, CPF na nota e escolha de documento para ele cair
-        abaixo da dobra, e quem está com o cliente na frente tinha de rolar para
-        cobrar.
+        Duas colunas em tela larga: à esquerda o que se cobra (total, desconto,
+        devolução, quem compra, o papel que sai), à direita como se paga. Numa
+        coluna só de 512px tudo se empilhava, e qualquer venda com devolução ou
+        cliente fazia rolar justamente quando o cliente esperava.
+
+        O botão de fechar fica parado embaixo da coluna do pagamento: é a única
+        coisa que SEMPRE precisa estar à mão. Em tela estreita volta a ser uma
+        coluna — cabeçalho e botão parados, só o meio rola.
       */}
-      <div className="flex max-h-full w-full max-w-lg flex-col overflow-hidden rounded-xl border border-border bg-card shadow-xl">
-        <div className="shrink-0 px-6 pt-6">
+      <div className="flex max-h-full w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-xl lg:grid lg:grid-cols-2 lg:grid-rows-[auto_minmax(0,1fr)_auto]">
+        <div className="shrink-0 px-6 pt-6 lg:col-span-2">
           <div className="flex items-baseline justify-between">
             <h2 className="text-base font-semibold">Finalizar venda</h2>
             <span className="text-xs text-muted-foreground">
@@ -827,8 +829,11 @@ export function FinalizarDialogo({
         </div>
 
         {/* `min-h-0` é o que permite encolher dentro do flex — sem ele o meio
-            empurra as faixas para fora da tela em vez de rolar. */}
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-2">
+            empurra as faixas para fora da tela em vez de rolar. Em tela larga o
+            invólucro some (`contents`) e cada coluna vira célula da grade,
+            rolando sozinha. */}
+        <div className="min-h-0 flex-1 overflow-y-auto lg:contents">
+        <div className="px-6 pb-2 lg:col-start-1 lg:row-span-2 lg:row-start-2 lg:min-h-0 lg:overflow-y-auto lg:pb-6">
 
         <div className="mt-3 flex items-baseline justify-between">
           <span className="text-xs text-muted-foreground">
@@ -1052,176 +1057,6 @@ export function FinalizarDialogo({
                   : "do crédito"}
             </span>
             <span className="font-mono text-xl font-bold tabular-nums">{moeda(aPagar)}</span>
-          </div>
-        ) : null}
-
-        <Separator className="my-4" />
-
-        <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-          {paraARede ? "Saída" : "Pagamento"}
-        </div>
-
-        {paraARede ? (
-          /*
-            Nenhum botão: não há o que escolher. O painel diz o que vai
-            acontecer, porque uma grade desabilitada faria o caixa procurar qual
-            forma marcar — e a resposta é "nenhuma, isto não é pagamento".
-          */
-          <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 p-3">
-            <Truck
-              className="mt-0.5 size-4 shrink-0 text-muted-foreground"
-              aria-hidden
-            />
-            <div className="text-xs leading-relaxed">
-              <p className="font-medium">
-                Transferência para {cliente?.lojaDaRede} — não é venda
-              </p>
-              <p className="mt-0.5 text-muted-foreground">
-                A nota sai pelo custo, só para acompanhar a mercadoria. Não baixa
-                estoque (quem baixa é a transferência), não entra no caixa nem no
-                faturamento, e não gera comissão.
-              </p>
-            </div>
-          </div>
-        ) : dividido ? (
-          /*
-            Uma linha fixa por forma, e não "adicionar forma": são quatro, e
-            campos sempre no mesmo lugar se preenchem só com Tab. O restante
-            fica embaixo, à vista, porque é ele que diz se a venda fecha.
-          */
-          <div className="rounded-lg border border-primary bg-primary/5 p-3">
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="flex items-center gap-1.5 text-sm font-medium">
-                <Split className="size-4 text-muted-foreground" aria-hidden />
-                Pagamento dividido
-              </span>
-              <span className="text-[10px] text-muted-foreground">
-                <Kbd>F4</Kbd> uma forma só
-              </span>
-            </div>
-            <div className="mt-2 grid gap-1.5">
-              {FORMAS_COMBINAVEIS.map((f) => {
-                const Icone = ICONES[f];
-                return (
-                  <div key={f} className="flex items-center gap-2">
-                    <Icone className="size-4 shrink-0 text-muted-foreground" />
-                    <label htmlFor={`divisao-${f}`} className="flex-1 text-sm">
-                      {rotuloDaForma(f)}
-                    </label>
-                    <Input
-                      ref={(el) => {
-                        camposDivisao.current[f] = el;
-                      }}
-                      id={`divisao-${f}`}
-                      type="search"
-                      value={divisao[f]}
-                      onChange={(e) => onDivisaoChange({ ...divisao, [f]: e.target.value })}
-                      placeholder={restante > 0 ? `Enter: ${moeda(restante)}` : "0,00"}
-                      inputMode="decimal"
-                      autoComplete="off"
-                      data-1p-ignore=""
-                      data-lpignore="true"
-                      className="h-9 w-36 rounded-lg text-right font-mono tabular-nums"
-                    />
-                  </div>
-                );
-              })}
-            </div>
-            <div
-              className={cn(
-                "mt-2 flex items-baseline justify-between border-t border-border pt-2 text-sm",
-                Math.abs(restante) > 0.005 && "text-destructive",
-              )}
-            >
-              <span>{restante < 0 ? "Passou do total" : "Falta dividir"}</span>
-              <span className="font-mono text-lg font-bold tabular-nums">
-                {moeda(Math.abs(restante))}
-              </span>
-            </div>
-          </div>
-        ) : (
-        <>
-        <div className="grid grid-cols-3 gap-2">
-          {FORMAS_DE_CAIXA.map((opcao, indice) => {
-            const Icone = ICONES[opcao.id];
-            const escolhida = opcao.id === forma;
-            return (
-              <Button
-                key={opcao.id}
-                type="button"
-                tabIndex={-1}
-                variant={escolhida ? "default" : "outline"}
-                size="sm"
-                onClick={() => onFormaChange(opcao.id)}
-                className="justify-start rounded-lg"
-              >
-                <Icone className="size-4" />
-                <span className="flex-1 text-left">{opcao.rotulo}</span>
-                <Kbd
-                  className={cn(
-                    "text-[9px]",
-                    escolhida &&
-                      "bg-primary-foreground/20 text-primary-foreground",
-                  )}
-                >
-                  ⇧F{indice + 1}
-                </Kbd>
-              </Button>
-            );
-          })}
-        </div>
-        <Button
-          type="button"
-          tabIndex={-1}
-          variant="ghost"
-          size="xs"
-          onClick={() => onFormaChange(FORMA_MISTA)}
-          className="mt-1.5 rounded-lg text-muted-foreground"
-        >
-          <Split className="size-3.5" aria-hidden />
-          Dividir em mais de uma forma <Kbd className="text-[9px]">F4</Kbd>
-        </Button>
-        </>
-        )}
-
-        {recebeDinheiro ? (
-          <div className="mt-3 flex items-center gap-3 rounded-lg border border-border bg-muted/30 p-3">
-            <label
-              htmlFor="recebido"
-              className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
-            >
-              {dividido ? "Recebido em dinheiro" : "Recebido"}
-            </label>
-            <Input
-              ref={campoRecebido}
-              id="recebido"
-              type="search"
-              value={recebido}
-              onChange={(e) => onRecebidoChange(e.target.value)}
-              placeholder={
-                dividido
-                  ? `entregou pelos ${moeda(parteEmDinheiro)}`
-                  : "quanto o cliente entregou"
-              }
-              inputMode="decimal"
-              autoComplete="off"
-              data-1p-ignore=""
-              data-lpignore="true"
-              className="h-9 flex-1 rounded-lg font-mono text-lg tabular-nums"
-            />
-            <div className="shrink-0 text-right">
-              <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                {troco !== null && troco < 0 ? "Falta" : "Troco"}
-              </div>
-              <div
-                className={cn(
-                  "font-mono text-xl font-bold tabular-nums",
-                  troco !== null && troco < 0 && "text-destructive",
-                )}
-              >
-                {troco === null ? "—" : moeda(Math.abs(troco))}
-              </div>
-            </div>
           </div>
         ) : null}
 
@@ -1459,16 +1294,196 @@ export function FinalizarDialogo({
           </div>
           <Kbd className="shrink-0">F7</Kbd>
         </button>
+        </div>
 
+        <div className="px-6 pb-2 lg:col-start-2 lg:row-start-2 lg:min-h-0 lg:overflow-y-auto lg:border-l lg:border-border lg:pt-3">
+        <Separator className="my-4 lg:hidden" />
+
+        {/* Em duas colunas o total fica do outro lado; o valor a cobrar se
+            repete aqui, que é para onde o olho vai enquanto se recebe. */}
+        <div className="mb-2 flex items-baseline justify-between gap-2">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            {paraARede ? "Saída" : "Pagamento"}
+          </span>
+          {paraARede ? null : (
+            <span className="hidden font-mono text-2xl font-bold tabular-nums lg:inline">
+              {moeda(aPagar)}
+            </span>
+          )}
+        </div>
+
+        {paraARede ? (
+          /*
+            Nenhum botão: não há o que escolher. O painel diz o que vai
+            acontecer, porque uma grade desabilitada faria o caixa procurar qual
+            forma marcar — e a resposta é "nenhuma, isto não é pagamento".
+          */
+          <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 p-3">
+            <Truck
+              className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+              aria-hidden
+            />
+            <div className="text-xs leading-relaxed">
+              <p className="font-medium">
+                Transferência para {cliente?.lojaDaRede} — não é venda
+              </p>
+              <p className="mt-0.5 text-muted-foreground">
+                A nota sai pelo custo, só para acompanhar a mercadoria. Não baixa
+                estoque (quem baixa é a transferência), não entra no caixa nem no
+                faturamento, e não gera comissão.
+              </p>
+            </div>
+          </div>
+        ) : dividido ? (
+          /*
+            Uma linha fixa por forma, e não "adicionar forma": são quatro, e
+            campos sempre no mesmo lugar se preenchem só com Tab. O restante
+            fica embaixo, à vista, porque é ele que diz se a venda fecha.
+          */
+          <div className="rounded-lg border border-primary bg-primary/5 p-3">
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="flex items-center gap-1.5 text-sm font-medium">
+                <Split className="size-4 text-muted-foreground" aria-hidden />
+                Pagamento dividido
+              </span>
+              <span className="text-[10px] text-muted-foreground">
+                <Kbd>F4</Kbd> uma forma só
+              </span>
+            </div>
+            <div className="mt-2 grid gap-1.5">
+              {FORMAS_COMBINAVEIS.map((f) => {
+                const Icone = ICONES[f];
+                return (
+                  <div key={f} className="flex items-center gap-2">
+                    <Icone className="size-4 shrink-0 text-muted-foreground" />
+                    <label htmlFor={`divisao-${f}`} className="flex-1 text-sm">
+                      {rotuloDaForma(f)}
+                    </label>
+                    <Input
+                      ref={(el) => {
+                        camposDivisao.current[f] = el;
+                      }}
+                      id={`divisao-${f}`}
+                      type="search"
+                      value={divisao[f]}
+                      onChange={(e) => onDivisaoChange({ ...divisao, [f]: e.target.value })}
+                      placeholder={restante > 0 ? `Enter: ${moeda(restante)}` : "0,00"}
+                      inputMode="decimal"
+                      autoComplete="off"
+                      data-1p-ignore=""
+                      data-lpignore="true"
+                      className="h-9 w-36 rounded-lg text-right font-mono tabular-nums"
+                    />
+                  </div>
+                );
+              })}
+            </div>
+            <div
+              className={cn(
+                "mt-2 flex items-baseline justify-between border-t border-border pt-2 text-sm",
+                Math.abs(restante) > 0.005 && "text-destructive",
+              )}
+            >
+              <span>{restante < 0 ? "Passou do total" : "Falta dividir"}</span>
+              <span className="font-mono text-lg font-bold tabular-nums">
+                {moeda(Math.abs(restante))}
+              </span>
+            </div>
+          </div>
+        ) : (
+        <>
+        <div className="grid grid-cols-3 gap-2">
+          {FORMAS_DE_CAIXA.map((opcao, indice) => {
+            const Icone = ICONES[opcao.id];
+            const escolhida = opcao.id === forma;
+            return (
+              <Button
+                key={opcao.id}
+                type="button"
+                tabIndex={-1}
+                variant={escolhida ? "default" : "outline"}
+                size="sm"
+                onClick={() => onFormaChange(opcao.id)}
+                className="justify-start rounded-lg"
+              >
+                <Icone className="size-4" />
+                <span className="flex-1 text-left">{opcao.rotulo}</span>
+                <Kbd
+                  className={cn(
+                    "text-[9px]",
+                    escolhida &&
+                      "bg-primary-foreground/20 text-primary-foreground",
+                  )}
+                >
+                  ⇧F{indice + 1}
+                </Kbd>
+              </Button>
+            );
+          })}
+        </div>
+        <Button
+          type="button"
+          tabIndex={-1}
+          variant="ghost"
+          size="xs"
+          onClick={() => onFormaChange(FORMA_MISTA)}
+          className="mt-1.5 rounded-lg text-muted-foreground"
+        >
+          <Split className="size-3.5" aria-hidden />
+          Dividir em mais de uma forma <Kbd className="text-[9px]">F4</Kbd>
+        </Button>
+        </>
+        )}
+
+        {recebeDinheiro ? (
+          <div className="mt-3 flex items-center gap-3 rounded-lg border border-border bg-muted/30 p-3">
+            <label
+              htmlFor="recebido"
+              className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
+            >
+              {dividido ? "Recebido em dinheiro" : "Recebido"}
+            </label>
+            <Input
+              ref={campoRecebido}
+              id="recebido"
+              type="search"
+              value={recebido}
+              onChange={(e) => onRecebidoChange(e.target.value)}
+              placeholder={
+                dividido
+                  ? `entregou pelos ${moeda(parteEmDinheiro)}`
+                  : "quanto o cliente entregou"
+              }
+              inputMode="decimal"
+              autoComplete="off"
+              data-1p-ignore=""
+              data-lpignore="true"
+              className="h-9 flex-1 rounded-lg font-mono text-lg tabular-nums"
+            />
+            <div className="shrink-0 text-right">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                {troco !== null && troco < 0 ? "Falta" : "Troco"}
+              </div>
+              <div
+                className={cn(
+                  "font-mono text-xl font-bold tabular-nums",
+                  troco !== null && troco < 0 && "text-destructive",
+                )}
+              >
+                {troco === null ? "—" : moeda(Math.abs(troco))}
+              </div>
+            </div>
+          </div>
+        ) : null}
+        </div>
+        </div>
+
+        <div className="shrink-0 border-t border-border px-6 pb-6 pt-4 lg:col-start-2 lg:row-start-3 lg:border-l">
         {erro ? (
-          <p className="mt-3 text-xs font-medium text-destructive" role="alert">
+          <p className="mb-3 text-xs font-medium text-destructive" role="alert">
             {erro}
           </p>
         ) : null}
-
-        </div>
-
-        <div className="shrink-0 border-t border-border px-6 pb-6 pt-4">
         <Button
           type="button"
           tabIndex={-1}
