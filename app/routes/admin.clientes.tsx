@@ -8,6 +8,7 @@ import {
   ShoppingCart,
   UserSearch,
   Users,
+  Wallet,
 } from "lucide-react"
 
 import type { Route } from "./+types/admin.clientes"
@@ -32,6 +33,7 @@ import {
   criarCliente,
   lerCliente,
 } from "~/lib/clientes.server"
+import { saldosDeCredito } from "~/lib/creditos.server"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { rotuloDoPagamento } from "~/lib/pdv"
 import { exigirUsuario } from "~/lib/sessao.server"
@@ -49,13 +51,18 @@ export async function loader({ request }: Route.LoaderArgs) {
   // Busca e página vão na URL: recarregar, voltar e mandar o link mantêm a
   // mesma lista, e a gravação revalida exatamente a página que está na tela.
   const url = new URL(request.url)
+  // Inclui inativos quando pedido: é esta a tela que os reativa.
+  const encontrados = await buscarClientes({
+    busca: url.searchParams.get("q") ?? "",
+    pagina: Number(url.searchParams.get("pagina") ?? 1),
+    incluirInativos: url.searchParams.get("inativos") === "1",
+  })
+  // Só os da página: o saldo é a soma do livro, e somar o de todos os
+  // clientes a cada abertura seria pagar por linhas que ninguém está vendo.
+  const saldos = await saldosDeCredito(encontrados.clientes.map((c) => c.id))
   return {
-    // Inclui inativos quando pedido: é esta a tela que os reativa.
-    ...(await buscarClientes({
-      busca: url.searchParams.get("q") ?? "",
-      pagina: Number(url.searchParams.get("pagina") ?? 1),
-      incluirInativos: url.searchParams.get("inativos") === "1",
-    })),
+    ...encontrados,
+    creditos: Object.fromEntries([...saldos].filter(([, valor]) => valor > 0)),
     // A loja do turno: é ela que vai marcar o cadastro que nascer aqui.
     loja: eu.loja,
   }
@@ -96,7 +103,7 @@ export async function action({ request }: Route.ActionArgs) {
 type Cliente = Awaited<ReturnType<typeof buscarClientes>>["clientes"][number]
 
 export default function AdminClientes({ loaderData }: Route.ComponentProps) {
-  const { clientes, total, inativos, pagina, paginas, porPagina, loja } = loaderData
+  const { clientes, total, inativos, pagina, paginas, porPagina, loja, creditos } = loaderData
 
   const [parametros, setParametros] = useSearchParams()
   const buscaNaUrl = parametros.get("q") ?? ""
@@ -319,6 +326,17 @@ export default function AdminClientes({ loaderData }: Route.ComponentProps) {
                         inativo
                       </Badge>
                     ) : null}
+                    {creditos[cliente.id] ? (
+                      <button
+                        type="button"
+                        onClick={() => setHistorico(cliente)}
+                        title="Ver o extrato do crédito"
+                        className="ml-1.5 inline-flex items-center gap-1 rounded-md bg-emerald-500/10 px-1.5 py-0.5 align-middle text-[10px] font-medium text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-400"
+                      >
+                        <Wallet className="size-3" aria-hidden />
+                        {moeda(creditos[cliente.id])}
+                      </button>
+                    ) : null}
                     {cliente.nomeFantasia ? (
                       <span className="block text-xs font-normal text-muted-foreground">
                         {cliente.nomeFantasia}
@@ -461,6 +479,7 @@ function DialogoHistorico({ cliente }: { cliente: Cliente }) {
   }, [carregar, cliente.id])
 
   const compras = busca.data?.compras ?? []
+  const credito = busca.data?.credito ?? null
   const carregando = busca.state !== "idle" && !busca.data
 
   // Só o que valeu: venda cancelada não conta como compra, mas continua na
@@ -482,6 +501,79 @@ function DialogoHistorico({ cliente }: { cliente: Cliente }) {
       </DialogHeader>
 
       <div className="max-h-[60vh] overflow-y-auto">
+        {/*
+          O crédito vem antes das compras: quando existe, é dinheiro dele na
+          loja, e é a primeira coisa que quem atende precisa ver. Sem nenhum
+          lançamento o bloco some — "crédito R$ 0,00" em todo cliente ensinaria
+          a não olhar para cá.
+        */}
+        {credito && credito.extrato.length > 0 ? (
+          <div className="mb-3 rounded-lg border border-border bg-muted/30 p-3">
+            <div className="flex items-baseline justify-between">
+              <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <Wallet className="size-3.5" aria-hidden />
+                Crédito a favor
+              </span>
+              <span
+                className={cn(
+                  "font-mono text-lg font-bold tabular-nums",
+                  credito.saldo > 0 ? "text-emerald-700 dark:text-emerald-400" : "text-muted-foreground"
+                )}
+              >
+                {moeda(credito.saldo)}
+              </span>
+            </div>
+            <p className="mb-2 text-[11px] text-muted-foreground">
+              Vale em qualquer loja da rede · usa no caixa, vinculando o cliente (F6) e apertando Abater
+            </p>
+            <table className="w-full text-xs">
+              <tbody>
+                {credito.extrato.map((m) => {
+                  const entra = m.tipo !== "uso"
+                  return (
+                    <tr key={m.id} className="border-t border-border/60">
+                      <td className="py-1 pr-2 font-mono tabular-nums text-muted-foreground">
+                        {new Date(m.criadoEm).toLocaleDateString("pt-BR")}
+                      </td>
+                      <td className="py-1 pr-2">
+                        <Badge variant="outline" className="font-mono text-[9px]">
+                          {m.loja}
+                        </Badge>
+                      </td>
+                      <td className="py-1 pr-2">
+                        {m.tipo === "devolucao"
+                          ? `Devolução${m.devolucaoNumero ? ` #${m.devolucaoNumero}` : ""}`
+                          : m.tipo === "uso"
+                            ? `Usado na venda${m.vendaNumero ? ` #${m.vendaNumero}` : ""}`
+                            : `Estorno${m.vendaNumero ? ` · venda #${m.vendaNumero} cancelada` : ""}`}
+                        {m.observacao && m.tipo === "devolucao" ? (
+                          <span className="block truncate text-[10px] text-muted-foreground">
+                            {m.observacao}
+                          </span>
+                        ) : null}
+                      </td>
+                      <td className="py-1 pr-2 text-[10px] text-muted-foreground">{m.operador}</td>
+                      <td
+                        className={cn(
+                          "py-1 text-right font-mono tabular-nums",
+                          entra ? "text-emerald-700 dark:text-emerald-400" : "text-destructive"
+                        )}
+                      >
+                        {entra ? "+" : "−"} {moeda(m.valor)}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+            {credito.extrato.length >= 40 ? (
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                Mostrando os 40 lançamentos mais recentes; o saldo conta todos.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
         {compras.map((compra) => {
           const cancelada = Boolean(compra.canceladaEm)
           const detalhando = aberta === compra.id
