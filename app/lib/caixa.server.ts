@@ -5,11 +5,8 @@ import { depoisDoDia, inicioDoDia } from "~/lib/dia"
 import { arredondar } from "~/lib/moeda"
 import {
   cancelamentoExigeGerente,
-  sangriaExigeGerente,
-  SANGRIA_SEM_AUTORIZACAO,
   type TipoMovimentoDeCaixa,
 } from "~/lib/caixa"
-import { moeda } from "~/lib/moeda"
 import { conferirGerente } from "~/lib/sessao.server"
 import { pagamentosDaVenda } from "~/lib/pdv"
 import { NAO_CANCELADA, NAO_E_TRANSFERENCIA } from "~/lib/vendas.server"
@@ -177,17 +174,6 @@ export async function caixaAberto(loja: string, dia: string) {
   return abertura !== null
 }
 
-/** O que já saiu em sangria no dia sem a senha de um gerente. */
-async function sangriasSemGerente(loja: string, dia: string) {
-  const sangrias = await db.movimentoCaixa.findMany({
-    where: { loja, dia, tipo: "sangria", AND: [NAO_CANCELADO] },
-    select: { valor: true, autorizadaPor: true },
-  })
-  return arredondar(
-    sangrias.filter((s) => !s.autorizadaPor).reduce((acc, s) => acc + s.valor, 0)
-  )
-}
-
 /** Lança troco inicial, sangria ou reforço. */
 export async function lancarMovimentoDeCaixa(entrada: {
   loja: string
@@ -197,9 +183,6 @@ export async function lancarMovimentoDeCaixa(entrada: {
   operador: string
   operadorId: string
   observacao?: string | null
-  /** Credenciais de um gerente, quando o valor da sangria exige. */
-  gerenteEmail?: string
-  gerenteSenha?: string
 }) {
   if (!(entrada.valor > 0)) {
     // O tipo é que diz a direção; valor negativo aqui inverteria o sinal duas
@@ -249,34 +232,11 @@ export async function lancarMovimentoDeCaixa(entrada: {
     }
   }
 
-  /**
-   * Sangria grande precisa de uma segunda pessoa.
-   *
-   * A conferência do fim do dia não pega retirada indevida: o esperado cai
-   * junto com o dinheiro, e a gaveta fecha certa. Quem pega é alguém ter de
-   * concordar na hora — e é a senha do gerente que cria essa segunda pessoa,
-   * sem depender de ela estar presente para digitar em outro lugar.
+  /*
+   * Sangria de qualquer valor passa sem senha de gerente (decisão do Marcio,
+   * 28/10/2026). Quem lançou fica no `operador`, e cancelar um lançamento
+   * continua exigindo gerente — é ali que se apagaria o rastro.
    */
-  let autorizadaPor: string | null = null
-  const semGerenteNoDia =
-    entrada.tipo === "sangria" ? await sangriasSemGerente(entrada.loja, entrada.dia) : 0
-  if (sangriaExigeGerente(entrada.tipo, entrada.valor, semGerenteNoDia)) {
-    if (!entrada.gerenteEmail || !entrada.gerenteSenha) {
-      return {
-        ok: false as const,
-        precisaGerente: true as const,
-        erro:
-          semGerenteNoDia > 0
-            ? `Já saíram ${moeda(semGerenteNoDia)} em sangria hoje sem gerente — acima de ${moeda(SANGRIA_SEM_AUTORIZACAO)} no dia, só com a senha de um gerente`
-            : `Sangria acima de ${moeda(SANGRIA_SEM_AUTORIZACAO)} precisa da senha de um gerente`,
-      }
-    }
-
-    const gerente = await conferirGerente(entrada.gerenteEmail, entrada.gerenteSenha)
-    if (!gerente.ok) return { ok: false as const, erro: gerente.erro }
-    autorizadaPor = gerente.nome
-  }
-
   await db.movimentoCaixa.create({
     data: {
       loja: entrada.loja,
@@ -286,11 +246,10 @@ export async function lancarMovimentoDeCaixa(entrada: {
       operador: entrada.operador,
       operadorId: entrada.operadorId,
       observacao: entrada.observacao?.trim() || null,
-      autorizadaPor,
     },
   })
 
-  return { ok: true as const, autorizadaPor }
+  return { ok: true as const }
 }
 
 /**

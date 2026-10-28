@@ -314,7 +314,7 @@ export type ResultadoLogin =
  */
 /**
  * Cinco erros seguidos travam a conta por quinze minutos, em qualquer tela que
- * pede senha — o login, a liberação no caixa, a sangria. Poucas o bastante para
+ * pede senha — o login, a liberação no caixa, o cancelamento no fechamento. Poucas o bastante para
  * que testar senhas vire semanas; muitas para o dedo que erra duas vezes.
  */
 const SENHAS_ERRADAS_PARA_TRAVAR = 5

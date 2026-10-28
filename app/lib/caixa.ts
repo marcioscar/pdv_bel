@@ -64,29 +64,6 @@ export function retiradaDaGaveta(dinheiroNaGaveta: number, fundo: number) {
 }
 
 /**
- * Sangria acima disto exige a senha de um gerente na hora.
- *
- * Sem um teto, qualquer operador registrava a saída de qualquer quantia — e o
- * fechamento do dia BATIA, porque o esperado caía junto com o dinheiro que
- * saiu. A conferência não pega esse caso; o que pega é uma segunda pessoa.
- *
- * O valor é generoso de propósito para as retiradas de rotina passarem direto:
- * um teto que dispara todo dia vira senha digitada no automático, que é o mesmo
- * que não ter teto.
- */
-export const SANGRIA_SEM_AUTORIZACAO = 500
-
-/**
- * O teto vale para o DIA, não para o lançamento: dez sangrias de R$ 490 são uma
- * retirada de R$ 4.900 que, contada uma a uma, nunca chamaria o gerente.
- * `jaRetiradoNoDia` é a soma das sangrias do dia que passaram SEM gerente: a
- * que ele já liberou foi conferida por uma segunda pessoa e não gasta a cota.
- */
-export function sangriaExigeGerente(tipo: string, valor: number, jaRetiradoNoDia = 0) {
-  return tipo === "sangria" && jaRetiradoNoDia + valor > SANGRIA_SEM_AUTORIZACAO
-}
-
-/**
  * A partir de quanto uma diferença deixa de ser arredondamento e vira problema.
  *
  * Um real. Abaixo disso é moeda de troco que ficou no bolso de alguém e voltou

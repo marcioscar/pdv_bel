@@ -12,7 +12,6 @@ import {
   retiradaDaGaveta,
   rotuloDoMovimento,
   sinalDoMovimento,
-  SANGRIA_SEM_AUTORIZACAO,
   tipoDeCaixaValido,
   TIPOS_DE_MOVIMENTO_DE_CAIXA,
 } from "~/lib/caixa"
@@ -83,19 +82,9 @@ export async function action({ request }: Route.ActionArgs) {
       operador: eu.nome,
       operadorId: eu.id,
       observacao: String(formulario.get("observacao") ?? ""),
-      gerenteEmail: String(formulario.get("gerenteEmail") ?? "") || undefined,
-      gerenteSenha: String(formulario.get("gerenteSenha") ?? "") || undefined,
     })
     if (!r.ok) {
-      return data(
-        {
-          ok: false as const,
-          erro: r.erro,
-          // A tela abre os campos do gerente em vez de só mostrar o erro.
-          precisaGerente: "precisaGerente" in r,
-        },
-        { status: 400 }
-      )
+      return data({ ok: false as const, erro: r.erro }, { status: 400 })
     }
 
     // Quem foi mandado para cá pelo caixa volta para lá assim que abre: ele
@@ -106,9 +95,7 @@ export async function action({ request }: Route.ActionArgs) {
 
     return {
       ok: true as const,
-      mensagem: r.autorizadaPor
-        ? `${rotuloDoMovimento(tipo)} de ${moeda(valor)} lançada — liberada por ${r.autorizadaPor}`
-        : `${rotuloDoMovimento(tipo)} de ${moeda(valor)} lançada`,
+      mensagem: `${rotuloDoMovimento(tipo)} de ${moeda(valor)} lançada`,
     }
   }
 
@@ -172,9 +159,6 @@ export default function Fechamento({ loaderData, actionData }: Route.ComponentPr
   // Veio do caixa porque tentou vender antes de abrir: a tela precisa dizer isso,
   // senão a pessoa acha que clicou errado.
   const veioDoCaixa = params.get("abrir") === "caixa"
-  // O servidor recusou por falta de gerente: a tela abre os campos da senha.
-  const precisaGerente =
-    actionData && !actionData.ok && "precisaGerente" in actionData && actionData.precisaGerente
   const gerenteParaCancelar =
     actionData && !actionData.ok && "gerenteParaCancelar" in actionData
       ? actionData.gerenteParaCancelar
@@ -562,35 +546,6 @@ export default function Fechamento({ loaderData, actionData }: Route.ComponentPr
                     Lançar
                   </Button>
 
-                  {/*
-                    * Os campos do gerente aparecem só depois de o servidor
-                    * recusar. Deixá-los sempre à vista ensinaria o operador a
-                    * pedir a senha por reflexo, e uma senha digitada no
-                    * automático não é uma segunda pessoa conferindo.
-                    */}
-                  {precisaGerente ? (
-                    <div className="flex w-full flex-wrap items-end gap-2 rounded-lg border-2 border-primary/40 bg-primary/5 p-3">
-                      <p className="w-full text-xs">
-                        Sangria acima de {moeda(SANGRIA_SEM_AUTORIZACAO)} no dia precisa de
-                        um gerente. Ele digita aqui — a sangria continua no nome de quem
-                        está operando.
-                      </p>
-                      <Input
-                        name="gerenteEmail"
-                        type="email"
-                        placeholder="E-mail do gerente"
-                        autoComplete="off"
-                        className="h-10 min-w-48 flex-1 rounded-lg border-border bg-background text-sm"
-                      />
-                      <Input
-                        name="gerenteSenha"
-                        type="password"
-                        placeholder="Senha"
-                        autoComplete="off"
-                        className="h-10 min-w-36 flex-1 rounded-lg border-border bg-background text-sm"
-                      />
-                    </div>
-                  ) : null}
                 </Form>
               </>
             ) : null}
