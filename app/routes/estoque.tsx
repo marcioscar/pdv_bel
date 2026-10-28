@@ -50,9 +50,17 @@ export async function loader({ request }: Route.LoaderArgs) {
     lista.push(f.fornecedorId)
     fornecedoresPorProduto.set(f.produtoId, lista)
   }
+  // O fornecedor escolhido no cadastro do produto entra também: produto que
+  // nunca foi comprado por aqui só tem esse vínculo.
+  for (const produto of cadastro) {
+    if (!produto.fornecedorId) continue
+    const lista = fornecedoresPorProduto.get(produto.id) ?? []
+    if (!lista.includes(produto.fornecedorId)) lista.push(produto.fornecedorId)
+    fornecedoresPorProduto.set(produto.id, lista)
+  }
   // Só os fornecedores que têm produto: os outros deixariam a lista longa e
   // a escolha sempre vazia.
-  const comProduto = new Set(fornecimentos.map((f) => f.fornecedorId))
+  const comProduto = new Set([...fornecedoresPorProduto.values()].flat())
 
   const produtos = cadastro.map((produto) => {
     const porLoja = saldos.get(produto.id)

@@ -9,6 +9,11 @@ export type ProdutoEntrada = {
   preco: number
   /** A gaveta do catálogo. Nulo é aceito: produto pode nascer sem classificação. */
   grupoId: string | null
+  /**
+   * O fornecedor do cadastro. Opcional no tipo porque quem cria produto fora
+   * desta tela não sabe dele — e `undefined` no update deixa o que estava.
+   */
+  fornecedorId?: string | null
   /** Preço unitário a partir de `quantidadeCombo`. Nulo quando não há combo. */
   precoCombo: number | null
   quantidadeCombo: number | null
@@ -58,6 +63,7 @@ export function lerProduto(form: FormData): ProdutoEntrada | { erro: string } {
   const preco = interpretarValor(texto(form.get("preco")))
   const ncm = texto(form.get("ncm")).replace(/\D/g, "")
   const grupoId = texto(form.get("grupoId"))
+  const fornecedorId = texto(form.get("fornecedorId"))
 
   const origemFiscal = texto(form.get("origemFiscal")).replace(/\D/g, "")
   const cfop = texto(form.get("cfop")).replace(/\D/g, "")
@@ -94,6 +100,7 @@ export function lerProduto(form: FormData): ProdutoEntrada | { erro: string } {
   // O grupo vem de um <select> alimentado pelo loader, mas o formulário é
   // POST: um id torto viraria erro do Prisma no meio do update, longe daqui.
   if (grupoId && !OBJECT_ID.test(grupoId)) return { erro: "Grupo inválido" }
+  if (fornecedorId && !OBJECT_ID.test(fornecedorId)) return { erro: "Fornecedor inválido" }
   // O CEST só existe para descrever mercadoria de substituição tributária: sem o
   // CSOSN que a declara, ele iria para a nota descrevendo o que ela não é.
   if (cest && !csosn) {
@@ -129,6 +136,7 @@ export function lerProduto(form: FormData): ProdutoEntrada | { erro: string } {
     unidade,
     preco,
     grupoId: grupoId || null,
+    fornecedorId: fornecedorId || null,
     precoCombo,
     quantidadeCombo,
     ncm: ncm || null,

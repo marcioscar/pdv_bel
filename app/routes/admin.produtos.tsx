@@ -38,14 +38,22 @@ export async function loader({ request }: Route.LoaderArgs) {
   const eu = await exigirGerente(request, "editarProdutos")
 
   // Aqui vêm os inativos também: esta é a tela que os reativa.
-  const [cadastro, saldos, repetidos, grupos] = await Promise.all([
+  const [cadastro, saldos, repetidos, grupos, fornecedores] = await Promise.all([
     db.produto.findMany({ orderBy: { descricao: "asc" } }),
     // O saldo mostrado é o da loja em que o gerente está — o catálogo é da rede,
     // o estoque é da prateleira.
     saldosPorProduto(eu.loja),
     codigosRepetidos(),
     listarGrupos(),
+    // Os inativos ficam de fora do <select> pelo mesmo motivo dos grupos; o
+    // produto que já aponta para um deles continua mostrando o nome na lista.
+    db.fornecedor.findMany({
+      select: { id: true, razaoSocial: true, nomeFantasia: true, ativo: true },
+    }),
   ])
+  const nomeDoFornecedor = new Map(
+    fornecedores.map((f) => [f.id, f.nomeFantasia || f.razaoSocial])
+  )
   const nomeDoGrupo = new Map(grupos.map((g) => [g.id, g.nome]))
 
   return {
@@ -53,11 +61,18 @@ export async function loader({ request }: Route.LoaderArgs) {
     // Só os ativos no <select>: reativar grupo é trabalho da tela de grupos, e
     // um desativado na lista convidaria a classificar produto novo nele.
     grupos: grupos.filter((g) => g.ativo).map((g) => ({ id: g.id, nome: g.nome })),
+    fornecedores: fornecedores
+      .filter((f) => f.ativo)
+      .map((f) => ({ id: f.id, nome: f.nomeFantasia || f.razaoSocial }))
+      .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR")),
     produtos: cadastro.map((produto) => ({
       ...produto,
       estoque: saldos.get(produto.id) ?? 0,
       codigoRepetido: repetidos.has(produto.codigo),
       grupoNome: produto.grupoId ? (nomeDoGrupo.get(produto.grupoId) ?? null) : null,
+      fornecedorNome: produto.fornecedorId
+        ? (nomeDoFornecedor.get(produto.fornecedorId) ?? null)
+        : null,
     })),
   }
 }
@@ -104,6 +119,7 @@ type EmEdicao = {
   unidade: string
   preco: string
   grupoId: string
+  fornecedorId: string
   precoCombo: string
   quantidadeCombo: string
   ncm: string
@@ -114,13 +130,13 @@ type EmEdicao = {
 }
 
 const NOVO: EmEdicao = {
-  id: null, codigo: "", descricao: "", unidade: "", preco: "", grupoId: "",
+  id: null, codigo: "", descricao: "", unidade: "", preco: "", grupoId: "", fornecedorId: "",
   precoCombo: "", quantidadeCombo: "", ncm: "",
   origemFiscal: "", cfop: "", csosn: "", cest: "",
 }
 
 export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
-  const { produtos, grupos } = loaderData
+  const { produtos, grupos, fornecedores } = loaderData
 
   const [busca, setBusca] = useState("")
   const [mostrarInativos, setMostrarInativos] = useState(false)
@@ -202,6 +218,7 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
         unidade: edicao.unidade,
         preco: edicao.preco,
         grupoId: edicao.grupoId,
+        fornecedorId: edicao.fornecedorId,
         precoCombo: edicao.precoCombo,
         quantidadeCombo: edicao.quantidadeCombo,
         ncm: edicao.ncm,
@@ -296,6 +313,37 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
               {grupos.map((g) => (
                 <option key={g.id} value={g.id}>
                   {g.nome}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="col-span-2">
+            <label
+              htmlFor="produto-fornecedor"
+              className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
+            >
+              Fornecedor
+            </label>
+            <select
+              id="produto-fornecedor"
+              value={edicao.fornecedorId}
+              onChange={(e) => setEdicao({ ...edicao, fornecedorId: e.target.value })}
+              className="h-9 w-full rounded-lg border border-border bg-background px-2 text-sm"
+            >
+              <option value="">Sem fornecedor</option>
+              {/* O produto que aponta para um fornecedor desativado continua
+                  mostrando-o: sem isto o <select> cairia em "Sem fornecedor"
+                  e salvar apagaria o vínculo sem ninguém ter pedido. */}
+              {edicao.fornecedorId &&
+              !fornecedores.some((f) => f.id === edicao.fornecedorId) ? (
+                <option value={edicao.fornecedorId}>
+                  {produtos.find((p) => p.fornecedorId === edicao.fornecedorId)
+                    ?.fornecedorNome ?? "Fornecedor desativado"}
+                </option>
+              ) : null}
+              {fornecedores.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.nome}
                 </option>
               ))}
             </select>
@@ -472,9 +520,9 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
                     >
                       {produto.descricao}
                     </button>
-                    {produto.grupoNome ? (
+                    {produto.grupoNome || produto.fornecedorNome ? (
                       <div className="text-[10px] text-muted-foreground">
-                        {produto.grupoNome}
+                        {[produto.grupoNome, produto.fornecedorNome].filter(Boolean).join(" · ")}
                       </div>
                     ) : null}
                   </td>
@@ -514,6 +562,7 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
                           descricao: produto.descricao,
                           unidade: produto.unidade,
                           grupoId: produto.grupoId ?? "",
+                          fornecedorId: produto.fornecedorId ?? "",
                           // Vírgula, como se digita — interpretarValor aceita as duas.
                           preco: produto.preco.toFixed(2).replace(".", ","),
                           precoCombo:

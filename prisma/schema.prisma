@@ -151,6 +151,14 @@ model Produto {
   /// nascido no balcão pode nascer sem: travar o cadastro por falta de grupo
   /// seria impedir a venda por causa de uma classificação.
   grupoId   String? @db.ObjectId
+  /// O fornecedor que o cadastro diz — escolhido à mão na tela de produtos.
+  ///
+  /// Não é o mesmo que `Fornecimento`: aquele é derivado do histórico de compra
+  /// e é recalculado (apagado e refeito) a cada importação, e o custo dele
+  /// alimenta pedido de compra. Um vínculo à mão lá sumiria na próxima
+  /// importação, ou entraria no pedido com um custo inventado. Opcional porque
+  /// o catálogo nasceu sem ele.
+  fornecedorId String? @db.ObjectId
 
   /// Produto não é apagado: sai das buscas e do caixa, e o histórico das vendas
   /// que o incluem continua íntegro. Apagar deixaria itens órfãos no relatório.
