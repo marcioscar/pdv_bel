@@ -114,6 +114,13 @@ export const SITUACOES_RECEBIVEIS = [
 ] as const
 
 /**
+ * Por padrão a carteira é olhada pelo vencimento. Por pagamento ela vira outra
+ * pergunta — "o que entrou nestes dias" —, que só faz sentido para o que foi
+ * pago: por isso escolher "pagamento" já restringe às recebidas.
+ */
+export type PeriodoPor = "vencimento" | "pagamento"
+
+/**
  * O filtro do jeito que a tela o mostra — texto, não `Date`, pelo mesmo motivo
  * do filtro de vendas: é o mesmo objeto que volta para preencher o formulário, e
  * converter duas vezes é onde nasce a divergência entre o que a tela diz filtrar
@@ -124,7 +131,9 @@ export type FiltroRecebiveis = {
   lojas: string[]
   /** O que o seletor mostra: um código de loja ou "todas". */
   loja: string
-  /** Vencimento, dias inclusivos, no formato do `<input type="date">`. */
+  /** O que `de`/`ate` medem: o dia de vencer ou o dia em que o dinheiro entrou. */
+  por: PeriodoPor
+  /** Dias inclusivos, no formato do `<input type="date">`. */
   de: string
   ate: string
   numero: string

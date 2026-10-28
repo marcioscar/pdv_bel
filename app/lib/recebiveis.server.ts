@@ -65,6 +65,7 @@ export function lerFiltroRecebiveis(
   return {
     lojas: loja === "todas" ? lojasPermitidas : [loja],
     loja,
+    por: texto("por") === "pagamento" ? "pagamento" : "vencimento",
     de: inicio,
     ate: fim,
     numero: texto("numero").replace(/\D/g, "").slice(0, 9),
@@ -141,9 +142,27 @@ async function condicoesDoFiltro(filtro: FiltroRecebiveis, hoje: Date) {
     conteudo.push({ vendaId: { in: await vendasDoCliente(filtro.cliente) } })
   }
 
-  const periodo: Prisma.CobrancaWhereInput = {
-    vencimento: { gte: inicioDoDia(filtro.de), lt: depoisDoDia(filtro.ate) },
-  }
+  const intervalo = { gte: inicioDoDia(filtro.de), lt: depoisDoDia(filtro.ate) }
+  /*
+   * A cobrança do PDV não guarda o dia do pagamento: o webhook só troca a
+   * situação. Mas é essa troca que carimba `atualizadaEm`, no instante em que o
+   * Inter avisa — e a baixa na loja grava junto. Depois de paga a linha não é
+   * mais tocada, então o carimbo é o dia em que o dinheiro entrou. Se um dia
+   * alguma rotina passar a atualizar parcelas pagas em lote, isto deixa de valer
+   * e é hora de gravar a data de pagamento de verdade.
+   *
+   * Só boletos: o Pix na entrega mora na mesma coleção, mas é dinheiro do
+   * entregador, conferido no caixa, não papel da gaveta. O boleto não grava
+   * `tipo` — só o Pix grava —, daí o campo ausente contar como boleto.
+   */
+  const periodo: Prisma.CobrancaWhereInput =
+    filtro.por === "pagamento"
+      ? {
+          situacao: { in: SITUACOES_RECEBIDAS },
+          atualizadaEm: intervalo,
+          OR: [{ tipo: { isSet: false } }, { tipo: null }, { tipo: { not: "pix" } }],
+        }
+      : { vencimento: intervalo }
   const base: Prisma.CobrancaWhereInput = { AND: [periodo, ...conteudo] }
 
   const daSituacao = condicaoDaSituacao(filtro.situacao, hoje)
@@ -181,9 +200,13 @@ async function condicoesExternas(filtro: FiltroRecebiveis, hoje: Date) {
     })
   }
 
-  const periodo: Prisma.BoletoExternoWhereInput = {
-    vencimento: { gte: inicioDoDia(filtro.de), lt: depoisDoDia(filtro.ate) },
-  }
+  const intervalo = { gte: inicioDoDia(filtro.de), lt: depoisDoDia(filtro.ate) }
+  // O boleto antigo traz do Inter o dia da situação, que para o pago é o dia
+  // do pagamento — e a baixa na loja grava o mesmo campo.
+  const periodo: Prisma.BoletoExternoWhereInput =
+    filtro.por === "pagamento"
+      ? { situacao: { in: SITUACOES_RECEBIDAS }, dataSituacao: intervalo }
+      : { vencimento: intervalo }
   const base: Prisma.BoletoExternoWhereInput = { AND: [periodo, ...conteudo] }
   const daSituacao = condicaoDaSituacao(filtro.situacao, hoje)
   const where: Prisma.BoletoExternoWhereInput = daSituacao
@@ -212,6 +235,7 @@ function externoComoRecebivel(b: ExternoCru) {
     situacao: b.situacao,
     valor: b.valor,
     vencimento: b.vencimento,
+    pagoEm: SITUACOES_RECEBIDAS.includes(b.situacao) ? b.dataSituacao : null,
     linhaDigitavel: b.linhaDigitavel,
     nossoNumero: b.nossoNumero,
     /** O número que o sistema antigo imprimiu no boleto. */
@@ -269,6 +293,10 @@ async function comOPagador(cobrancas: CobrancaCrua[]) {
       situacao: cobranca.situacao,
       valor: cobranca.valor,
       vencimento: cobranca.vencimento,
+      /** Ver `condicoesDoFiltro`: o carimbo da troca de situação é o dia do pagamento. */
+      pagoEm: SITUACOES_RECEBIDAS.includes(cobranca.situacao)
+        ? (cobranca.baixadoEm ?? cobranca.atualizadaEm)
+        : null,
       linhaDigitavel: cobranca.linhaDigitavel,
       /** O que está impresso no canto do boleto — é por ele que se acha o papel
        *  na gaveta. Fica nulo enquanto o Inter não termina de emitir. */

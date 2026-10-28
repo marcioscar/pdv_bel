@@ -47,6 +47,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     titulo: TITULOS[filtro.situacao].titulo,
     instrucao: TITULOS[filtro.situacao].instrucao,
     periodo,
+    porPagamento: filtro.por === "pagamento",
     recebiveis,
     total,
     cortadas,
@@ -158,6 +159,7 @@ function folha({
   titulo,
   instrucao,
   periodo,
+  porPagamento,
   recebiveis,
   total,
   cortadas,
@@ -166,6 +168,7 @@ function folha({
   titulo: string
   instrucao: string
   periodo: string
+  porPagamento: boolean
   recebiveis: RecebivelConsultado[]
   total: number
   cortadas: number
@@ -304,7 +307,7 @@ function folha({
     <h1>${escapar(titulo)}</h1>
     <div class="instrucao">${escapar(instrucao)}</div>
     <div class="contexto">
-      Vencimento entre ${escapar(periodo)} · agrupado por dia de vencimento: cada faixa cinza é um maço da gaveta,
+      ${porPagamento ? "Pago" : "Vencimento"} entre ${escapar(periodo)} · agrupado por dia de vencimento: cada faixa cinza é um maço da gaveta,
       com quantos papéis esperar e quanto somam.
       <br>
       <strong>Nº do documento</strong> é o que está impresso no boleto (ex.: <strong>QI000003-1</strong> = loja QI, venda 3, parcela 1) — é por ele que se acha o papel. Os marcados <strong>antigo</strong> são do sistema anterior: o número é o que ele imprimiu, e a coluna Loja traz a conta do Inter que emitiu (MATRIZ é QI e QNE).

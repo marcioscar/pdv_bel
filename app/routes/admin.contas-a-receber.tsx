@@ -126,6 +126,7 @@ export default function AdminContasAReceber({ loaderData }: Route.ComponentProps
     const novos = new URLSearchParams()
     novos.set("de", proximo.de)
     novos.set("ate", proximo.ate)
+    if (proximo.por === "pagamento") novos.set("por", "pagamento")
     if (proximo.loja !== "todas") novos.set("loja", proximo.loja)
     if (proximo.numero) novos.set("numero", proximo.numero)
     if (proximo.cliente) novos.set("cliente", proximo.cliente)
@@ -144,6 +145,7 @@ export default function AdminContasAReceber({ loaderData }: Route.ComponentProps
     filtro.de === filtro.ate
       ? diaEmTexto(filtro.de)
       : `${diaEmTexto(filtro.de)} a ${diaEmTexto(filtro.ate)}`
+  const porPagamento = filtro.por === "pagamento"
 
   return (
     <div className="p-6">
@@ -151,7 +153,7 @@ export default function AdminContasAReceber({ loaderData }: Route.ComponentProps
         <Wallet className="size-4 text-muted-foreground" aria-hidden />
         <h1 className="text-base font-semibold">Contas a receber</h1>
         <span className="text-xs text-muted-foreground">
-          vence entre {periodo} ·{" "}
+          {porPagamento ? "boletos pagos entre" : "vence entre"} {periodo} ·{" "}
           {filtro.loja === "todas"
             ? `${lojas.length} ${lojas.length === 1 ? "loja" : "lojas"}`
             : nomeDaLoja(filtro.loja)}
@@ -189,7 +191,26 @@ export default function AdminContasAReceber({ loaderData }: Route.ComponentProps
           aplicar({})
         }}
       >
-        <Campo rotulo="Vence de">
+        {/* Pagamento é outra pergunta, só sobre o que foi pago: escolher
+            "pagamento" leva junto a situação para "Recebidas", e voltar para
+            vencimento devolve o padrão da tela. */}
+        <Campo rotulo="Período por">
+          <select
+            value={campos.por}
+            onChange={(e) =>
+              aplicar(
+                e.target.value === "pagamento"
+                  ? { por: "pagamento", situacao: "recebidas" }
+                  : { por: "vencimento", situacao: "abertas" }
+              )
+            }
+            className={cn(ESTILO_CAMPO, "w-32")}
+          >
+            <option value="vencimento">Vencimento</option>
+            <option value="pagamento">Pagamento</option>
+          </select>
+        </Campo>
+        <Campo rotulo={campos.por === "pagamento" ? "Pago de" : "Vence de"}>
           <input
             type="date"
             value={campos.de}
@@ -215,14 +236,33 @@ export default function AdminContasAReceber({ loaderData }: Route.ComponentProps
           <Atalho
             rotulo="Vencidas"
             onClick={() =>
-              aplicar({ de: PRIMEIRO_DIA, ate: diaAtras(1), situacao: "abertas" })
+              aplicar({ por: "vencimento", de: PRIMEIRO_DIA, ate: diaAtras(1), situacao: "abertas" })
             }
           />
-          <Atalho rotulo="Hoje" onClick={() => aplicar({ de: diaDeHoje(), ate: diaDeHoje() })} />
-          <Atalho rotulo="7 dias" onClick={() => aplicar({ de: diaDeHoje(), ate: diaAdiante(6) })} />
+          <Atalho
+            rotulo="Hoje"
+            onClick={() => aplicar({ por: "vencimento", de: diaDeHoje(), ate: diaDeHoje() })}
+          />
+          <Atalho
+            rotulo="7 dias"
+            onClick={() => aplicar({ por: "vencimento", de: diaDeHoje(), ate: diaAdiante(6) })}
+          />
           <Atalho
             rotulo="30 dias"
-            onClick={() => aplicar({ de: diaDeHoje(), ate: diaAdiante(29) })}
+            onClick={() => aplicar({ por: "vencimento", de: diaDeHoje(), ate: diaAdiante(29) })}
+          />
+          {/* O único que olha o pagamento: o que entrou de hoje até dez dias
+              atrás, para bater com o extrato do banco. */}
+          <Atalho
+            rotulo="Pagos 10 dias"
+            onClick={() =>
+              aplicar({
+                por: "pagamento",
+                de: diaAtras(10),
+                ate: diaDeHoje(),
+                situacao: "recebidas",
+              })
+            }
           />
           <Atalho rotulo="Tudo" onClick={tudo} />
         </div>
@@ -340,7 +380,7 @@ export default function AdminContasAReceber({ loaderData }: Route.ComponentProps
                 <td colSpan={9} className="py-16 text-center">
                   <Wallet className="mx-auto size-10 text-muted-foreground/40" aria-hidden />
                   <p className="mt-3 text-sm text-muted-foreground">
-                    Nenhuma conta vencendo em {periodo}
+                    {porPagamento ? "Nenhum boleto pago em" : "Nenhuma conta vencendo em"} {periodo}
                     {filtro.loja === "todas" ? "" : ` na ${nomeDaLoja(filtro.loja)}`}.
                   </p>
                   {foraDoPeriodo > 0 ? (
@@ -511,6 +551,11 @@ function Linha({ conta, hoje }: { conta: RecebivelConsultado; hoje: string }) {
         >
           {conta.situacao}
         </Badge>
+        {conta.pagoEm ? (
+          <span className="block font-mono text-[11px] text-muted-foreground tabular-nums">
+            em {new Date(conta.pagoEm).toLocaleDateString("pt-BR")}
+          </span>
+        ) : null}
       </td>
 
       <td className="px-2 py-2.5">
