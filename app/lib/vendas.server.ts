@@ -12,6 +12,11 @@ import { depoisDoDia, diaAtras, diaDeHoje, inicioDoDia } from "~/lib/dia"
 import { movimentosDeVenda } from "~/lib/estoque.server"
 import { ultimoCustoPorProduto } from "~/lib/compras.server"
 import { gastarCredito, saldoDeCredito } from "~/lib/creditos.server"
+import {
+  gravarDevolucaoNaVenda,
+  precificarDevolucaoSemVenda,
+  type ItemSemVenda,
+} from "~/lib/devolucoes.server"
 import { lojaPeloDocumento } from "~/lib/lojas.server"
 import {
   arredondar,
@@ -73,6 +78,12 @@ export type PedidoRecebido = {
   /** "nfce" ou "nfe" escolhido na conferência; null deixa o padrão decidir. */
   modeloNota?: "nfce" | "nfe" | null
   /**
+   * A mercadoria que o cliente trouxe de volta no fechamento desta compra — a
+   * troca no balcão. O valor abate o que se paga; os preços vêm da tela mas são
+   * conferidos contra o catálogo, como na devolução sem venda.
+   */
+  devolucao?: { itens: ItemSemVenda[]; motivo: string } | null
+  /**
    * Id de uma condição de CONDICOES_PAGAMENTO; só usado na venda a prazo.
    *
    * A tela manda a condição escolhida, não as datas: os vencimentos são
@@ -103,6 +114,9 @@ export type PedidoVenda = PedidoRecebido & {
   caixa: string
   operador: string
 }
+
+/** A devolução do fechamento já conferida: itens com preço, total e motivo. */
+type DevolucaoDoFechamento = { itens: ItemGravado[]; total: number; motivo: string }
 
 /** Espelha `type VendaItem` do schema: o item como fica gravado na venda. */
 type ItemGravado = {
@@ -219,6 +233,7 @@ export function lerPedido(bruto: unknown): PedidoRecebido | null {
     clienteId,
     cpfNaNota,
     modeloNota: corpo.modeloNota === "nfe" || corpo.modeloNota === "nfce" ? corpo.modeloNota : null,
+    devolucao: lerDevolucao(corpo.devolucao),
     condicao: typeof corpo.condicao === "string" ? corpo.condicao : null,
     // Aceito como texto e conferido contra o banco na gravação: aqui só se
     // garante o formato, não de quem é o código.
@@ -226,6 +241,25 @@ export function lerPedido(bruto: unknown): PedidoRecebido | null {
       typeof corpo.vendedorCodigo === "string" ? corpo.vendedorCodigo.trim().slice(0, 10) : "",
     autorizacaoId,
   }
+}
+
+/** A devolução do fechamento, só no formato: as regras ficam com `validarVenda`. */
+function lerDevolucao(bruto: unknown): PedidoRecebido["devolucao"] {
+  if (typeof bruto !== "object" || bruto === null) return null
+  const { itens, motivo } = bruto as Record<string, unknown>
+  if (!Array.isArray(itens)) return null
+  const lidos = itens.flatMap((i) => {
+    const { produtoId, quantidade, preco } = (i ?? {}) as Record<string, unknown>
+    return typeof produtoId === "string" &&
+      typeof quantidade === "number" &&
+      typeof preco === "number" &&
+      Number.isFinite(quantidade) &&
+      Number.isFinite(preco)
+      ? [{ produtoId, quantidade, preco }]
+      : []
+  })
+  if (lidos.length === 0) return null
+  return { itens: lidos, motivo: typeof motivo === "string" ? motivo : "" }
 }
 
 export type Precificacao =
@@ -529,6 +563,33 @@ async function validarVenda(
   const creditoPedido = paraARede ? 0 : arredondar(pedido.creditoUsado)
   let creditoUsado = 0
 
+  /*
+   * A devolução trazida no fechamento abate primeiro, e o crédito que o
+   * cliente já tinha cobre o que sobrar. Com cadastro, o excesso da devolução
+   * sobre a compra fica como saldo dele; sem cadastro não há onde guardar, e a
+   * devolução maior que a venda vai pela tela de devolução (sai em dinheiro).
+   */
+  let devolucao: DevolucaoDoFechamento | null = null
+  if (pedido.devolucao) {
+    if (paraARede) {
+      return { ok: false, erro: "Transferência entre lojas não recebe devolução" }
+    }
+    const motivo = pedido.devolucao.motivo.trim()
+    if (!motivo) return { ok: false, erro: "Diga por que a mercadoria da devolução voltou" }
+    const precificada = await precificarDevolucaoSemVenda(pedido.devolucao.itens)
+    if (!precificada.ok) return { ok: false, erro: `Devolução: ${precificada.erro}` }
+    if (!cliente && precificada.total > total) {
+      return {
+        ok: false,
+        erro:
+          `A devolução (${moeda(precificada.total)}) passa da venda (${moeda(total)}) — ` +
+          "vincule o cliente (F6) para a diferença virar crédito",
+      }
+    }
+    devolucao = { itens: precificada.itens, total: precificada.total, motivo }
+    creditoUsado = arredondar(Math.min(precificada.total, total))
+  }
+
   if (creditoPedido > 0) {
     if (!cliente) {
       return { ok: false, erro: "Crédito é do cliente — vincule o cadastro (F6) para usar" }
@@ -543,13 +604,15 @@ async function validarVenda(
             : `${cliente.nome} tem ${moeda(saldo)} de crédito — não dá para abater ${moeda(creditoPedido)}`,
       }
     }
-    if (creditoPedido > total) {
+    if (arredondar(creditoUsado + creditoPedido) > total) {
       return {
         ok: false,
-        erro: `O crédito abatido não pode passar do total da venda (${moeda(total)})`,
+        erro: creditoUsado > 0
+          ? `Com a devolução, o crédito abatido não pode passar de ${moeda(arredondar(total - creditoUsado))}`
+          : `O crédito abatido não pode passar do total da venda (${moeda(total)})`,
       }
     }
-    creditoUsado = creditoPedido
+    creditoUsado = arredondar(creditoUsado + creditoPedido)
   }
 
   const aPagar = arredondar(total - creditoUsado)
@@ -761,7 +824,7 @@ async function validarVenda(
     troco,
     argumentos: [
       pedido, itens, subtotal, total, troco, cliente, vencimento, condicaoId, autorizacaoAUsar,
-      vendedor, creditoUsado, acrescimo,
+      vendedor, creditoUsado, acrescimo, devolucao,
     ],
   }
 }
@@ -842,8 +905,21 @@ async function gravar(
   vendedor: VendedorDoBalcao | null,
   creditoUsado: number,
   /** O acréscimo do prazo, já somado em `total`. */
-  acrescimo: number
+  acrescimo: number,
+  devolucao: DevolucaoDoFechamento | null
 ): Promise<{ numero: number; vendaId: string }> {
+  // O número da devolução sai uma vez só, fora das tentativas: cada colisão do
+  // número da VENDA tenta de novo, e queimaria um número de devolução por vez.
+  const numeroDevolucao = devolucao
+    ? (
+        await db.contador.upsert({
+          where: { nome: `devolucao:${pedido.loja}` },
+          update: { valor: { increment: 1 } },
+          create: { nome: `devolucao:${pedido.loja}`, valor: 1 },
+        })
+      ).valor
+    : null
+
   for (let tentativa = 0; tentativa < 25; tentativa++) {
     // O $inc fica FORA da transação de propósito: dentro dela, o rollback de uma
     // colisão devolveria o contador e a tentativa seguinte repetiria o mesmo
@@ -860,7 +936,8 @@ async function gravar(
     try {
       return await gravarUmaVez(
         contador.valor, pedido, itens, subtotal, total, troco, cliente, vencimento, condicao,
-        autorizacaoId, vendedor, creditoUsado, acrescimo
+        autorizacaoId, vendedor, creditoUsado, acrescimo,
+        devolucao && numeroDevolucao !== null ? { ...devolucao, numero: numeroDevolucao } : null
       )
     } catch (erro) {
       if (!ehColisaoDeNumero(erro)) throw erro
@@ -884,7 +961,8 @@ async function gravarUmaVez(
   vendedor: VendedorDoBalcao | null,
   creditoUsado: number,
   /** O acréscimo do prazo, já somado em `total`. */
-  acrescimo: number
+  acrescimo: number,
+  devolucao: (DevolucaoDoFechamento & { numero: number }) | null
 ): Promise<{ numero: number; vendaId: string }> {
   // A venda e as baixas de estoque caem juntas ou não caem: uma venda gravada
   // sem seus movimentos deixaria o saldo derivado errado para sempre.
@@ -937,6 +1015,27 @@ async function gravarUmaVez(
           venda,
           pedido.operador
         ),
+      })
+    }
+
+    /*
+     * A devolução entra antes do uso do crédito: com cliente, é ela que põe no
+     * livro o saldo que a linha de baixo consome.
+     */
+    if (devolucao) {
+      const gravada = await gravarDevolucaoNaVenda(tx, {
+        numero: devolucao.numero,
+        loja: pedido.loja,
+        cliente,
+        itens: devolucao.itens,
+        total: devolucao.total,
+        motivo: devolucao.motivo,
+        operador: pedido.operador,
+        venda: { id: venda.id, numero: venda.numero },
+      })
+      await tx.venda.update({
+        where: { id: venda.id },
+        data: { devolucaoId: gravada.id, devolucaoNumero: gravada.numero },
       })
     }
 

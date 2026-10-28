@@ -13,7 +13,13 @@ import { ListaItens } from "~/components/pdv/lista-itens"
 import { PixDialogo, type PixNoBalcao } from "~/components/pdv/pix-dialogo"
 import { PixEmEspera } from "~/components/pdv/pix-em-espera"
 import { AutorizacaoDialogo, type Bloqueio } from "~/components/pdv/autorizacao-dialogo"
-import { FinalizarDialogo } from "~/components/pdv/finalizar-dialogo"
+import {
+  DEVOLUCAO_VAZIA,
+  FinalizarDialogo,
+  itensDaDevolucao,
+  totalDaDevolucao,
+  type DevolucaoNoFechamento,
+} from "~/components/pdv/finalizar-dialogo"
 import { PainelPagamento } from "~/components/pdv/painel-pagamento"
 import { Topo } from "~/components/pdv/topo"
 import { Kbd } from "~/components/ui/kbd"
@@ -991,6 +997,11 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   const [creditoUsado, setCreditoUsado] = useState(0)
 
   useEffect(() => setCreditoUsado(0), [cliente?.id])
+  /*
+   * O que o cliente trouxe de volta nesta compra. Vive aqui, e não no diálogo,
+   * porque viaja no pedido — e sai junto com a venda, como o CPF da nota.
+   */
+  const [devolucao, setDevolucao] = useState<DevolucaoNoFechamento>(DEVOLUCAO_VAZIA)
 
   const paraARede = cliente?.lojaDaRede != null
   useEffect(() => {
@@ -1120,6 +1131,24 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   const totais = useMemo(
     () => totaisDaVenda(venda, { aoCusto: paraARede }),
     [venda, paraARede]
+  )
+
+  const devolucaoAbatida = paraARede
+    ? 0
+    : Math.min(totalDaDevolucao(devolucao), totais.total)
+  /*
+   * O crédito do saldo cobre só o que a devolução deixou: escolhido antes de
+   * ela entrar, ele passaria do total e o servidor recusaria a venda.
+   */
+  const creditoDoSaldo = arredondar(
+    Math.max(0, Math.min(creditoUsado, totais.total - devolucaoAbatida))
+  )
+  const devolucaoDoPedido = useMemo(
+    () =>
+      !paraARede && devolucao.linhas.length > 0
+        ? { itens: itensDaDevolucao(devolucao), motivo: devolucao.motivo }
+        : null,
+    [devolucao, paraARede]
   )
 
   const resultados = useMemo(() => {
@@ -1257,7 +1286,8 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           recebido: valorRecebido,
           // Quanto o cliente quer abater do saldo que tem a favor. O servidor
           // confere contra o livro — aqui é só a escolha dele.
-          creditoUsado,
+          creditoUsado: creditoDoSaldo,
+          devolucao: devolucaoDoPedido,
           clienteId: cliente?.id ?? null,
           // Vai o id da condição, não as datas: os vencimentos são calculados no
           // servidor, para o prazo gravado ser sempre um dos que a empresa pratica.
@@ -1274,7 +1304,8 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       )
     },
     [
-      autorizacaoId, cliente, cpfNaNota, creditoUsado, divisao, emitirNota, fetcher, forma, modeloNota,
+      autorizacaoId, cliente, cpfNaNota, creditoDoSaldo, devolucaoDoPedido, divisao, emitirNota,
+      fetcher, forma, modeloNota,
       gravando, totais.desconto, venda.itens, vendedorCodigo,
     ]
   )
@@ -1313,9 +1344,10 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           cpfNaNota,
           vendedorCodigo,
           clienteId: cliente?.id ?? null,
-          // O Pix cobra o que sobra depois do crédito; o servidor confere o
-          // saldo contra o livro antes de gerar o QR.
-          creditoUsado,
+          // O Pix cobra o que sobra depois da devolução e do crédito; o
+          // servidor confere o saldo contra o livro antes de gerar o QR.
+          creditoUsado: creditoDoSaldo,
+          devolucao: devolucaoDoPedido,
           // Depois de uma liberação, é ela que deixa o Pix passar pela trava.
           autorizacaoId,
         },
@@ -1323,7 +1355,8 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       )
     },
     [
-      autorizacaoId, cliente, cpfNaNota, creditoUsado, divisao, emitirNota, fetcher, forma, modeloNota,
+      autorizacaoId, cliente, cpfNaNota, creditoDoSaldo, devolucaoDoPedido, divisao, emitirNota,
+      fetcher, forma, modeloNota,
       totais.desconto, venda.itens, vendedorCodigo,
     ]
   )
@@ -1449,6 +1482,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       setCondicao(null)
       setFinalizando(false)
       setRecebidoTexto("")
+      setDevolucao(DEVOLUCAO_VAZIA)
       avisar(
         "Pedido enviado ao gerente — o carrinho está guardado em Minhas autorizações",
         "sucesso"
@@ -1517,6 +1551,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     setForma("pix")
     setFinalizando(false)
     setCpfNaNota("")
+    setDevolucao(DEVOLUCAO_VAZIA)
     setRecebidoTexto("")
     // A liberação vale para uma venda só; deixá-la no estado faria a próxima
     // venda nascer com a permissão da anterior. A baixa cobre o caso em que a
@@ -1744,6 +1779,9 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     // anterior seguia grudado na próxima sem ninguém notar.
     setCliente(null)
     setForma("pix")
+    // A devolução já foi no pedido guardado com a cobrança: aqui ela só sairia
+    // grudada na próxima venda.
+    setDevolucao(DEVOLUCAO_VAZIA)
   }, [])
 
   /**
@@ -1917,7 +1955,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
      */
     if (forma === FORMA_MISTA) {
       const linhas = linhasDaDivisao(divisao)
-      const aPagar = arredondar(Math.max(0, totais.total - creditoUsado))
+      const aPagar = arredondar(Math.max(0, totais.total - devolucaoAbatida - creditoDoSaldo))
       const soma = arredondar(linhas.reduce((a, l) => a + l.valor, 0))
       if (linhas.length < 2) {
         setErroFinalizacao("Divida entre pelo menos duas formas, ou F4 para uma só")
@@ -1965,7 +2003,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
        * enquanto o diálogo, do lado, mostrava R$ 2,00 de troco — as duas contas
        * têm que ser a mesma, e a que vale é a do servidor.
        */
-      const aPagar = arredondar(Math.max(0, totais.total - creditoUsado))
+      const aPagar = arredondar(Math.max(0, totais.total - devolucaoAbatida - creditoDoSaldo))
       if (valor < aPagar) {
         setErroFinalizacao(`Faltam ${moeda(aPagar - valor)}`)
         return
@@ -2161,6 +2199,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     // O cliente sai com a venda: ficava grudado na próxima sem ninguém notar.
     setCliente(null)
     setCpfNaNota("")
+    setDevolucao(DEVOLUCAO_VAZIA)
     setCondicao(null)
     avisar("Venda cancelada", "erro")
   }, [autorizacaoId, avisar, darBaixaNaLiberacao, venda.itens.length, voltarParaBusca])
@@ -2536,6 +2575,12 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           onEmitirNotaChange={setEmitirNota}
           modeloNota={modeloNota}
           onModeloNotaChange={setModeloNota}
+          devolucao={devolucao}
+          onDevolucaoChange={(nova) => {
+            setDevolucao(nova)
+            setErroFinalizacao(null)
+          }}
+          indiceProdutos={indice}
           cpfNaNota={cpfNaNota}
           onCpfNaNotaChange={setCpfNaNota}
           onImprimirChange={setImprimirCupom}

@@ -52,6 +52,7 @@ export async function loader({ request }: Route.LoaderArgs) {
           ? ("credito" as const)
           : ("fora" as const),
       nota: porRef.get(`devolucao-${d.id}`) ?? null,
+      vendaAbatidaNumero: d.vendaAbatidaNumero ?? null,
     })),
   }
 }
@@ -155,7 +156,9 @@ export default function Devolucoes({ loaderData }: Route.ComponentProps) {
               </p>
               <p className="mt-0.5 text-xs text-muted-foreground">
                 {d.motivo}
-                {d.destino === "especie"
+                {d.vendaAbatidaNumero !== null
+                  ? ` · abatida na venda #${d.vendaAbatidaNumero}`
+                  : d.destino === "especie"
                   ? " · dinheiro devolvido pela gaveta"
                   : d.destino === "credito"
                     ? " · virou crédito do cliente"

@@ -179,7 +179,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   <div class="separador"></div>
   <table>
     <tr><td>Pagamento</td><td class="dir forte">${escapar(forma)}</td></tr>
-    ${venda.creditoUsado > 0 ? `<tr><td>Cr&eacute;dito abatido</td><td class="dir">- ${moeda(venda.creditoUsado)}</td></tr><tr><td>A pagar</td><td class="dir forte">${moeda(venda.total - venda.creditoUsado)}</td></tr>` : ""}
+    ${venda.creditoUsado > 0 ? `<tr><td>${venda.devolucaoNumero ? `Devolu&ccedil;&atilde;o #${venda.devolucaoNumero} abatida` : "Cr&eacute;dito abatido"}</td><td class="dir">- ${moeda(venda.creditoUsado)}</td></tr><tr><td>A pagar</td><td class="dir forte">${moeda(venda.total - venda.creditoUsado)}</td></tr>` : ""}
     ${linhasDoPagamento}
     ${venda.recebido !== null ? `<tr><td>${venda.forma === FORMA_MISTA ? "Recebido em dinheiro" : "Recebido"}</td><td class="dir">${moeda(venda.recebido)}</td></tr>` : ""}
     ${venda.troco !== null && venda.troco > 0 ? `<tr><td>Troco</td><td class="dir forte">${moeda(venda.troco)}</td></tr>` : ""}

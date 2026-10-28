@@ -11,7 +11,9 @@ import {
   QrCode,
   Search,
   Split,
+  Trash2,
   Truck,
+  Undo2,
   User,
   UserPlus,
   Wallet,
@@ -37,6 +39,8 @@ import {
 	type FormaPagamento,
 } from "~/lib/pdv";
 import type { ClienteResumo } from "~/components/pdv/cliente-dialogo";
+import { EscolhaDeProduto, type ProdutoDoCatalogo } from "~/components/pdv/escolha-de-produto";
+import type { EntradaIndice } from "~/lib/pdv";
 import { cn } from "~/lib/utils";
 
 const ICONES: Record<
@@ -93,6 +97,14 @@ type Props = {
   /** NFC-e ou NF-e escolhido no F7; null deixa o padrão de `modeloDaVenda`. */
   modeloNota: ModeloNota | null;
   onModeloNotaChange: (modelo: ModeloNota | null) => void;
+  /**
+   * O que o cliente trouxe de volta nesta compra (a troca no balcão). O valor
+   * abate o total antes do crédito; o servidor grava a devolução com a venda.
+   */
+  devolucao: DevolucaoNoFechamento;
+  onDevolucaoChange: (devolucao: DevolucaoNoFechamento) => void;
+  /** O catálogo, para escolher o produto que voltou. */
+  indiceProdutos: EntradaIndice<ProdutoDoCatalogo>[];
   /** CPF que o consumidor pediu na nota, sem virar cadastro (Nota Legal). */
   cpfNaNota: string;
   onCpfNaNotaChange: (cpf: string) => void;
@@ -103,6 +115,42 @@ type Props = {
   /** Enquanto outro diálogo está por cima, este não escuta o teclado. */
   pausado?: boolean;
 };
+
+/** Uma linha do que o cliente trouxe de volta, como se digita (texto). */
+export type LinhaDaDevolucao = {
+  produtoId: string;
+  codigo: string;
+  descricao: string;
+  unidade: string;
+  /** O teto do preço: o catálogo de hoje, como na devolução sem venda. */
+  precoCatalogo: number;
+  quantidade: string;
+  preco: string;
+};
+
+export type DevolucaoNoFechamento = { linhas: LinhaDaDevolucao[]; motivo: string };
+
+export const DEVOLUCAO_VAZIA: DevolucaoNoFechamento = { linhas: [], motivo: "" };
+
+/** As linhas válidas da devolução, como o servidor as recebe. */
+export function itensDaDevolucao(devolucao: DevolucaoNoFechamento) {
+  return devolucao.linhas.flatMap((l) => {
+    const quantidade = interpretarValor(l.quantidade);
+    const preco = interpretarValor(l.preco);
+    return quantidade !== null && preco !== null
+      ? [{ produtoId: l.produtoId, quantidade, preco }]
+      : [];
+  });
+}
+
+/** O valor da devolução, só das linhas que o servidor aceitaria. */
+export function totalDaDevolucao(devolucao: DevolucaoNoFechamento) {
+  return arredondar(
+    itensDaDevolucao(devolucao)
+      .filter((i) => i.quantidade > 0 && Number.isInteger(i.quantidade) && i.preco > 0)
+      .reduce((a, i) => a + arredondar(i.quantidade * i.preco), 0),
+  );
+}
 
 /**
  * Conferência antes de gravar a venda.
@@ -144,6 +192,9 @@ export function FinalizarDialogo({
   onEmitirNotaChange,
   modeloNota,
   onModeloNotaChange,
+  devolucao,
+  onDevolucaoChange,
+  indiceProdutos,
   cpfNaNota,
   onCpfNaNotaChange,
   gravando,
@@ -211,10 +262,70 @@ export function FinalizarDialogo({
    * mais do que ele tem, nem mais do que ele está levando. A transferência
    * entre lojas fica de fora — não há saldo nem o que pagar.
    */
+  /*
+   * A devolução abate antes do crédito, como no servidor. Sem cadastro ela não
+   * pode passar da venda: a diferença não teria onde virar saldo.
+   */
+  const [editandoDevolucao, setEditandoDevolucao] = useState(false);
+  const linhasDevolucao = devolucao.linhas.map((l) => {
+    const qtd = interpretarValor(l.quantidade);
+    const preco = interpretarValor(l.preco);
+    const erro =
+      qtd === null || qtd <= 0 || !Number.isInteger(qtd)
+        ? "quantidade inteira"
+        : preco === null || preco <= 0
+          ? "informe o preço"
+          : preco > l.precoCatalogo + 0.005
+            ? `até ${moeda(l.precoCatalogo)}`
+            : null;
+    return { ...l, erro, subtotal: erro ? 0 : arredondar(qtd! * preco!) };
+  });
+  const totalDevolucao = arredondar(linhasDevolucao.reduce((a, l) => a + l.subtotal, 0));
+  const temDevolucao = !paraARede && devolucao.linhas.length > 0;
+  const devolucaoAbatida = temDevolucao ? Math.min(totalDevolucao, total) : 0;
+  const erroDevolucao = !temDevolucao
+    ? null
+    : linhasDevolucao.some((l) => l.erro)
+      ? "Confira as linhas da devolução"
+      : !devolucao.motivo.trim()
+        ? "Diga por que a mercadoria voltou"
+        : totalDevolucao > total && !cliente
+          ? "A devolução passa da venda — vincule o cliente (F6) para a diferença virar crédito"
+          : null;
+
   const saldo = paraARede ? 0 : (cliente?.credito ?? 0);
-  const creditoDisponivel = Math.min(saldo, total);
+  const creditoDisponivel = Math.max(0, Math.min(saldo, arredondar(total - devolucaoAbatida)));
   const credito = Math.min(creditoUsado, creditoDisponivel);
-  const aPagar = Math.max(0, total - credito);
+  const aPagar = Math.max(0, arredondar(total - devolucaoAbatida - credito));
+
+  function mudarLinha(produtoId: string, campo: "quantidade" | "preco", valor: string) {
+    onDevolucaoChange({
+      ...devolucao,
+      linhas: devolucao.linhas.map((l) => (l.produtoId === produtoId ? { ...l, [campo]: valor } : l)),
+    });
+  }
+
+  function incluirNaDevolucao(produtoId: string) {
+    if (devolucao.linhas.some((l) => l.produtoId === produtoId)) return;
+    const produto = indiceProdutos.find((e) => e.produto.id === produtoId)?.produto;
+    if (!produto) return;
+    const preco = produto.preco ?? 0;
+    onDevolucaoChange({
+      ...devolucao,
+      linhas: [
+        ...devolucao.linhas,
+        {
+          produtoId: produto.id,
+          codigo: produto.codigo,
+          descricao: produto.descricao,
+          unidade: produto.unidade,
+          precoCatalogo: preco,
+          quantidade: "1",
+          preco: preco.toFixed(2).replace(".", ","),
+        },
+      ],
+    });
+  }
 
   /*
    * O pagamento dividido: o que cada forma leva e quanto ainda falta cobrir.
@@ -382,6 +493,21 @@ export function FinalizarDialogo({
         return;
       }
 
+      // Na devolução o teclado é dos campos dela: Enter não fecha a venda no
+      // meio de uma quantidade, e Esc (ou F9) volta à conferência.
+      if (editandoDevolucao) {
+        if (key === "Escape" || key === "F9") {
+          evento.preventDefault();
+          setEditandoDevolucao(false);
+        }
+        return;
+      }
+      if (key === "F9" && !paraARede) {
+        evento.preventDefault();
+        setEditandoDevolucao(true);
+        return;
+      }
+
       // ⇧F1..F5 escolhem a forma, como no resto do sistema.
       if (shiftKey) {
         const posicao = FORMAS_DE_CAIXA.findIndex((_, i) => key === `F${i + 1}`);
@@ -436,6 +562,10 @@ export function FinalizarDialogo({
           document.activeElement === campoVendedor.current
         ) {
           campoRecebido.current?.focus();
+          return;
+        }
+        if (erroDevolucao) {
+          setEditandoDevolucao(true);
           return;
         }
         onConfirmar();
@@ -499,6 +629,8 @@ export function FinalizarDialogo({
     modeloNota,
     onModeloNotaChange,
     forma,
+    editandoDevolucao,
+    erroDevolucao,
     fiscal.emite,
     cliente,
     opcoes,
@@ -775,9 +907,150 @@ export function FinalizarDialogo({
           </div>
         ) : null}
 
-        {credito > 0 ? (
+        {/*
+          A troca no balcão: o cliente traz o que volta e paga só a diferença.
+          Fechado, o cartão resume; aberto (F9), vira a lista do que voltou.
+        */}
+        {paraARede ? null : editandoDevolucao ? (
+          <div className="mt-3 rounded-lg border border-primary bg-primary/5 p-3">
+            <div className="mb-2 flex items-center gap-2">
+              <Undo2 className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Devolução nesta venda
+              </span>
+              <span className="ml-auto text-xs text-muted-foreground">
+                <Kbd>Esc</Kbd> volta
+              </span>
+            </div>
+            <EscolhaDeProduto
+              escolhido={null}
+              destacados={[]}
+              indice={indiceProdutos}
+              onEscolher={incluirNaDevolucao}
+            />
+            {linhasDevolucao.length > 0 ? (
+              <ul className="mt-2 space-y-1.5">
+                {linhasDevolucao.map((l) => (
+                  <li key={l.produtoId} className="flex items-center gap-2 text-xs">
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate font-medium">{l.descricao}</div>
+                      <div
+                        className={cn(
+                          "text-[10px]",
+                          l.erro ? "text-destructive" : "text-muted-foreground",
+                        )}
+                      >
+                        {l.erro ?? `${l.codigo} · ${moeda(l.subtotal)}`}
+                      </div>
+                    </div>
+                    <Input
+                      value={l.quantidade}
+                      onChange={(e) => mudarLinha(l.produtoId, "quantidade", e.target.value)}
+                      inputMode="numeric"
+                      aria-label={`Quantidade de ${l.descricao}`}
+                      className="h-8 w-14 rounded-lg text-right font-mono tabular-nums"
+                    />
+                    <span className="w-6 text-[10px] text-muted-foreground">{l.unidade}</span>
+                    <Input
+                      value={l.preco}
+                      onChange={(e) => mudarLinha(l.produtoId, "preco", e.target.value)}
+                      inputMode="decimal"
+                      aria-label={`Preço de ${l.descricao}`}
+                      className="h-8 w-20 rounded-lg text-right font-mono tabular-nums"
+                    />
+                    <Button
+                      type="button"
+                      tabIndex={-1}
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={`Tirar ${l.descricao} da devolução`}
+                      onClick={() =>
+                        onDevolucaoChange({
+                          ...devolucao,
+                          linhas: devolucao.linhas.filter((x) => x.produtoId !== l.produtoId),
+                        })
+                      }
+                    >
+                      <Trash2 className="size-3.5" />
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Procure o produto que voltou. O preço vem do catálogo e só pode baixar.
+              </p>
+            )}
+            <Input
+              value={devolucao.motivo}
+              onChange={(e) => onDevolucaoChange({ ...devolucao, motivo: e.target.value })}
+              placeholder="Por que voltou? (obrigatório)"
+              aria-label="Motivo da devolução"
+              className="mt-2 h-8 rounded-lg text-xs"
+            />
+            <div className="mt-2 flex items-center justify-between text-xs">
+              <span className="text-muted-foreground">
+                {totalDevolucao > total && cliente
+                  ? `${moeda(arredondar(totalDevolucao - total))} ficam de crédito para ${cliente.nome}`
+                  : "Abate do total da venda"}
+              </span>
+              <span className="font-mono font-semibold tabular-nums">{moeda(totalDevolucao)}</span>
+            </div>
+            <Button
+              type="button"
+              tabIndex={-1}
+              size="sm"
+              variant="outline"
+              onClick={() => setEditandoDevolucao(false)}
+              className="mt-2 w-full rounded-lg"
+            >
+              Pronto
+            </Button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            tabIndex={-1}
+            onClick={() => setEditandoDevolucao(true)}
+            className={cn(
+              "mt-3 flex w-full items-center gap-3 rounded-lg border p-3 text-left transition-colors hover:bg-muted/60",
+              temDevolucao
+                ? erroDevolucao
+                  ? "border-destructive/50 bg-destructive/5"
+                  : "border-primary bg-primary/5"
+                : "border-dashed border-border",
+            )}
+          >
+            <Undo2 className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+            <div className="min-w-0 flex-1">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Devolução
+              </div>
+              {temDevolucao ? (
+                <div className="text-sm font-medium">
+                  {devolucao.linhas.length} {devolucao.linhas.length === 1 ? "produto" : "produtos"}{" "}
+                  · abate {moeda(devolucaoAbatida)}
+                </div>
+              ) : (
+                <div className="text-sm text-muted-foreground">cliente trouxe mercadoria de volta?</div>
+              )}
+              {erroDevolucao ? (
+                <div className="text-[10px] text-destructive">{erroDevolucao}</div>
+              ) : null}
+            </div>
+            <Kbd className="shrink-0">F9</Kbd>
+          </button>
+        )}
+
+        {credito > 0 || devolucaoAbatida > 0 ? (
           <div className="mt-2 flex items-baseline justify-between text-sm">
-            <span className="text-muted-foreground">A pagar depois do crédito</span>
+            <span className="text-muted-foreground">
+              A pagar depois {devolucaoAbatida > 0 && credito > 0
+                ? "da devolução e do crédito"
+                : devolucaoAbatida > 0
+                  ? "da devolução"
+                  : "do crédito"}
+            </span>
             <span className="font-mono text-xl font-bold tabular-nums">{moeda(aPagar)}</span>
           </div>
         ) : null}
@@ -1201,7 +1474,13 @@ export function FinalizarDialogo({
           tabIndex={-1}
           size="lg"
           disabled={
-            gravando || faltaDinheiro || faltaDivisao || faltaCliente || faltaVendedor || cpfInvalido
+            gravando ||
+            faltaDinheiro ||
+            faltaDivisao ||
+            faltaCliente ||
+            faltaVendedor ||
+            cpfInvalido ||
+            erroDevolucao !== null
           }
           onClick={onConfirmar}
           className="h-14 w-full rounded-xl text-base font-semibold"

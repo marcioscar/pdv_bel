@@ -569,6 +569,12 @@ model Venda {
   /// anteriores ao campo têm.
   modeloNota     String?
 
+  /// A devolução lançada no fechamento desta venda, cujo valor entrou em
+  /// `creditoUsado` (a troca no balcão: o cliente traz o que volta e paga só a
+  /// diferença). Null na venda comum.
+  devolucaoId     String? @db.ObjectId
+  devolucaoNumero Int?
+
   /// Cliente é obrigatório na venda a prazo (o boleto precisa do pagador).
   /// Nome e documento ficam copiados para o histórico não mudar se o cadastro mudar.
   clienteId      String?   @db.ObjectId
@@ -1025,6 +1031,12 @@ model Devolucao {
   /// de cima: ou o dinheiro saiu da gaveta, ou virou saldo, ou o acerto foi por
   /// fora — nunca dois ao mesmo tempo.
   movimentoCreditoId String? @db.ObjectId
+
+  /// A venda nova em que o valor foi abatido, quando a devolução entrou no
+  /// fechamento de uma compra (a troca no balcão). Diferente de `vendaId`, que
+  /// é a venda de onde a mercadoria SAIU: esta é a venda que ela ajudou a pagar.
+  vendaAbatidaId     String? @db.ObjectId
+  vendaAbatidaNumero Int?
 
   @@unique([loja, numero])
   @@index([vendaId])

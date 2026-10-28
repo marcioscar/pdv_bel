@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client"
 import { caixaAberto } from "~/lib/caixa.server"
 import { db } from "~/lib/db.server"
 import { arredondar, QUANTIDADE_INTEIRA } from "~/lib/moeda"
@@ -296,6 +297,143 @@ export function listarDevolucoes(lojas: string[], limite = 60) {
 export type ItemSemVenda = { produtoId: string; quantidade: number; preco: number }
 
 /**
+ * Os itens da devolução sem venda, com o preço conferido contra o catálogo.
+ *
+ * Separado porque são dois caminhos que precisam da MESMA regra: a tela de
+ * devolução e o fechamento da venda, onde o cliente traz o que volta e paga só
+ * a diferença. Duas cópias do teto de preço acabariam divergindo.
+ */
+export async function precificarDevolucaoSemVenda(
+  recebidos: ItemSemVenda[]
+): Promise<{ ok: true; itens: ItemGravado[]; total: number } | { ok: false; erro: string }> {
+  const pedidos = recebidos.filter((i) => i.quantidade > 0)
+  if (pedidos.length === 0) return { ok: false, erro: "Escolha o que está voltando" }
+  if (new Set(pedidos.map((i) => i.produtoId)).size !== pedidos.length) {
+    return { ok: false, erro: "O mesmo produto aparece duas vezes — junte numa linha só" }
+  }
+  if (pedidos.some((i) => !OBJECT_ID.test(i.produtoId))) {
+    return { ok: false, erro: "Produto inválido" }
+  }
+
+  const produtos = await db.produto.findMany({
+    where: { id: { in: pedidos.map((i) => i.produtoId) } },
+    select: { id: true, codigo: true, descricao: true, unidade: true, preco: true },
+  })
+  const porId = new Map(produtos.map((p) => [p.id, p]))
+
+  const itens: ItemGravado[] = []
+  for (const pedido of pedidos) {
+    const produto = porId.get(pedido.produtoId)
+    if (!produto) return { ok: false, erro: "Produto não encontrado" }
+    if (!Number.isInteger(pedido.quantidade)) return { ok: false, erro: QUANTIDADE_INTEIRA }
+
+    // O teto é o catálogo, lido aqui: o navegador só pode pedir menos.
+    const preco = arredondar(pedido.preco)
+    if (!(preco > 0)) return { ok: false, erro: `${produto.descricao}: informe o preço` }
+    if (preco > arredondar(produto.preco)) {
+      return {
+        ok: false,
+        erro: `${produto.descricao}: o preço não passa do catálogo (${produto.preco.toFixed(2).replace(".", ",")})`,
+      }
+    }
+
+    itens.push({
+      produtoId: produto.id,
+      codigo: produto.codigo,
+      descricao: produto.descricao,
+      unidade: produto.unidade,
+      preco,
+      quantidade: pedido.quantidade,
+      subtotal: arredondar(preco * pedido.quantidade),
+    })
+  }
+
+  const total = arredondar(itens.reduce((soma, i) => soma + i.subtotal, 0))
+  return { ok: true, itens, total }
+}
+
+/**
+ * Grava a devolução trazida no fechamento de uma venda: documento, estoque de
+ * volta e — com cliente — o crédito, que a própria venda consome em seguida.
+ *
+ * Recebe o client da TRANSAÇÃO da venda: as duas caem juntas ou nenhuma. Uma
+ * devolução gravada com a venda recusada deixaria mercadoria de volta na
+ * prateleira e um abatimento que ninguém usou.
+ */
+export async function gravarDevolucaoNaVenda(
+  tx: Prisma.TransactionClient,
+  entrada: {
+    numero: number
+    loja: string
+    cliente: { id: string; nome: string; cpfCnpj: string } | null
+    itens: ItemGravado[]
+    total: number
+    motivo: string
+    operador: string
+    venda: { id: string; numero: number }
+  }
+) {
+  const { venda } = entrada
+  const devolucao = await tx.devolucao.create({
+    data: {
+      numero: entrada.numero,
+      loja: entrada.loja,
+      vendaId: null,
+      vendaNumero: null,
+      clienteId: entrada.cliente?.id ?? null,
+      clienteNome: entrada.cliente?.nome ?? null,
+      clienteCpfCnpj: entrada.cliente?.cpfCnpj ?? null,
+      itens: entrada.itens,
+      total: entrada.total,
+      motivo: entrada.motivo,
+      operador: entrada.operador,
+      vendaAbatidaId: venda.id,
+      vendaAbatidaNumero: venda.numero,
+    },
+  })
+
+  await tx.movimentoEstoque.createMany({
+    data: entrada.itens.map((item) => ({
+      produtoId: item.produtoId,
+      loja: entrada.loja,
+      tipo: "devolucao" satisfies TipoMovimento,
+      quantidade: item.quantidade,
+      operador: entrada.operador,
+      devolucaoId: devolucao.id,
+      devolucaoNumero: devolucao.numero,
+      observacao: `Devolução #${devolucao.numero} abatida na venda #${venda.numero}: ${entrada.motivo}`,
+    })),
+  })
+
+  /*
+   * Com cliente, o valor passa pelo livro de crédito: entra aqui e a venda
+   * lança o uso logo depois. O que sobrar (devolução maior que a compra) fica
+   * como saldo dele — sem isso a diferença sumiria. Sem cadastro não há livro:
+   * o abatimento fica só na venda, e a tela já recusou devolução maior que ela.
+   */
+  if (entrada.cliente) {
+    const credito = await tx.movimentoCredito.create({
+      data: {
+        clienteId: entrada.cliente.id,
+        loja: entrada.loja,
+        tipo: "devolucao",
+        valor: entrada.total,
+        devolucaoId: devolucao.id,
+        devolucaoNumero: devolucao.numero,
+        operador: entrada.operador,
+        observacao: `Devolução #${devolucao.numero} trazida na venda #${venda.numero}: ${entrada.motivo}`,
+      },
+    })
+    await tx.devolucao.update({
+      where: { id: devolucao.id },
+      data: { movimentoCreditoId: credito.id },
+    })
+  }
+
+  return devolucao
+}
+
+/**
  * A devolução SEM venda: o cliente volta com a mercadoria e a venda não se
  * acha — perdeu o cupom, comprou em outra loja, comprou no sistema antigo.
  *
@@ -346,49 +484,9 @@ export async function registrarDevolucaoSemVenda(entrada: {
     }
   }
 
-  const pedidos = entrada.itens.filter((i) => i.quantidade > 0)
-  if (pedidos.length === 0) return { ok: false, erro: "Escolha o que está voltando" }
-  if (new Set(pedidos.map((i) => i.produtoId)).size !== pedidos.length) {
-    return { ok: false, erro: "O mesmo produto aparece duas vezes — junte numa linha só" }
-  }
-  if (pedidos.some((i) => !OBJECT_ID.test(i.produtoId))) {
-    return { ok: false, erro: "Produto inválido" }
-  }
-
-  const produtos = await db.produto.findMany({
-    where: { id: { in: pedidos.map((i) => i.produtoId) } },
-    select: { id: true, codigo: true, descricao: true, unidade: true, preco: true },
-  })
-  const porId = new Map(produtos.map((p) => [p.id, p]))
-
-  const itens: ItemGravado[] = []
-  for (const pedido of pedidos) {
-    const produto = porId.get(pedido.produtoId)
-    if (!produto) return { ok: false, erro: "Produto não encontrado" }
-    if (!Number.isInteger(pedido.quantidade)) return { ok: false, erro: QUANTIDADE_INTEIRA }
-
-    // O teto é o catálogo, lido aqui: o navegador só pode pedir menos.
-    const preco = arredondar(pedido.preco)
-    if (!(preco > 0)) return { ok: false, erro: `${produto.descricao}: informe o preço` }
-    if (preco > arredondar(produto.preco)) {
-      return {
-        ok: false,
-        erro: `${produto.descricao}: o preço não passa do catálogo (${produto.preco.toFixed(2).replace(".", ",")})`,
-      }
-    }
-
-    itens.push({
-      produtoId: produto.id,
-      codigo: produto.codigo,
-      descricao: produto.descricao,
-      unidade: produto.unidade,
-      preco,
-      quantidade: pedido.quantidade,
-      subtotal: arredondar(preco * pedido.quantidade),
-    })
-  }
-
-  const total = arredondar(itens.reduce((soma, i) => soma + i.subtotal, 0))
+  const precificada = await precificarDevolucaoSemVenda(entrada.itens)
+  if (!precificada.ok) return precificada
+  const { itens, total } = precificada
 
   // A mesma numeração da devolução comum: é o mesmo documento, só sem venda.
   const contador = await db.contador.upsert({
