@@ -18,9 +18,10 @@ import {
 import { SOMENTE_ATIVOS } from "~/lib/produtos.server"
 import { exigirGerente } from "~/lib/sessao.server"
 import {
-  interpretarValor,
-  QUANTIDADE_INTEIRA,
+  avisoDeQuantidade,
+  interpretarQuantidade,
   quantidade as formatarQuantidade,
+  quantidadeAceita,
 } from "~/lib/moeda"
 import { ACOES_DE_GERENTE, ehGerente } from "~/lib/permissoes"
 import {
@@ -34,6 +35,12 @@ import { focoEmMenu } from "~/lib/foco"
 import { cn } from "~/lib/utils"
 
 const OBJECT_ID = /^[0-9a-fA-F]{24}$/
+
+/** O formato, sem o sinal: o zero do inventário e o negativo recusado são regras de cada modo. */
+function quantidadeNoFormato(valor: number, fracionado: boolean | undefined) {
+  const absoluto = Math.abs(valor)
+  return absoluto === 0 || quantidadeAceita(absoluto, fracionado)
+}
 
 export function meta(_: Route.MetaArgs) {
   return [{ title: "Entradas e inventário — BrasSaco" }]
@@ -84,10 +91,6 @@ export async function action({ request }: Route.ActionArgs) {
   if (!Number.isFinite(valor)) {
     return data({ ok: false as const, erro: "Quantidade inválida" }, { status: 400 })
   }
-  // Vale para os três modos: entrada, uso e o saldo contado no inventário.
-  if (!Number.isInteger(valor)) {
-    return data({ ok: false as const, erro: QUANTIDADE_INTEIRA }, { status: 400 })
-  }
   if (modo !== "entrada" && modo !== "ajuste" && modo !== "uso") {
     return data({ ok: false as const, erro: "Operação inválida" }, { status: 400 })
   }
@@ -95,6 +98,15 @@ export async function action({ request }: Route.ActionArgs) {
   const produto = await db.produto.findUnique({ where: { id: produtoId } })
   if (!produto) {
     return data({ ok: false as const, erro: "Produto não encontrado" }, { status: 400 })
+  }
+  // Vale para os três modos: entrada, uso e o saldo contado no inventário.
+  // Peça inteira, ou até três casas no produto fracionado. Zero passa: é
+  // contagem válida no inventário, e entrada e uso o recusam abaixo.
+  if (!quantidadeNoFormato(valor, produto.vendeFracionado)) {
+    return data(
+      { ok: false as const, erro: avisoDeQuantidade(produto.vendeFracionado) },
+      { status: 400 }
+    )
   }
 
   if (modo === "entrada") {
@@ -269,13 +281,13 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
       return
     }
 
-    const valor = interpretarValor(entrada)
+    const valor = interpretarQuantidade(entrada)
     if (valor === null) {
       avisar("Quantidade inválida", "erro")
       return
     }
-    if (!Number.isInteger(valor)) {
-      avisar(QUANTIDADE_INTEIRA, "erro")
+    if (!quantidadeNoFormato(valor, selecionado.vendeFracionado)) {
+      avisar(avisoDeQuantidade(selecionado.vendeFracionado), "erro")
       return
     }
 

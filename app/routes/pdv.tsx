@@ -69,9 +69,10 @@ import {
   arredondar,
   interpretarValor,
   moeda,
+  avisoDeQuantidade,
+  interpretarQuantidade,
   quantidade as formatarQuantidade,
-  quantidadeInteira,
-  QUANTIDADE_INTEIRA,
+  quantidadeAceita,
 } from "~/lib/moeda"
 import {
   aprovacaoValida,
@@ -2067,10 +2068,14 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     const indice = indiceClicado ?? indiceResultado
     if (modo === "busca") {
       if (comando.tipo === "vazio") return
-      // "2,4*141" casa com o multiplicador, mas não é quantidade que exista.
-      if (!quantidadeInteira(comando.quantidade)) {
-        avisar(QUANTIDADE_INTEIRA, "erro")
-        return
+      // "2,4*141" casa com o multiplicador, mas só é quantidade que exista se o
+      // produto for fracionado — por isso a checagem espera o produto escolhido.
+      const adicionarSeAceita = (produto: ProdutoCatalogo) => {
+        if (!quantidadeAceita(comando.quantidade, produto.vendeFracionado)) {
+          avisar(avisoDeQuantidade(produto.vendeFracionado), "erro")
+          return
+        }
+        adicionar(produto, comando.quantidade)
       }
 
       if (comando.tipo === "codigo") {
@@ -2084,7 +2089,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
         }
         const escolhido =
           achados.length === 1 ? achados[0] : achados[indice]
-        if (escolhido) adicionar(escolhido, comando.quantidade)
+        if (escolhido) adicionarSeAceita(escolhido)
         return
       }
 
@@ -2093,7 +2098,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
         avisar(`Nada encontrado para “${comando.termo}”`, "erro")
         return
       }
-      adicionar(escolhido, comando.quantidade)
+      adicionarSeAceita(escolhido)
       return
     }
 
@@ -2105,13 +2110,15 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     const valor = valorTeste
 
     if (modo === "quantidade") {
-      if (!quantidadeInteira(valor)) {
-        avisar(QUANTIDADE_INTEIRA, "erro")
+      const alvo: ItemVenda | undefined = venda.itens[venda.indiceAtivo]
+      // Sem o arredondamento de centavo do `valorTeste`: 1,375 seria 1,38.
+      const quantidade = interpretarQuantidade(entrada) ?? valor
+      if (!quantidadeAceita(quantidade, alvo?.vendeFracionado)) {
+        avisar(avisoDeQuantidade(alvo?.vendeFracionado), "erro")
         return
       }
-      const alvo: ItemVenda | undefined = venda.itens[venda.indiceAtivo]
-      if (alvo && passaDoEstoque(alvo.estoque, valor)) avisarSemEstoque(alvo)
-      despachar({ tipo: "definirQuantidade", indice: venda.indiceAtivo, quantidade: valor })
+      if (alvo && passaDoEstoque(alvo.estoque, quantidade)) avisarSemEstoque(alvo)
+      despachar({ tipo: "definirQuantidade", indice: venda.indiceAtivo, quantidade })
       voltarParaBusca()
       return
     }

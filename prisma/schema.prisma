@@ -119,6 +119,11 @@ model Produto {
   /// cadastro recusa preencher só um.
   precoCombo      Float?
   quantidadeCombo Float?
+  /// Aceita quantidade com até três casas (3,5 / 1,375) na venda, na devolução,
+  /// na transferência e no inventário. Desligado é peça inteira, que é a regra
+  /// da rede (ver `quantidadeAceita`). Ausente nos produtos antigos vale como
+  /// false — é o que o Prisma devolve para o default.
+  vendeFracionado Boolean @default(false)
   /// Custo vindo de fora de uma compra registrada aqui — hoje, o do arquivo de
   /// estoque do sistema antigo. Anda com a data porque é só mais uma fonte do
   /// "último custo": uma nota ou fornecimento mais novo passa por cima dele

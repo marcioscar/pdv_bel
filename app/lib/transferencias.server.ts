@@ -2,7 +2,11 @@ import type { Prisma } from "@prisma/client"
 
 import { db } from "~/lib/db.server"
 import { registrarAvisosDeNegativo } from "~/lib/estoque-negativo.server"
-import { arredondar, QUANTIDADE_INTEIRA, quantidadeInteira } from "~/lib/moeda"
+import {
+  arredondarQuantidade,
+  avisoDeQuantidade,
+  quantidadeAceita,
+} from "~/lib/moeda"
 import type { TipoMovimento } from "~/lib/estoque.server"
 import { faltaDoItem, sobraDoItem, type ItemConferido } from "~/lib/transferencias"
 
@@ -70,10 +74,10 @@ export async function enviarTransferencia(entrada: {
   for (const pedido of entrada.itens) {
     const produto = porId.get(pedido.produtoId)
     if (!produto) return { ok: false, erro: "Produto não encontrado no catálogo" }
-    if (!quantidadeInteira(pedido.quantidade)) {
+    if (!quantidadeAceita(pedido.quantidade, produto.vendeFracionado)) {
       return {
         ok: false,
-        erro: `${produto.descricao}: ${QUANTIDADE_INTEIRA.toLowerCase()}`,
+        erro: `${produto.descricao}: ${avisoDeQuantidade(produto.vendeFracionado).toLowerCase()}`,
       }
     }
 
@@ -82,7 +86,7 @@ export async function enviarTransferencia(entrada: {
       codigo: produto.codigo,
       descricao: produto.descricao,
       unidade: produto.unidade,
-      enviada: arredondar(pedido.quantidade),
+      enviada: arredondarQuantidade(pedido.quantidade),
       recebida: null,
     })
   }
@@ -191,15 +195,24 @@ export async function conferirTransferencia(entrada: {
 
   const contado = new Map(entrada.conferidos.map((i) => [i.produtoId, i.recebida]))
 
-  // Zero é contagem válida (nada chegou); fração não é contagem de nada.
-  const fracionado = doc.itens.find((item) => {
+  // Zero é contagem válida (nada chegou); fração só conta no produto fracionado.
+  const aceitaFracao = new Set(
+    (
+      await db.produto.findMany({
+        where: { id: { in: doc.itens.map((i) => i.produtoId) }, vendeFracionado: true },
+        select: { id: true },
+      })
+    ).map((p) => p.id)
+  )
+  const torto = doc.itens.find((item) => {
     const recebida = contado.get(item.produtoId)
-    return recebida !== undefined && Number.isFinite(recebida) && !Number.isInteger(recebida)
+    if (recebida === undefined || !Number.isFinite(recebida) || recebida <= 0) return false
+    return !quantidadeAceita(recebida, aceitaFracao.has(item.produtoId))
   })
-  if (fracionado) {
+  if (torto) {
     return {
       ok: false,
-      erro: `${fracionado.descricao}: ${QUANTIDADE_INTEIRA.toLowerCase()}`,
+      erro: `${torto.descricao}: ${avisoDeQuantidade(aceitaFracao.has(torto.produtoId)).toLowerCase()}`,
     }
   }
 
@@ -214,7 +227,7 @@ export async function conferirTransferencia(entrada: {
      * fora do estoque. A sobra fica marcada para o gerente decidir de onde veio
      * (ver `resolverSobra`).
      */
-    return { ...item, recebida: arredondar(recebida) }
+    return { ...item, recebida: arredondarQuantidade(recebida) }
   })
 
   const itensComFalta = itens.filter((i) => faltaDoItem(i) > 0).length
@@ -506,7 +519,7 @@ export async function saldosEmTransito(): Promise<Map<string, number>> {
   const mapa = new Map<string, number>()
   for (const doc of abertas) {
     for (const item of doc.itens) {
-      mapa.set(item.produtoId, arredondar((mapa.get(item.produtoId) ?? 0) + item.enviada))
+      mapa.set(item.produtoId, arredondarQuantidade((mapa.get(item.produtoId) ?? 0) + item.enviada))
     }
   }
   return mapa
@@ -593,7 +606,7 @@ export async function perdasNoTransporte(lojasPermitidas: string[], desde?: Date
     }
     atual.ocorrencias += 1
     for (const f of faltantes) {
-      atual.unidades = arredondar(atual.unidades + f.falta)
+      atual.unidades = arredondarQuantidade(atual.unidades + f.falta)
       atual.produtos.add(f.descricao)
     }
     rotas.set(rota, atual)

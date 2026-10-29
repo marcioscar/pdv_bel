@@ -1,5 +1,5 @@
 import { db } from "~/lib/db.server"
-import { arredondar } from "~/lib/moeda"
+import { arredondarQuantidade } from "~/lib/moeda"
 import { estornarCreditoDaVenda } from "~/lib/creditos.server"
 
 export type TipoMovimento =
@@ -58,7 +58,7 @@ export async function saldosPorProduto(loja: string): Promise<Map<string, number
   })
 
   return new Map(
-    grupos.map((grupo) => [grupo.produtoId, arredondar(grupo._sum.quantidade ?? 0)])
+    grupos.map((grupo) => [grupo.produtoId, arredondarQuantidade(grupo._sum.quantidade ?? 0)])
   )
 }
 
@@ -85,7 +85,7 @@ export async function saldosPorProdutoELoja(
   const mapa = new Map<string, Map<string, number>>()
   for (const grupo of grupos) {
     if (!mapa.has(grupo.produtoId)) mapa.set(grupo.produtoId, new Map())
-    mapa.get(grupo.produtoId)!.set(grupo.loja, arredondar(grupo._sum.quantidade ?? 0))
+    mapa.get(grupo.produtoId)!.set(grupo.loja, arredondarQuantidade(grupo._sum.quantidade ?? 0))
   }
   return mapa
 }
@@ -111,7 +111,7 @@ export async function saldosDosProdutos(
   })
 
   return new Map(
-    grupos.map((grupo) => [grupo.produtoId, arredondar(grupo._sum.quantidade ?? 0)])
+    grupos.map((grupo) => [grupo.produtoId, arredondarQuantidade(grupo._sum.quantidade ?? 0)])
   )
 }
 
@@ -120,7 +120,7 @@ export async function saldoDoProduto(produtoId: string, loja: string): Promise<n
     where: { produtoId, loja },
     _sum: { quantidade: true },
   })
-  return arredondar(soma._sum.quantidade ?? 0)
+  return arredondarQuantidade(soma._sum.quantidade ?? 0)
 }
 
 export type MovimentoDeVenda = {
@@ -243,7 +243,7 @@ export async function registrarEntrada(
       produtoId,
       loja,
       tipo: "entrada" satisfies TipoMovimento,
-      quantidade: arredondar(quantidade),
+      quantidade: arredondarQuantidade(quantidade),
       operador,
       observacao,
     },
@@ -263,7 +263,7 @@ export async function registrarAjuste(
   observacao?: string
 ) {
   const atual = await saldoDoProduto(produtoId, loja)
-  const diferenca = arredondar(saldoContado - atual)
+  const diferenca = arredondarQuantidade(saldoContado - atual)
 
   if (diferenca === 0) return { movimento: null, diferenca: 0, saldo: atual }
 
@@ -322,7 +322,7 @@ export async function registrarUso(
   const limpo = motivo.trim()
   if (!limpo) return { ok: false, erro: "Diga para que é a saída" }
 
-  const saida = arredondar(quantidade)
+  const saida = arredondarQuantidade(quantidade)
   if (!(saida > 0)) return { ok: false, erro: "A quantidade deve ser positiva" }
 
   const saldo = await saldoDoProduto(produtoId, loja)
@@ -347,7 +347,7 @@ export async function registrarUso(
     },
   })
 
-  return { ok: true, saldo: arredondar(saldo - saida) }
+  return { ok: true, saldo: arredondarQuantidade(saldo - saida) }
 }
 
 export async function fichaDoProduto(produtoId: string, lojas: string[]) {
@@ -361,7 +361,7 @@ export async function fichaDoProduto(produtoId: string, lojas: string[]) {
 
   const linhas = movimentos.map((m) => {
     const anterior = acumulado.get(m.loja) ?? 0
-    const saldo = arredondar(anterior + m.quantidade)
+    const saldo = arredondarQuantidade(anterior + m.quantidade)
     acumulado.set(m.loja, saldo)
 
     return {

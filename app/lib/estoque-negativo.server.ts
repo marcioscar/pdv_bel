@@ -1,6 +1,6 @@
 import { db } from "~/lib/db.server"
 import { saldosDosProdutos } from "~/lib/estoque.server"
-import { arredondar, quantidade as formatarQuantidade } from "~/lib/moeda"
+import { arredondarQuantidade, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { enviarTelegramEmSegundoPlano, texto } from "~/lib/telegram.server"
 
 /**
@@ -53,7 +53,7 @@ export async function registrarAvisosDeNegativo(entrada: {
           origem: entrada.origem,
           documento: entrada.documento,
           documentoId: entrada.documentoId,
-          quantidade: arredondar(i.quantidade),
+          quantidade: arredondarQuantidade(i.quantidade),
           saldoDepois: saldos.get(i.produtoId) ?? 0,
           operador: entrada.operador,
         },
@@ -113,7 +113,7 @@ export async function negativosAgora(lojas: string[]) {
     where: { loja: { in: lojas } },
     _sum: { quantidade: true },
   })
-  const abaixo = grupos.filter((g) => arredondar(g._sum.quantidade ?? 0) < 0)
+  const abaixo = grupos.filter((g) => arredondarQuantidade(g._sum.quantidade ?? 0) < 0)
   if (abaixo.length === 0) return []
 
   const produtos = await db.produto.findMany({
@@ -126,7 +126,7 @@ export async function negativosAgora(lojas: string[]) {
     .map((g) => ({
       produtoId: g.produtoId,
       loja: g.loja,
-      saldo: arredondar(g._sum.quantidade ?? 0),
+      saldo: arredondarQuantidade(g._sum.quantidade ?? 0),
       codigo: porId.get(g.produtoId)?.codigo ?? "",
       descricao: porId.get(g.produtoId)?.descricao ?? "(produto removido)",
       unidade: porId.get(g.produtoId)?.unidade ?? "",

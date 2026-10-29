@@ -1,7 +1,7 @@
 import type { Prisma } from "@prisma/client"
 import { caixaAberto } from "~/lib/caixa.server"
 import { db } from "~/lib/db.server"
-import { arredondar, QUANTIDADE_INTEIRA } from "~/lib/moeda"
+import { arredondar, arredondarQuantidade, avisoDeQuantidade, quantidadeAceita } from "~/lib/moeda"
 import type { TipoMovimento } from "~/lib/estoque.server"
 
 const OBJECT_ID = /^[0-9a-fA-F]{24}$/
@@ -35,10 +35,22 @@ export async function devolvidoPorProduto(vendaId: string): Promise<Map<string, 
   const mapa = new Map<string, number>()
   for (const devolucao of devolucoes) {
     for (const item of devolucao.itens) {
-      mapa.set(item.produtoId, arredondar((mapa.get(item.produtoId) ?? 0) + item.quantidade))
+      mapa.set(
+        item.produtoId,
+        arredondarQuantidade((mapa.get(item.produtoId) ?? 0) + item.quantidade)
+      )
     }
   }
   return mapa
+}
+
+/** Quais destes produtos aceitam fração (3,5) — o resto volta em peça inteira. */
+async function fracionados(produtoIds: string[]): Promise<Set<string>> {
+  const produtos = await db.produto.findMany({
+    where: { id: { in: produtoIds }, vendeFracionado: true },
+    select: { id: true },
+  })
+  return new Set(produtos.map((p) => p.id))
 }
 
 export type ItemDevolvido = { produtoId: string; quantidade: number }
@@ -65,6 +77,8 @@ export type LinhaDevolvivel = {
   jaDevolvida: number
   /** O teto desta devolução: o que saiu menos o que já voltou. */
   devolvivel: number
+  /** Aceita devolver 1,5 — o produto é vendido fracionado. */
+  vendeFracionado: boolean
 }
 
 /** A venda vista do ponto de vista de quem vai devolver: o que ainda cabe. */
@@ -75,6 +89,7 @@ export async function itensDevolviveis(vendaId: string): Promise<LinhaDevolvivel
   if (!venda) return []
 
   const jaVoltou = await devolvidoPorProduto(vendaId)
+  const aceitaFracao = await fracionados(venda.itens.map((i) => i.produtoId))
 
   return venda.itens.map((item) => {
     const jaDevolvida = jaVoltou.get(item.produtoId) ?? 0
@@ -86,7 +101,8 @@ export async function itensDevolviveis(vendaId: string): Promise<LinhaDevolvivel
       preco: item.preco,
       vendida: item.quantidade,
       jaDevolvida,
-      devolvivel: arredondar(Math.max(0, item.quantidade - jaDevolvida)),
+      devolvivel: arredondarQuantidade(Math.max(0, item.quantidade - jaDevolvida)),
+      vendeFracionado: aceitaFracao.has(item.produtoId),
     }
   })
 }
@@ -153,18 +169,22 @@ export async function registrarDevolucao(entrada: {
 
   const jaVoltou = await devolvidoPorProduto(entrada.vendaId)
   const porProduto = new Map(venda.itens.map((i) => [i.produtoId, i]))
+  const aceitaFracao = await fracionados(venda.itens.map((i) => i.produtoId))
 
   const itens: ItemGravado[] = []
   for (const pedido of entrada.itens) {
     if (!(pedido.quantidade > 0)) continue
-    if (!Number.isInteger(pedido.quantidade)) return { ok: false, erro: QUANTIDADE_INTEIRA }
+    const fracionado = aceitaFracao.has(pedido.produtoId)
+    if (!quantidadeAceita(pedido.quantidade, fracionado)) {
+      return { ok: false, erro: avisoDeQuantidade(fracionado) }
+    }
 
     const daVenda = porProduto.get(pedido.produtoId)
     if (!daVenda) {
       return { ok: false, erro: "Item que não estava nesta venda" }
     }
 
-    const teto = arredondar(daVenda.quantidade - (jaVoltou.get(pedido.produtoId) ?? 0))
+    const teto = arredondarQuantidade(daVenda.quantidade - (jaVoltou.get(pedido.produtoId) ?? 0))
     if (pedido.quantidade > teto) {
       return {
         ok: false,
@@ -175,7 +195,7 @@ export async function registrarDevolucao(entrada: {
       }
     }
 
-    const quantidade = arredondar(pedido.quantidade)
+    const quantidade = arredondarQuantidade(pedido.quantidade)
     itens.push({
       produtoId: daVenda.produtoId,
       codigo: daVenda.codigo,
@@ -317,7 +337,14 @@ export async function precificarDevolucaoSemVenda(
 
   const produtos = await db.produto.findMany({
     where: { id: { in: pedidos.map((i) => i.produtoId) } },
-    select: { id: true, codigo: true, descricao: true, unidade: true, preco: true },
+    select: {
+      id: true,
+      codigo: true,
+      descricao: true,
+      unidade: true,
+      preco: true,
+      vendeFracionado: true,
+    },
   })
   const porId = new Map(produtos.map((p) => [p.id, p]))
 
@@ -325,7 +352,9 @@ export async function precificarDevolucaoSemVenda(
   for (const pedido of pedidos) {
     const produto = porId.get(pedido.produtoId)
     if (!produto) return { ok: false, erro: "Produto não encontrado" }
-    if (!Number.isInteger(pedido.quantidade)) return { ok: false, erro: QUANTIDADE_INTEIRA }
+    if (!quantidadeAceita(pedido.quantidade, produto.vendeFracionado)) {
+      return { ok: false, erro: avisoDeQuantidade(produto.vendeFracionado) }
+    }
 
     // O teto é o catálogo, lido aqui: o navegador só pode pedir menos.
     const preco = arredondar(pedido.preco)

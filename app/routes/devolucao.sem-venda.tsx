@@ -12,7 +12,13 @@ import { db } from "~/lib/db.server"
 import { diaDeHoje } from "~/lib/dia"
 import { registrarDevolucaoSemVenda, type ItemSemVenda } from "~/lib/devolucoes.server"
 import { formatarCpfCnpj } from "~/lib/documento"
-import { arredondar, interpretarValor, moeda } from "~/lib/moeda"
+import {
+  arredondar,
+  interpretarQuantidade,
+  interpretarValor,
+  moeda,
+  quantidadeAceita,
+} from "~/lib/moeda"
 import { criarIndice } from "~/lib/pdv"
 import { ehGerente } from "~/lib/permissoes"
 import { exigirUsuario } from "~/lib/sessao.server"
@@ -39,7 +45,14 @@ export async function loader({ request }: Route.LoaderArgs) {
   const [produtos, clientes] = await Promise.all([
     // Os inativos também: o que volta pode ter saído de linha depois da compra.
     db.produto.findMany({
-      select: { id: true, codigo: true, descricao: true, unidade: true, preco: true },
+      select: {
+        id: true,
+        codigo: true,
+        descricao: true,
+        unidade: true,
+        preco: true,
+        vendeFracionado: true,
+      },
       orderBy: { descricao: "asc" },
     }),
     db.cliente.findMany({
@@ -149,17 +162,19 @@ export default function DevolucaoSemVenda({ loaderData }: Route.ComponentProps) 
 
   /*
    * Cada linha lida e conferida aqui do mesmo jeito que o servidor confere —
-   * quantidade inteira, preço até o catálogo — para o botão saber se a
+   * quantidade inteira (ou até 3 casas no fracionado), preço até o catálogo — para o botão saber se a
    * devolução fecha antes de ir à rede.
    */
   const lidas = linhas.map((linha) => {
     const produto = linha.produtoId ? porId.get(linha.produtoId) ?? null : null
-    const quantidade = Number(linha.quantidade)
+    const quantidade = interpretarQuantidade(linha.quantidade) ?? 0
     const preco = interpretarValor(linha.preco)
     const erro = !produto
       ? null
-      : !Number.isInteger(quantidade) || quantidade <= 0
-        ? "quantidade inteira"
+      : !quantidadeAceita(quantidade, produto.vendeFracionado)
+        ? produto.vendeFracionado
+          ? "até 3 casas"
+          : "quantidade inteira"
         : preco === null || preco <= 0
           ? "informe o preço"
           : preco > produto.preco + 0.005
@@ -417,9 +432,13 @@ export default function DevolucaoSemVenda({ loaderData }: Route.ComponentProps) 
                     <Input
                       value={linha.quantidade}
                       onChange={(e) =>
-                        alterar(linha.chave, { quantidade: e.target.value.replace(/\D/g, "") })
+                        alterar(linha.chave, {
+                          quantidade: produto?.vendeFracionado
+                            ? e.target.value.replace(/[^\d,]/g, "")
+                            : e.target.value.replace(/\D/g, ""),
+                        })
                       }
-                      inputMode="numeric"
+                      inputMode={produto?.vendeFracionado ? "decimal" : "numeric"}
                       autoComplete="off"
                       aria-label="Quantidade"
                       className="ml-auto h-8 w-20 rounded-lg text-right font-mono tabular-nums"

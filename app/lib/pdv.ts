@@ -1,4 +1,4 @@
-import { arredondar, interpretarValor } from "~/lib/moeda"
+import { arredondar, arredondarQuantidade, interpretarValor, quantidadeAceita } from "~/lib/moeda"
 
 export type ProdutoCatalogo = {
   id: string
@@ -19,6 +19,8 @@ export type ProdutoCatalogo = {
    */
   custo?: number | null
   estoque: number
+  /** Aceita 3,5 / 1,375 em vez de só peças inteiras (ver `quantidadeAceita`). */
+  vendeFracionado?: boolean
 }
 
 export type ItemVenda = {
@@ -37,6 +39,7 @@ export type ItemVenda = {
    * carrinho não deixa passar dele, nem digitando a quantidade nem no `+`.
    */
   estoque: number
+  vendeFracionado?: boolean
 }
 
 /** O que basta para saber quanto custa: o produto e quantas se leva. */
@@ -124,7 +127,7 @@ export function reduzirVenda(estado: EstadoVenda, acao: AcaoVenda): EstadoVenda 
   switch (acao.tipo) {
     case "adicionar": {
       const { produto, quantidade } = acao
-      if (!Number.isInteger(quantidade)) return estado
+      if (!quantidadeAceita(quantidade, produto.vendeFracionado)) return estado
       const existente = estado.itens.findIndex((item) => item.produtoId === produto.id)
       // Entra tudo, mesmo passando do estoque: a tela avisa, e o saldo fica
       // negativo na gravação (ver `passaDoEstoque`).
@@ -133,7 +136,9 @@ export function reduzirVenda(estado: EstadoVenda, acao: AcaoVenda): EstadoVenda 
 
       if (existente >= 0) {
         const itens = estado.itens.map((item, i) =>
-          i === existente ? { ...item, quantidade: arredondar(item.quantidade + entra) } : item
+          i === existente
+            ? { ...item, quantidade: arredondarQuantidade(item.quantidade + entra) }
+            : item
         )
         return { ...estado, itens, indiceAtivo: existente }
       }
@@ -151,6 +156,7 @@ export function reduzirVenda(estado: EstadoVenda, acao: AcaoVenda): EstadoVenda 
           custo: produto.custo ?? null,
           quantidade: entra,
           estoque: produto.estoque,
+          vendeFracionado: produto.vendeFracionado ?? false,
         },
       ]
       return { ...estado, itens, indiceAtivo: itens.length - 1 }
@@ -169,12 +175,12 @@ export function reduzirVenda(estado: EstadoVenda, acao: AcaoVenda): EstadoVenda 
       if (indice < 0 || indice >= estado.itens.length) return estado
       if (quantidade <= 0) return reduzirVenda(estado, { tipo: "remover", indice })
 
-      // Fração não entra no carrinho: a tela avisa antes, e aqui é a garantia.
-      // Passar do estoque pode (ver `passaDoEstoque`).
-      if (!Number.isInteger(quantidade)) return estado
-
+      // Fração só entra no produto fracionado: a tela avisa antes, e aqui é a
+      // garantia. Passar do estoque pode (ver `passaDoEstoque`).
       const alvo = estado.itens[indice]
-      const nova = quantidade
+      const nova = arredondarQuantidade(quantidade)
+      if (!quantidadeAceita(nova, alvo.vendeFracionado)) return estado
+
       if (nova === alvo.quantidade) return estado
 
       const itens = estado.itens.map((item, i) =>
@@ -224,7 +230,7 @@ export function totaisDaVenda(estado: EstadoVenda, { aoCusto = false } = {}) {
   // Desconto não vale na saída ao custo: não há margem sobre a qual descontar,
   // e o servidor grava zero — mostrar outro número aqui seria mentir de novo.
   const desconto = aoCusto ? 0 : Math.min(estado.desconto, subtotal)
-  const volumes = arredondar(estado.itens.reduce((acc, item) => acc + item.quantidade, 0))
+  const volumes = arredondarQuantidade(estado.itens.reduce((acc, item) => acc + item.quantidade, 0))
 
   return { subtotal, desconto, total: arredondar(subtotal - desconto), volumes }
 }

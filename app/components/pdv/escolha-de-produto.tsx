@@ -11,6 +11,8 @@ export type ProdutoDoCatalogo = {
   unidade: string
   /** O preço de venda de hoje. Opcional: nem toda tela que escolhe produto o carrega. */
   preco?: number
+  /** Aceita quantidade com até 3 casas. Opcional pelo mesmo motivo do preço. */
+  vendeFracionado?: boolean
   /**
    * O último custo conhecido ANTES desta nota. É sobre ele que o preço de hoje
    * foi feito, e daí sai o markup que se quer manter com o custo novo.

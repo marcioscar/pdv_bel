@@ -1,3 +1,5 @@
+import { arredondarQuantidade } from "~/lib/moeda"
+
 /**
  * O vocabulário das transferências, do lado que as duas pontas usam.
  */
@@ -41,13 +43,13 @@ export type ItemConferido = { produtoId: string; recebida: number }
 /** A diferença de um item, positiva quando faltou. */
 export function faltaDoItem(item: { enviada: number; recebida: number | null }) {
   if (item.recebida === null) return 0
-  return Math.max(0, item.enviada - item.recebida)
+  return Math.max(0, arredondarQuantidade(item.enviada - item.recebida))
 }
 
 /** O que chegou a MAIS do que saiu, positivo quando sobrou. */
 export function sobraDoItem(item: { enviada: number; recebida: number | null }) {
   if (item.recebida === null) return 0
-  return Math.max(0, item.recebida - item.enviada)
+  return Math.max(0, arredondarQuantidade(item.recebida - item.enviada))
 }
 
 /** Tem sobra esperando a decisão do gerente. */

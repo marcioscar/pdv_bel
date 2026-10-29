@@ -268,11 +268,14 @@ export default function Devolucao({ loaderData }: Route.ComponentProps) {
                       onChange={(e) =>
                         setQuantidades((q) => ({
                           ...q,
-                          [linha.produtoId]: e.target.value.replace(/\D/g, ""),
+                          // Vírgula só no fracionado: o resto volta em peça inteira.
+                          [linha.produtoId]: linha.vendeFracionado
+                            ? e.target.value.replace(/[^\d,]/g, "")
+                            : e.target.value.replace(/\D/g, ""),
                         }))
                       }
                       disabled={linha.devolvivel <= 0 || venda.cancelada}
-                      inputMode="numeric"
+                      inputMode={linha.vendeFracionado ? "decimal" : "numeric"}
                       placeholder="0"
                       autoComplete="off"
                       className={cn(

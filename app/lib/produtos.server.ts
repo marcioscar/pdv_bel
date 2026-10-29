@@ -17,6 +17,8 @@ export type ProdutoEntrada = {
   /** Preço unitário a partir de `quantidadeCombo`. Nulo quando não há combo. */
   precoCombo: number | null
   quantidadeCombo: number | null
+  /** Aceita 3,5 / 1,375 na venda, devolução, transferência e inventário. */
+  vendeFracionado: boolean
   ncm: string | null
   /**
    * Tributação própria, quando difere do padrão da loja. Vazios na esmagadora
@@ -139,6 +141,9 @@ export function lerProduto(form: FormData): ProdutoEntrada | { erro: string } {
     fornecedorId: fornecedorId || null,
     precoCombo,
     quantidadeCombo,
+    // Checkbox: só chega quando marcado. A entrada de nota, que cria produto
+    // pelo mesmo `lerProduto` sem esse campo, cria como peça inteira.
+    vendeFracionado: form.get("vendeFracionado") === "on",
     ncm: ncm || null,
     origemFiscal: origemFiscal || null,
     cfop: cfop || null,

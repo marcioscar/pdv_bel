@@ -1,7 +1,7 @@
 import { ultimoCustoPorProduto } from "~/lib/compras.server"
 import { db } from "~/lib/db.server"
 import { primeiroMovimento, saldosPorProdutoELoja } from "~/lib/estoque.server"
-import { arredondar } from "~/lib/moeda"
+import { arredondar, arredondarQuantidade } from "~/lib/moeda"
 
 export type LinhaInventario = {
   produtoId: string
@@ -140,7 +140,7 @@ export async function inventarioValorizado(
      * que valem zero e afogar o que vale dinheiro. A contagem vai no resumo,
      * para ninguém achar que o catálogo encolheu.
      */
-    quantidade = arredondar(quantidade)
+    quantidade = arredondarQuantidade(quantidade)
     if (quantidade === 0) {
       zerados++
       continue
@@ -179,7 +179,7 @@ export async function inventarioValorizado(
     comecoDoLivro: comecoDoLivro?.toISOString() ?? null,
     totais: {
       itens: linhas.length,
-      unidades: arredondar(linhas.reduce((s, l) => s + l.quantidade, 0)),
+      unidades: arredondarQuantidade(linhas.reduce((s, l) => s + l.quantidade, 0)),
       valorCusto: arredondar(comCusto.reduce((s, l) => s + (l.valorCusto ?? 0), 0)),
       valorVenda: arredondar(linhas.reduce((s, l) => s + l.valorVenda, 0)),
       semCusto: semCusto.length,

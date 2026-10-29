@@ -22,7 +22,8 @@ import {
   arredondar,
   interpretarValor,
   moeda,
-  quantidadeInteira,
+  quantidadeAceita,
+  QUANTIDADE_INTEIRA,
 } from "~/lib/moeda"
 import { vendedorPorCodigo, type VendedorDoBalcao } from "~/lib/vendedores.server"
 import { registrarAvisosDeNegativo } from "~/lib/estoque-negativo.server"
@@ -161,8 +162,9 @@ export function lerPedido(bruto: unknown): PedidoRecebido | null {
     if (typeof item !== "object" || item === null) return null
     const { produtoId, quantidade } = item as Record<string, unknown>
     if (typeof produtoId !== "string" || !OBJECT_ID.test(produtoId)) return null
-    // Peça inteira: fração é recusada aqui, e não arredondada em silêncio.
-    if (typeof quantidade !== "number" || !quantidadeInteira(quantidade)) {
+    // Até três casas passa no formato; se o produto aceita fração, quem decide
+    // é `precificar`, que tem o cadastro. Nada é arredondado em silêncio.
+    if (typeof quantidade !== "number" || !quantidadeAceita(quantidade, true)) {
       return null
     }
     itens.push({ produtoId, quantidade })
@@ -274,6 +276,18 @@ export type Precificacao =
  * confirmação — se fossem cálculos diferentes, dava para pagar um valor e
  * registrar outro.
  */
+/** Fração só em produto marcado `vendeFracionado`; o erro nomeia quem não é. */
+function fracaoIndevida(
+  itensRecebidos: ItemRecebido[],
+  porId: Map<string, { codigo: string; vendeFracionado: boolean }>
+) {
+  const codigos = itensRecebidos.flatMap((i) => {
+    const produto = porId.get(i.produtoId)
+    return produto && !quantidadeAceita(i.quantidade, produto.vendeFracionado) ? [produto.codigo] : []
+  })
+  return codigos.length > 0 ? `${QUANTIDADE_INTEIRA}: ${codigos.join(", ")}` : null
+}
+
 export async function precificar(
   itensRecebidos: ItemRecebido[],
   desconto: number
@@ -284,6 +298,8 @@ export async function precificar(
     where: { id: { in: itensRecebidos.map((i) => i.produtoId) } },
   })
   const porId = new Map(produtos.map((p) => [p.id, p]))
+  const fracao = fracaoIndevida(itensRecebidos, porId)
+  if (fracao) return { ok: false, erro: fracao }
 
   const itens: ItemGravado[] = []
   for (const recebido of itensRecebidos) {
@@ -337,6 +353,8 @@ export async function precificarAoCusto(
     where: { id: { in: itensRecebidos.map((i) => i.produtoId) } },
   })
   const porId = new Map(produtos.map((p) => [p.id, p]))
+  const fracao = fracaoIndevida(itensRecebidos, porId)
+  if (fracao) return { ok: false, erro: fracao }
   const custos = await ultimoCustoPorProduto(produtos.map((p) => p.id))
 
   const semCusto = produtos.filter((p) => !custos.has(p.id))

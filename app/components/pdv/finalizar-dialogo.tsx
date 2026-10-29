@@ -26,7 +26,13 @@ import { Kbd } from "~/components/ui/kbd";
 import { Separator } from "~/components/ui/separator";
 import { formatarCpfCnpj, mascararCpfCnpj, validarCpf } from "~/lib/documento";
 import { modeloDaVenda, type ModeloNota } from "~/lib/fiscal";
-import { arredondar, interpretarValor, moeda } from "~/lib/moeda";
+import {
+  arredondar,
+  interpretarQuantidade,
+  interpretarValor,
+  moeda,
+  quantidadeAceita,
+} from "~/lib/moeda";
 import {
 	ehTransferenciaEntreLojas,
 	FORMA_MISTA,
@@ -124,6 +130,8 @@ export type LinhaDaDevolucao = {
   unidade: string;
   /** O teto do preço: o catálogo de hoje, como na devolução sem venda. */
   precoCatalogo: number;
+  /** Aceita 1,5 — o produto é vendido fracionado. */
+  vendeFracionado: boolean;
   quantidade: string;
   preco: string;
 };
@@ -135,7 +143,7 @@ export const DEVOLUCAO_VAZIA: DevolucaoNoFechamento = { linhas: [], motivo: "" }
 /** As linhas válidas da devolução, como o servidor as recebe. */
 export function itensDaDevolucao(devolucao: DevolucaoNoFechamento) {
   return devolucao.linhas.flatMap((l) => {
-    const quantidade = interpretarValor(l.quantidade);
+    const quantidade = interpretarQuantidade(l.quantidade);
     const preco = interpretarValor(l.preco);
     return quantidade !== null && preco !== null
       ? [{ produtoId: l.produtoId, quantidade, preco }]
@@ -147,7 +155,10 @@ export function itensDaDevolucao(devolucao: DevolucaoNoFechamento) {
 export function totalDaDevolucao(devolucao: DevolucaoNoFechamento) {
   return arredondar(
     itensDaDevolucao(devolucao)
-      .filter((i) => i.quantidade > 0 && Number.isInteger(i.quantidade) && i.preco > 0)
+      .filter((i) => {
+        const linha = devolucao.linhas.find((l) => l.produtoId === i.produtoId);
+        return quantidadeAceita(i.quantidade, linha?.vendeFracionado) && i.preco > 0;
+      })
       .reduce((a, i) => a + arredondar(i.quantidade * i.preco), 0),
   );
 }
@@ -268,11 +279,13 @@ export function FinalizarDialogo({
    */
   const [editandoDevolucao, setEditandoDevolucao] = useState(false);
   const linhasDevolucao = devolucao.linhas.map((l) => {
-    const qtd = interpretarValor(l.quantidade);
+    const qtd = interpretarQuantidade(l.quantidade);
     const preco = interpretarValor(l.preco);
     const erro =
-      qtd === null || qtd <= 0 || !Number.isInteger(qtd)
-        ? "quantidade inteira"
+      qtd === null || !quantidadeAceita(qtd, l.vendeFracionado)
+        ? l.vendeFracionado
+          ? "até 3 casas"
+          : "quantidade inteira"
         : preco === null || preco <= 0
           ? "informe o preço"
           : preco > l.precoCatalogo + 0.005
@@ -320,6 +333,7 @@ export function FinalizarDialogo({
           descricao: produto.descricao,
           unidade: produto.unidade,
           precoCatalogo: preco,
+          vendeFracionado: produto.vendeFracionado ?? false,
           quantidade: "1",
           preco: preco.toFixed(2).replace(".", ","),
         },
@@ -951,7 +965,7 @@ export function FinalizarDialogo({
                     <Input
                       value={l.quantidade}
                       onChange={(e) => mudarLinha(l.produtoId, "quantidade", e.target.value)}
-                      inputMode="numeric"
+                      inputMode={l.vendeFracionado ? "decimal" : "numeric"}
                       aria-label={`Quantidade de ${l.descricao}`}
                       className="h-8 w-14 rounded-lg text-right font-mono tabular-nums"
                     />

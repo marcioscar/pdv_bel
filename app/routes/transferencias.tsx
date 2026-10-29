@@ -11,7 +11,13 @@ import { Input } from "~/components/ui/input"
 import { db } from "~/lib/db.server"
 import { saldosPorProduto } from "~/lib/estoque.server"
 import { listarLojas } from "~/lib/lojas.server"
-import { quantidade as formatarQuantidade } from "~/lib/moeda"
+import {
+  arredondarQuantidade,
+  avisoDeQuantidade,
+  interpretarQuantidade,
+  quantidade as formatarQuantidade,
+  quantidadeAceita,
+} from "~/lib/moeda"
 import {
   buscarProdutos,
   criarIndice,
@@ -329,7 +335,8 @@ function Secao({
   )
 }
 
-type ItemDaRemessa = { produto: ProdutoCatalogo; quantidade: number }
+/** `digitado` guarda o texto enquanto se digita "3," — o número sozinho perderia a vírgula. */
+type ItemDaRemessa = { produto: ProdutoCatalogo; quantidade: number; digitado?: string }
 
 function NovaRemessa({
   produtos,
@@ -367,13 +374,19 @@ function NovaRemessa({
   )
 
   function adicionar(produto: ProdutoCatalogo, quantidade: number) {
+    if (!quantidadeAceita(quantidade, produto.vendeFracionado)) {
+      setErro(avisoDeQuantidade(produto.vendeFracionado))
+      return
+    }
     setErro(null)
     setItens((atuais) => {
       const existe = atuais.find((i) => i.produto.id === produto.id)
       // Bipar duas vezes o mesmo produto soma, como no carrinho — não repete a linha.
       if (existe) {
         return atuais.map((i) =>
-          i.produto.id === produto.id ? { ...i, quantidade: i.quantidade + quantidade } : i
+          i.produto.id === produto.id
+            ? { ...i, quantidade: arredondarQuantidade(i.quantidade + quantidade), digitado: undefined }
+            : i
         )
       }
       return [...atuais, { produto, quantidade }]
@@ -413,7 +426,7 @@ function NovaRemessa({
     }
   }
 
-  const total = itens.reduce((acc, i) => acc + i.quantidade, 0)
+  const total = arredondarQuantidade(itens.reduce((acc, i) => acc + i.quantidade, 0))
 
   if (lojas.length === 0) {
     return (
@@ -518,7 +531,7 @@ function NovaRemessa({
 
       {itens.length > 0 ? (
         <ul className="mt-3 divide-y divide-border border-y border-border">
-          {itens.map(({ produto, quantidade }) => (
+          {itens.map(({ produto, quantidade, digitado }) => (
             <li key={produto.id} className="flex items-center gap-2 py-2">
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm">{produto.descricao}</span>
@@ -535,15 +548,19 @@ function NovaRemessa({
                 </span>
               </span>
               <Input
-                value={String(quantidade)}
-                inputMode="numeric"
+                value={digitado ?? formatarQuantidade(quantidade).replace(/\./g, "")}
+                inputMode={produto.vendeFracionado ? "decimal" : "numeric"}
                 onChange={(e) => {
-                  // Só dígitos: peça inteira, sem vírgula para virar 2,4 pacotes.
-                  const valor = Number(e.target.value.replace(/\D/g, ""))
+                  // Só dígitos: peça inteira, sem vírgula para virar 2,4 pacotes —
+                  // a não ser no produto fracionado, que sai com até 3 casas.
+                  const texto = produto.vendeFracionado
+                    ? e.target.value.replace(/[^\d,]/g, "")
+                    : e.target.value.replace(/\D/g, "")
+                  const valor = interpretarQuantidade(texto) ?? 0
                   setItens((atuais) =>
                     atuais.map((i) =>
                       i.produto.id === produto.id
-                        ? { ...i, quantidade: Number.isFinite(valor) ? valor : 0 }
+                        ? { ...i, quantidade: valor, digitado: texto }
                         : i
                     )
                   )
@@ -591,7 +608,11 @@ function NovaRemessa({
         />
         <Button
           type="submit"
-          disabled={enviando || itens.length === 0 || itens.some((i) => i.quantidade <= 0)}
+          disabled={
+            enviando ||
+            itens.length === 0 ||
+            itens.some((i) => !quantidadeAceita(i.quantidade, i.produto.vendeFracionado))
+          }
           className="h-11 w-full rounded-lg sm:w-auto"
         >
           <Send className="size-4" aria-hidden />
@@ -655,7 +676,10 @@ function Conferencia({
   const enviando = navegacao.formData?.get("id") === t.id
 
   const [contagem, setContagem] = useState<Record<string, string>>(
-    () => Object.fromEntries(t.itens.map((i) => [i.produtoId, String(i.enviada)]))
+    () =>
+      Object.fromEntries(
+        t.itens.map((i) => [i.produtoId, formatarQuantidade(i.enviada).replace(/\./g, "")])
+      )
   )
 
   // Quem despachou não confere a própria carga: seria assinar os dois lados.
@@ -700,11 +724,13 @@ function Conferencia({
                   </span>
                   <Input
                     value={contagem[item.produtoId] ?? ""}
-                    inputMode="numeric"
+                    inputMode="decimal"
                     onChange={(e) =>
                       setContagem((c) => ({
                         ...c,
-                        [item.produtoId]: e.target.value.replace(/\D/g, ""),
+                        // A vírgula passa para o produto fracionado; no de peça
+                        // inteira, o servidor recusa nomeando o produto.
+                        [item.produtoId]: e.target.value.replace(/[^\d,]/g, ""),
                       }))
                     }
                     aria-label={`Contado de ${item.descricao}`}

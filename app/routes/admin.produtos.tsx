@@ -122,6 +122,7 @@ type EmEdicao = {
   fornecedorId: string
   precoCombo: string
   quantidadeCombo: string
+  vendeFracionado: boolean
   ncm: string
   origemFiscal: string
   cfop: string
@@ -131,7 +132,7 @@ type EmEdicao = {
 
 const NOVO: EmEdicao = {
   id: null, codigo: "", descricao: "", unidade: "", preco: "", grupoId: "", fornecedorId: "",
-  precoCombo: "", quantidadeCombo: "", ncm: "",
+  precoCombo: "", quantidadeCombo: "", vendeFracionado: false, ncm: "",
   origemFiscal: "", cfop: "", csosn: "", cest: "",
 }
 
@@ -221,6 +222,8 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
         fornecedorId: edicao.fornecedorId,
         precoCombo: edicao.precoCombo,
         quantidadeCombo: edicao.quantidadeCombo,
+        // O submit de objeto manda string: só vai quando marcado, como o checkbox.
+        ...(edicao.vendeFracionado ? { vendeFracionado: "on" } : {}),
         ncm: edicao.ncm,
         origemFiscal: edicao.origemFiscal,
         cfop: edicao.cfop,
@@ -374,6 +377,20 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
             onEnter={salvar}
             className="col-span-2"
           />
+          {/* A regra da rede é peça inteira; marcado, o produto sai com até
+              três casas na venda, devolução, transferência e inventário. */}
+          <label className="col-span-5 flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={edicao.vendeFracionado}
+              onChange={(e) => setEdicao({ ...edicao, vendeFracionado: e.target.checked })}
+              className="size-4 accent-primary"
+            />
+            Vende fracionado
+            <span className="text-muted-foreground">
+              — aceita quantidade com até 3 casas (3,5 · 1,375) em vez de só peças inteiras
+            </span>
+          </label>
           {/* Tributação: vazia quase sempre. Quem manda é o padrão da loja, em
               Cadastros › Fiscal — aqui só entra o produto que foge dele, que na
               prática é o de substituição tributária. */}
@@ -530,6 +547,11 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
                     <Badge variant="outline" className="font-mono text-[10px]">
                       {produto.unidade}
                     </Badge>
+                    {produto.vendeFracionado ? (
+                      <div className="mt-0.5 text-[10px] text-muted-foreground" title="Aceita quantidade com até 3 casas">
+                        fracionado
+                      </div>
+                    ) : null}
                   </td>
                   <td className="px-2 py-2 text-right font-mono font-medium tabular-nums">
                     {moeda(produto.preco)}
@@ -573,6 +595,7 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
                             produto.quantidadeCombo != null
                               ? formatarQuantidade(produto.quantidadeCombo)
                               : "",
+                          vendeFracionado: produto.vendeFracionado,
                           ncm: produto.ncm ?? "",
                           origemFiscal: produto.origemFiscal ?? "",
                           cfop: produto.cfop ?? "",
