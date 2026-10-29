@@ -225,7 +225,37 @@ function traduzirErroDeTls(erro: unknown, loja: string): unknown {
         "válido para o CNPJ desta loja."
     )
   }
-  return erro
+  return erroDeRede(erro, codigo) ?? erro
+}
+
+/**
+ * O que o undici esconde atrás de "fetch failed": a conexão nem chegou à
+ * SEFAZ, e o porquê está em `cause`. Sem ele a tela só dizia "fetch failed" —
+ * sem dar para separar a SEFAZ fora do ar da rede do servidor que não a
+ * alcança, que é a pergunta que se leva ao provedor.
+ */
+const MOTIVOS_DE_REDE: Record<string, string> = {
+  UND_ERR_CONNECT_TIMEOUT: "tempo esgotado ao abrir a conexão",
+  UND_ERR_HEADERS_TIMEOUT: "a SEFAZ conectou mas não respondeu a tempo",
+  UND_ERR_BODY_TIMEOUT: "a resposta da SEFAZ parou no meio",
+  UND_ERR_SOCKET: "a conexão caiu no meio",
+  ETIMEDOUT: "tempo esgotado",
+  ECONNREFUSED: "conexão recusada",
+  ECONNRESET: "a conexão foi derrubada",
+  EHOSTUNREACH: "o servidor não tem rota até a SEFAZ",
+  ENETUNREACH: "o servidor está sem rede até a SEFAZ",
+  ENOTFOUND: "o endereço da SEFAZ não foi encontrado (DNS)",
+  EAI_AGAIN: "o DNS não respondeu",
+}
+
+function erroDeRede(erro: unknown, codigo: string): Error | null {
+  if (!(erro instanceof Error) || erro.message !== "fetch failed") return null
+  const causa = (erro as { cause?: { message?: string } }).cause
+  const motivo = MOTIVOS_DE_REDE[codigo] ?? causa?.message ?? "sem detalhe do sistema"
+  return new Error(
+    `O servidor não conseguiu falar com a SEFAZ: ${motivo}${codigo ? ` (${codigo})` : ""}. ` +
+      "Tente de novo em alguns minutos; se repetir, é a rede do servidor até a SEFAZ."
+  )
 }
 
 const parser = new XMLParser({
