@@ -1,12 +1,14 @@
+import { useState } from "react"
 import { Link, useFetcher, useSearchParams } from "react-router"
-import { ArrowLeft, FileCheck, FileSearch } from "lucide-react"
+import { ArrowLeft, FileCheck, FileSearch, Truck } from "lucide-react"
 
 import type { Route } from "./+types/admin.notas-de-entrada.$notaId"
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
+import { Input } from "~/components/ui/input"
 import { cn } from "~/lib/utils"
 import { formatarCpfCnpj } from "~/lib/documento"
-import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
+import { interpretarValor, moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { GerarDespesas, type RespostaDespesas } from "~/components/pdv/gerar-despesas"
 import {
   categoriasDeDespesa,
@@ -26,6 +28,7 @@ import {
   itensComCustoDaNota,
   pedidosAbertosDoFornecedor,
   receberComNota,
+  salvarFreteDaNota,
   type ItemReconciliado,
 } from "~/lib/conciliacao.server"
 import { db } from "~/lib/db.server"
@@ -91,7 +94,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
       ])
     : [[], [], new Map<string, number>()]
 
-  const itensComCusto = temItens ? itensComCustoDaNota(nota.xml!) : []
+  const itensComCusto = temItens ? itensComCustoDaNota(nota.xml!, nota.freteAdicional ?? 0) : []
 
   /*
    * A nota de resumo já recebida mostra o que foi lançado à mão — sem XML, é o
@@ -154,9 +157,19 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     ? null
     : await proximoCodigoDeFornecedor()
 
+  /*
+   * O frete à parte só muda antes de qualquer item entrar: o custo de cada
+   * entrada fica gravado no movimento, e um rateio diferente no meio deixaria
+   * a nota com dois custos.
+   */
+  const freteEditavel =
+    (temItens || manual) && nota.situacao !== "recebida" && jaLancadosPelaNota.length === 0
+
   return {
     nota,
     itensDaNota,
+    freteDaNota: resumo?.vFrete ?? null,
+    freteEditavel,
     duplicatas,
     fornecedorDaDespesa,
     categorias,
@@ -193,6 +206,10 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   }
 }
 
+type RespostaFrete =
+  | { intencao: "salvarFrete"; ok: true }
+  | { intencao: "salvarFrete"; ok: false; erro: string }
+
 type RespostaCiencia =
   | { intencao: "ciencia"; ok: true; mensagem: string }
   | { intencao: "ciencia"; ok: false; erro: string }
@@ -201,6 +218,7 @@ type RespostaAction =
   | RespostaDespesas
   | RespostaEntrada
   | RespostaCiencia
+  | RespostaFrete
 
 export async function action({ request }: Route.ActionArgs): Promise<RespostaAction> {
   const eu = await exigirGerente(request, "buscarNotaFiscal")
@@ -213,6 +231,14 @@ export async function action({ request }: Route.ActionArgs): Promise<RespostaAct
     return resultado.ok
       ? { intencao: "ciencia", ok: true, mensagem: resultado.mensagem }
       : { intencao: "ciencia", ok: false, erro: resultado.erro }
+  }
+
+  if (intencao === "salvarFrete") {
+    const texto = String(form.get("frete") ?? "").trim()
+    const frete = texto === "" ? 0 : interpretarValor(texto)
+    if (frete == null) return { intencao: "salvarFrete", ok: false, erro: "Valor de frete inválido" }
+    const resultado = await salvarFreteDaNota(String(form.get("notaId") ?? ""), frete)
+    return { intencao: "salvarFrete", ...resultado }
   }
 
   if (intencao === "receber") {
@@ -300,6 +326,8 @@ export default function DetalheNotaDeEntrada({ loaderData }: Route.ComponentProp
   const {
     nota,
     itensDaNota,
+    freteDaNota,
+    freteEditavel,
     duplicatas,
     fornecedorDaDespesa,
     categorias,
@@ -366,6 +394,14 @@ export default function DetalheNotaDeEntrada({ loaderData }: Route.ComponentProp
               <dd>{nota.valorTotal != null ? moeda(nota.valorTotal) : "—"}</dd>
             </dl>
           </div>
+          {freteEditavel || nota.freteAdicional ? (
+            <FreteAParte
+              notaId={nota.id}
+              frete={nota.freteAdicional}
+              freteDaNota={freteDaNota}
+              editavel={freteEditavel}
+            />
+          ) : null}
         </div>
 
         <div>
@@ -380,6 +416,7 @@ export default function DetalheNotaDeEntrada({ loaderData }: Route.ComponentProp
                   pedidos={pedidos}
                   catalogo={catalogo}
                   valorDaNota={nota.valorTotal}
+                  frete={nota.freteAdicional ?? 0}
                 />
               </>
             ) : (
@@ -470,6 +507,90 @@ export default function DetalheNotaDeEntrada({ loaderData }: Route.ComponentProp
           />
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * O frete que chegou cobrado à parte — conhecimento de transporte, motorista
+ * pago na entrega — e que por isso não está no XML. Soma no custo dos itens
+ * pelo mesmo rateio do frete da nota: proporcional ao valor de cada um.
+ *
+ * Gravado na nota, e não só digitado na entrada, porque a entrada pode ser
+ * feita aos poucos e o rateio tem que ser um só para a nota inteira.
+ */
+function FreteAParte({
+  notaId,
+  frete,
+  freteDaNota,
+  editavel,
+}: {
+  notaId: string
+  frete: number | null
+  freteDaNota: number | null
+  editavel: boolean
+}) {
+  const fetcher = useFetcher<typeof action>()
+  const enviando = fetcher.state !== "idle"
+  const resposta = fetcher.data?.intencao === "salvarFrete" ? fetcher.data : null
+  const [texto, setTexto] = useState(frete ? frete.toFixed(2).replace(".", ",") : "")
+  const valor = texto.trim() === "" ? 0 : interpretarValor(texto)
+  const mudou = valor != null && Math.round(valor * 100) !== Math.round((frete ?? 0) * 100)
+
+  return (
+    <div className="rounded-lg border p-4 text-sm">
+      <div className="flex items-center gap-2">
+        <Truck className="size-4 text-muted-foreground" aria-hidden />
+        <p className="font-medium">Frete à parte</p>
+      </div>
+      <p className="mt-1 text-xs text-muted-foreground">
+        O frete cobrado fora desta nota (conhecimento de transporte, motorista). É rateado
+        pelos itens na proporção do valor e entra no custo de cada um.
+        {freteDaNota ? ` O frete da própria nota (${moeda(freteDaNota)}) já está no custo.` : ""}
+      </p>
+
+      {editavel ? (
+        <fetcher.Form method="post" className="mt-3 flex flex-wrap items-center gap-2">
+          <input type="hidden" name="intencao" value="salvarFrete" />
+          <input type="hidden" name="notaId" value={notaId} />
+          <span className="text-muted-foreground">R$</span>
+          <Input
+            name="frete"
+            value={texto}
+            onChange={(e) => setTexto(e.target.value)}
+            inputMode="decimal"
+            autoComplete="off"
+            placeholder="0,00"
+            aria-label="Valor do frete à parte"
+            className={cn(
+              "h-9 w-28 text-right font-mono text-sm",
+              valor == null && "border-destructive text-destructive"
+            )}
+          />
+          <Button
+            type="submit"
+            size="sm"
+            variant="outline"
+            disabled={enviando || !mudou}
+            className="rounded-lg"
+          >
+            {enviando ? "Gravando…" : "Ratear nos itens"}
+          </Button>
+        </fetcher.Form>
+      ) : (
+        <p className="mt-2">
+          <span className="font-mono tabular-nums">{moeda(frete ?? 0)}</span>
+          <span className="ml-2 text-xs text-muted-foreground">
+            rateado no custo da entrada
+          </span>
+        </p>
+      )}
+
+      {resposta && !resposta.ok ? (
+        <p className="mt-2 text-xs font-medium text-destructive" role="alert">
+          {resposta.erro}
+        </p>
+      ) : null}
     </div>
   )
 }

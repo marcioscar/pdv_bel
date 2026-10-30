@@ -15,6 +15,7 @@ import { formatarCpfCnpj } from "~/lib/documento"
 import { listarFornecedores } from "~/lib/fornecedores.server"
 import { listarLojas } from "~/lib/lojas.server"
 import { interpretarValor, moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
+import { ratearPorValor } from "~/lib/custo-nfe"
 import { criarIndice } from "~/lib/pdv"
 import {
   centavos,
@@ -157,6 +158,7 @@ export async function action({ request }: Route.ActionArgs) {
       pedidoDeCompraId: String(form.get("pedidoDeCompraId") ?? "") || null,
       dataEmissao: String(form.get("dataEmissao") ?? ""),
       observacao: String(form.get("observacao") ?? ""),
+      frete: interpretarValor(String(form.get("frete") ?? "")) ?? 0,
       itens,
     },
     eu.nome
@@ -210,6 +212,7 @@ export default function NovaAf({ loaderData }: Route.ComponentProps) {
   const [dataEmissao, setDataEmissao] = useState(hoje)
   const [loja, setLoja] = useState("")
   const [observacao, setObservacao] = useState("")
+  const [freteTexto, setFreteTexto] = useState("")
   const [linhas, setLinhas] = useState<LinhaAf[]>([LINHA_VAZIA])
 
   const catalogoPorId = useMemo(() => new Map(catalogo.map((p) => [p.id, p])), [catalogo])
@@ -278,9 +281,26 @@ export default function NovaAf({ loaderData }: Route.ComponentProps) {
     (pedidoEscolhido?.itens ?? []).map((item) => [item.produtoId, item.custoUnitario])
   )
 
-  const linhasComTotal = linhas.map((l) => {
+  /*
+   * O frete pago à parte entra no custo de cada linha na proporção do valor
+   * dela — o mesmo rateio do frete da nota. É sobre o custo com frete que o
+   * preço de venda se propõe: é ele que vai para o estoque.
+   */
+  const frete = interpretarValor(freteTexto) ?? 0
+  const freteInvalido = freteTexto.trim() !== "" && interpretarValor(freteTexto) == null
+  const rateios = ratearPorValor(
+    linhas.map((l) =>
+      l.produtoId ? (interpretarValor(l.quantidadeTexto) ?? 0) * (interpretarValor(l.custoTexto) ?? 0) : 0
+    ),
+    frete
+  )
+
+  const linhasComTotal = linhas.map((l, i) => {
     const quantidade = interpretarValor(l.quantidadeTexto) ?? 0
-    const custo = interpretarValor(l.custoTexto) ?? 0
+    const custoDoPapel = interpretarValor(l.custoTexto) ?? 0
+    const custoComFrete = quantidade > 0 ? custoDoPapel + rateios[i] / quantidade : custoDoPapel
+    // Daqui para baixo, "custo" é o que entra no estoque.
+    const custo = custoComFrete
     const produto = catalogoPorId.get(l.produtoId)
 
     /*
@@ -289,7 +309,7 @@ export default function NovaAf({ loaderData }: Route.ComponentProps) {
      * nota de entrada — o papel veio mais caro do que o combinado?
      */
     const esperado = custoDoPedido.get(l.produtoId) ?? ultimoCusto[l.produtoId] ?? null
-    const diferenca = esperado != null && custo > 0 ? custo - esperado : null
+    const diferenca = esperado != null && custoDoPapel > 0 ? custoDoPapel - esperado : null
 
     // O preço novo, conforme o que foi digitado por último (ver `LinhaAf.fixo`).
     const proposta = propostaDeMarkup({
@@ -316,7 +336,17 @@ export default function NovaAf({ loaderData }: Route.ComponentProps) {
             : ""
           : proposta.markup
 
-    return { ...l, quantidade, custo, total: quantidade * custo, esperado, diferenca, preco, markup }
+    return {
+      ...l,
+      quantidade,
+      custoDoPapel,
+      custo,
+      total: quantidade * custoDoPapel,
+      esperado,
+      diferenca,
+      preco,
+      markup,
+    }
   })
 
   /** O que vai mudar no catálogo: preço válido, diferente do de hoje, linha marcada. */
@@ -347,13 +377,14 @@ export default function NovaAf({ loaderData }: Route.ComponentProps) {
     !fornecedorId ||
     !dataEmissao ||
     preenchidas.length === 0 ||
-    preenchidas.some((l) => !(l.custo > 0))
+    preenchidas.some((l) => !(l.custoDoPapel > 0)) ||
+    freteInvalido
 
   function lancar() {
     const itens: ItemDaAf[] = preenchidas.map((l) => ({
       produtoId: l.produtoId,
       quantidade: l.quantidade,
-      custoUnitario: l.custo,
+      custoUnitario: l.custoDoPapel,
     }))
     fetcher.submit(
       {
@@ -363,6 +394,7 @@ export default function NovaAf({ loaderData }: Route.ComponentProps) {
         pedidoDeCompraId: pedidoEscolhido?.id ?? "",
         dataEmissao,
         observacao,
+        frete: freteTexto,
         itens: JSON.stringify(itens),
       },
       { method: "post" }
@@ -465,6 +497,9 @@ export default function NovaAf({ loaderData }: Route.ComponentProps) {
                   <th className="w-24 px-2 py-1.5 text-right">Esperado</th>
                   <th className="w-28 px-2 py-1.5 text-right">Diferença</th>
                   <th className="w-28 px-2 py-1.5 text-right">Total</th>
+                  {frete > 0 ? (
+                    <th className="w-28 px-2 py-1.5 text-right">Custo c/ frete</th>
+                  ) : null}
                   <th className="w-24 px-2 py-1.5 text-right">Preço hoje</th>
                   <th className="w-24 px-2 py-1.5 text-right">Markup</th>
                   <th className="w-32 px-2 py-1.5 text-right">Novo preço</th>
@@ -502,7 +537,7 @@ export default function NovaAf({ loaderData }: Route.ComponentProps) {
                           onChange={(e) => atualizar(i, "custoTexto", e.target.value)}
                           className={cn(
                             "h-7 w-full text-right font-mono text-xs",
-                            linha.produtoId && linha.quantidade > 0 && !(linha.custo > 0)
+                            linha.produtoId && linha.quantidade > 0 && !(linha.custoDoPapel > 0)
                               ? "border-destructive/50"
                               : ""
                           )}
@@ -532,6 +567,11 @@ export default function NovaAf({ loaderData }: Route.ComponentProps) {
                       <td className="px-2 py-1.5 text-right tabular-nums">
                         {linha.total > 0 ? moeda(linha.total) : "—"}
                       </td>
+                      {frete > 0 ? (
+                        <td className="px-2 py-1.5 text-right font-medium tabular-nums">
+                          {linha.total > 0 ? moeda(linha.custo) : "—"}
+                        </td>
+                      ) : null}
                       <td className="px-2 py-1.5 text-right tabular-nums">
                         {produto?.preco ? (
                           <>
@@ -647,8 +687,31 @@ export default function NovaAf({ loaderData }: Route.ComponentProps) {
               </Badge>
             ) : null}
 
-            <span className="ml-auto text-sm">
+            <label
+              className="ml-auto flex items-center gap-1.5 text-sm"
+              title="Frete pago à parte (transportadora, motorista). Rateado pelos itens na proporção do valor e somado ao custo de cada um."
+            >
+              <span className="text-muted-foreground">Frete à parte R$</span>
+              <Input
+                value={freteTexto}
+                onChange={(e) => setFreteTexto(e.target.value)}
+                inputMode="decimal"
+                autoComplete="off"
+                placeholder="0,00"
+                className={cn(
+                  "h-7 w-24 text-right font-mono text-xs",
+                  freteInvalido && "border-destructive text-destructive"
+                )}
+              />
+            </label>
+
+            <span className="text-sm">
               Total da AF: <strong className="tabular-nums">{moeda(total)}</strong>
+              {frete > 0 ? (
+                <span className="ml-1 text-xs text-muted-foreground">
+                  + {moeda(frete)} de frete
+                </span>
+              ) : null}
             </span>
           </div>
 

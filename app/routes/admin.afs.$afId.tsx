@@ -55,7 +55,8 @@ export async function loader({ request, params }: Route.LoaderArgs) {
       codigo: i.codigo,
       descricao: i.descricao,
       unidade: i.unidade,
-      custo: i.custoUnitario,
+      // O que entrou no estoque: com o frete rateado, quando houve.
+      custo: i.custoComFrete ?? i.custoUnitario,
       precoHoje: precoPorId.get(i.produtoId) ?? null,
       custoAnterior: custoAnterior.get(i.produtoId) ?? null,
     })),
@@ -142,6 +143,12 @@ export default function DetalheAf({ loaderData }: Route.ComponentProps) {
             <dd>{af.loja}</dd>
             <dt className="text-muted-foreground">Valor total</dt>
             <dd>{moeda(af.total)}</dd>
+            {af.frete ? (
+              <>
+                <dt className="text-muted-foreground">Frete à parte</dt>
+                <dd>{moeda(af.frete)} — rateado no custo dos itens</dd>
+              </>
+            ) : null}
             <dt className="text-muted-foreground">Lançada</dt>
             <dd>
               {new Date(af.criadoEm).toLocaleString("pt-BR")} por {af.criadoPor}
@@ -164,6 +171,7 @@ export default function DetalheAf({ loaderData }: Route.ComponentProps) {
                 <th className="px-2 py-1.5 text-right">Qtd</th>
                 <th className="px-2 py-1.5 text-right">Custo unit.</th>
                 <th className="px-2 py-1.5 text-right">Total</th>
+                {af.frete ? <th className="px-2 py-1.5 text-right">Custo c/ frete</th> : null}
               </tr>
             </thead>
             <tbody>
@@ -178,6 +186,11 @@ export default function DetalheAf({ loaderData }: Route.ComponentProps) {
                     {moeda(item.custoUnitario)}
                   </td>
                   <td className="px-2 py-1.5 text-right tabular-nums">{moeda(item.total)}</td>
+                  {af.frete ? (
+                    <td className="px-2 py-1.5 text-right font-medium tabular-nums">
+                      {moeda(item.custoComFrete ?? item.custoUnitario)}
+                    </td>
+                  ) : null}
                 </tr>
               ))}
             </tbody>

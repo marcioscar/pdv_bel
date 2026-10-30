@@ -101,17 +101,47 @@ export async function notasCandidatasDoPedido(pedidoId: string) {
 
 export type ItemDaNotaParaConciliar = ItemComCustoReal & { ean: string | null; ncm: string | null }
 
-/** O custo real de cada item de uma nota já sincronizada, pronto para comparar com o pedido. */
-export function itensComCustoDaNota(xml: string): ItemDaNotaParaConciliar[] {
+/**
+ * O custo real de cada item de uma nota já sincronizada, pronto para comparar
+ * com o pedido. O frete pago à parte soma no frete da nota: os dois são
+ * despesa de trazer a mercadoria, e o rateio é o mesmo.
+ */
+export function itensComCustoDaNota(xml: string, freteAdicional = 0): ItemDaNotaParaConciliar[] {
   const resumo = resumoDoProcNFe(xml)
   if (!resumo) return []
 
-  const comCusto = calcularCustoReal(resumo)
+  const comCusto = calcularCustoReal({ ...resumo, vFrete: resumo.vFrete + freteAdicional })
   return comCusto.map((item, i) => ({
     ...item,
     ean: resumo.itens[i]?.ean ?? null,
     ncm: resumo.itens[i]?.ncm ?? null,
   }))
+}
+
+/**
+ * Grava o frete pago à parte da nota. Só antes de qualquer item entrar no
+ * estoque: o custo de cada entrada é gravado no movimento, e mudar o frete
+ * depois deixaria parte da nota com um rateio e parte com outro.
+ */
+export async function salvarFreteDaNota(
+  notaId: string,
+  frete: number
+): Promise<{ ok: true } | { ok: false; erro: string }> {
+  if (!Number.isFinite(frete) || frete < 0) return { ok: false, erro: "Valor de frete inválido" }
+
+  const nota = await db.notaFiscalRecebida.findUnique({ where: { id: notaId } })
+  if (!nota) return { ok: false, erro: "Nota não encontrada" }
+
+  const lancados = await db.movimentoEstoque.count({ where: { notaFiscalRecebidaId: notaId } })
+  if (nota.situacao === "recebida" || lancados > 0) {
+    return { ok: false, erro: "Esta nota já deu entrada no estoque — o frete não muda mais" }
+  }
+
+  await db.notaFiscalRecebida.update({
+    where: { id: notaId },
+    data: { freteAdicional: frete > 0 ? frete : null },
+  })
+  return { ok: true }
 }
 
 export type ItemReconciliado = {

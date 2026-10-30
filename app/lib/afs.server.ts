@@ -3,6 +3,7 @@ import type { Prisma } from "@prisma/client"
 import { AFS_POR_PAGINA, type FiltroAfs } from "~/lib/afs"
 import { db } from "~/lib/db.server"
 import { PRIMEIRO_DIA, ULTIMO_DIA, depoisDoDia, inicioDoDia, meioDiaDe } from "~/lib/dia"
+import { ratearPorValor } from "~/lib/custo-nfe"
 import { arredondar, QUANTIDADE_INTEIRA } from "~/lib/moeda"
 import { pedidoFechaCom } from "~/lib/pedidos-compra.server"
 
@@ -130,6 +131,8 @@ export type EntradaDaAf = {
   pedidoDeCompraId: string | null
   dataEmissao: string
   observacao: string
+  /** Frete pago à parte, rateado pelos itens. Zero quando não há. */
+  frete: number
   itens: ItemDaAf[]
 }
 
@@ -187,6 +190,10 @@ export async function lancarAf(
   if (itens.some((item) => !(item.custoUnitario > 0))) {
     return { ok: false, erro: "Todo item precisa do custo unitário que a AF cobrou" }
   }
+  if (!Number.isFinite(entrada.frete) || entrada.frete < 0) {
+    return { ok: false, erro: "Valor de frete inválido" }
+  }
+  const frete = arredondar(entrada.frete)
 
   const produtos = await db.produto.findMany({
     where: { id: { in: itens.map((i) => i.produtoId) } },
@@ -211,7 +218,12 @@ export async function lancarAf(
   // Um item por linha digitada, e não somado por produto: o papel pode listar o
   // mesmo produto duas vezes, com preços diferentes, e achatar isso perderia a
   // conferência linha a linha contra a AF na mão.
-  const itensGravados = itens.map((item) => {
+  // O frete se divide na proporção do valor de cada linha, como o da nota.
+  const rateios = ratearPorValor(
+    itens.map((item) => item.quantidade * item.custoUnitario),
+    frete
+  )
+  const itensGravados = itens.map((item, i) => {
     const produto = porId.get(item.produtoId)!
     return {
       produtoId: produto.id,
@@ -221,6 +233,7 @@ export async function lancarAf(
       quantidade: item.quantidade,
       custoUnitario: item.custoUnitario,
       total: arredondar(item.quantidade * item.custoUnitario),
+      custoComFrete: frete > 0 ? item.custoUnitario + rateios[i] / item.quantidade : null,
     }
   })
   const total = arredondar(itensGravados.reduce((soma, item) => soma + item.total, 0))
@@ -240,6 +253,7 @@ export async function lancarAf(
         dataEmissao,
         itens: itensGravados,
         total,
+        frete: frete > 0 ? frete : null,
         observacao: entrada.observacao.trim() || null,
         criadoPor: operador,
       },
@@ -251,7 +265,7 @@ export async function lancarAf(
         loja: loja.codigo,
         tipo: "entrada",
         quantidade: item.quantidade,
-        custoUnitario: item.custoUnitario,
+        custoUnitario: item.custoComFrete ?? item.custoUnitario,
         operador,
         pedidoDeCompraId: pedido?.id ?? null,
         pedidoDeCompraNumero: pedido?.numero ?? null,

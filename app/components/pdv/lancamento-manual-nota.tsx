@@ -6,6 +6,7 @@ import { EscolhaDeProduto, type ProdutoDoCatalogo } from "~/components/pdv/escol
 import { ESTILO_CAMPO } from "~/components/pdv/filtros"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
+import { ratearPorValor } from "~/lib/custo-nfe"
 import { arredondar, interpretarValor, moeda } from "~/lib/moeda"
 import { criarIndice } from "~/lib/pdv"
 import { cn } from "~/lib/utils"
@@ -47,6 +48,7 @@ export function LancamentoManualDaNota({
   pedidos,
   catalogo,
   valorDaNota,
+  frete,
 }: {
   notaId: string
   /** A loja destinatária da nota — quase sempre é ela que recebeu. */
@@ -55,6 +57,8 @@ export function LancamentoManualDaNota({
   pedidos: PedidoAberto[]
   catalogo: ProdutoDoCatalogo[]
   valorDaNota: number | null
+  /** O frete à parte gravado na nota — rateado no custo dos itens digitados. */
+  frete: number
 }) {
   const porId = useMemo(() => new Map(catalogo.map((p) => [p.id, p])), [catalogo])
   const indice = useMemo(() => criarIndice(catalogo), [catalogo])
@@ -111,6 +115,10 @@ export function LancamentoManualDaNota({
   })
   const validas = lidas.filter((l) => l.produto && !l.erro)
   const soma = arredondar(validas.reduce((s, l) => s + l.total, 0))
+  // O frete à parte por unidade de cada linha, na proporção do valor dela.
+  const rateios = ratearPorValor(lidas.map((l) => l.total), frete)
+  const custoComFrete = (i: number) =>
+    lidas[i].quantidade > 0 ? lidas[i].custo + rateios[i] / lidas[i].quantidade : lidas[i].custo
   const comErro = lidas.some((l) => l.erro)
   const repetido = new Set(validas.map((l) => l.produto!.id)).size !== validas.length
   const pronto = !gravando && Boolean(loja) && validas.length > 0 && !comErro && !repetido
@@ -124,11 +132,11 @@ export function LancamentoManualDaNota({
         loja,
         pedidoId,
         itens: JSON.stringify(
-          validas.map((l) => ({
-            produtoId: l.produto!.id,
-            quantidade: l.quantidade,
-            custoUnitario: l.custo,
-          }))
+          lidas.flatMap((l, i) =>
+            l.produto && !l.erro
+              ? [{ produtoId: l.produto.id, quantidade: l.quantidade, custoUnitario: custoComFrete(i) }]
+              : []
+          )
         ),
       },
       { method: "post" }
@@ -206,11 +214,14 @@ export function LancamentoManualDaNota({
               <th className="px-3 py-2 text-right font-semibold">Qtd</th>
               <th className="px-3 py-2 text-right font-semibold">Custo unit.</th>
               <th className="px-3 py-2 text-right font-semibold">Total</th>
+              {frete > 0 ? (
+                <th className="px-3 py-2 text-right font-semibold">Custo c/ frete</th>
+              ) : null}
               <th className="w-8" />
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
-            {lidas.map(({ linha, produto, erro, total }) => (
+            {lidas.map(({ linha, produto, erro, total }, i) => (
               <tr key={linha.chave}>
                 <td className="px-3 py-2">
                   <EscolhaDeProduto
@@ -245,6 +256,11 @@ export function LancamentoManualDaNota({
                   {erro ? <div className="mt-0.5 text-[10px] text-destructive">{erro}</div> : null}
                 </td>
                 <td className="px-3 py-2 text-right font-mono">{total > 0 ? moeda(total) : "—"}</td>
+                {frete > 0 ? (
+                  <td className="px-3 py-2 text-right font-mono">
+                    {total > 0 ? moeda(custoComFrete(i)) : "—"}
+                  </td>
+                ) : null}
                 <td className="pr-2">
                   <Button
                     type="button"
@@ -283,6 +299,11 @@ export function LancamentoManualDaNota({
         <span>
           Itens: <b className="font-mono tabular-nums">{moeda(soma)}</b>
         </span>
+        {frete > 0 ? (
+          <span className="text-muted-foreground">
+            Frete à parte: <span className="font-mono tabular-nums">{moeda(frete)}</span>
+          </span>
+        ) : null}
         {valorDaNota != null ? (
           <span className="text-muted-foreground">
             Nota: <span className="font-mono tabular-nums">{moeda(valorDaNota)}</span>

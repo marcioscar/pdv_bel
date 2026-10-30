@@ -1492,7 +1492,12 @@ model AutorizacaoDeFaturamento {
   dataEmissao DateTime
 
   itens AfItem[]
+  /// A soma dos itens como o papel cobra, sem o frete.
   total Float
+  /// Frete pago à parte desta compra, rateado pelos itens na proporção do
+  /// valor — está no custo de cada item (`AfItem.custoComFrete`), e fora do
+  /// `total`, que é o que o papel do fornecedor cobra.
+  frete Float?
 
   observacao String?
 
@@ -1519,10 +1524,13 @@ type AfItem {
   descricao  String
   unidade    String
   quantidade Float
-  /// O custo unitário digitado do papel — já é o custo real desta entrada, sem
-  /// rateio a calcular: a AF não tem frete nem imposto por fora para ratear.
+  /// O custo unitário digitado do papel.
   custoUnitario Float
   total         Float
+  /// O custo unitário com o frete da AF rateado — o que entrou no estoque.
+  /// Ausente nas AFs sem frete, e nas de antes dele, em que é o próprio
+  /// `custoUnitario`.
+  custoComFrete Float?
 }
 
 /// Até onde a sincronização de NF-e da SEFAZ (`distNSU`) avançou, por loja.
@@ -1644,6 +1652,13 @@ model NotaFiscalRecebida {
   /// a pagar é o tipo de erro que só aparece quando alguém já pagou os dois.
   despesasGeradasEm  DateTime?
   despesasGeradasPor String?
+
+  /// Frete pago à parte desta nota — o conhecimento de transporte, o motorista
+  /// pago na entrega — que não está no XML. Rateado pelos itens como o frete da
+  /// própria nota, e por isso só se mexe antes de qualquer item entrar no
+  /// estoque: mudar no meio deixaria metade da nota com um custo e metade com
+  /// outro. Não entra nas duplicatas: quem cobra é outro, não o fornecedor.
+  freteAdicional Float?
 
   /// Quando a Ciência da Operação foi registrada na SEFAZ, e por quem.
   ///

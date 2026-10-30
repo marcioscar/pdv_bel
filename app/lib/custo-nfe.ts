@@ -47,19 +47,31 @@ export type ItemComCustoReal = {
   custoTotalReal: number
 }
 
+/**
+ * Divide uma despesa entre os itens na proporção do valor de cada um — a mesma
+ * régua para o frete que a nota lança no total e para o que chega cobrado à
+ * parte (conhecimento de transporte, frete pago ao motorista) na nota ou na AF.
+ */
+export function ratearPorValor(valores: number[], despesa: number): number[] {
+  const soma = valores.reduce((total, valor) => total + valor, 0)
+  // Sem valor nenhum (não deveria acontecer) não há como ratear — melhor zero
+  // do que dividir por zero.
+  return valores.map((valor) => (soma > 0 ? despesa * (valor / soma) : 0))
+}
+
 export function calcularCustoReal(nota: NotaParaCusto): ItemComCustoReal[] {
-  const somaProdutos = nota.itens.reduce((soma, item) => soma + (item.valorTotal ?? 0), 0)
   // Desconto reduz o que se rateia; frete/seguro/outras despesas aumentam.
   const despesasARatear = nota.vFrete + nota.vSeg + nota.vOutro - nota.vDesc
+  const rateios = ratearPorValor(
+    nota.itens.map((item) => item.valorTotal ?? 0),
+    despesasARatear
+  )
 
-  return nota.itens.map((item) => {
+  return nota.itens.map((item, i) => {
     const quantidade = item.quantidade ?? 0
     const valorTotalItem = item.valorTotal ?? 0
     const impostoItem = item.vIPI + item.vICMSST
-    // Sem produtos na nota (não deveria acontecer) não há como ratear —
-    // melhor zero do que dividir por zero.
-    const participacao = somaProdutos > 0 ? valorTotalItem / somaProdutos : 0
-    const rateioItem = despesasARatear * participacao
+    const rateioItem = rateios[i]
 
     const custoTotalReal = valorTotalItem + impostoItem + rateioItem
     const custoUnitarioReal = quantidade > 0 ? custoTotalReal / quantidade : custoTotalReal
