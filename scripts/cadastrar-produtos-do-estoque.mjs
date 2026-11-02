@@ -17,6 +17,9 @@
  *   AJUSTE.
  * - **Sem NCM.** O arquivo não traz, e a venda no caixa não depende dele; a
  *   nota fiscal desses produtos depende.
+ * - `--com-encomendas` cadastra também as do grupo Encomenda — pedido do
+ *   Marcio (02/11/2026), na virada para produção: o que está na loja esperando
+ *   o cliente buscar precisa poder sair pelo caixa.
  * - Rodar duas vezes não duplica: código + unidade já no catálogo é pulado.
  */
 import { readFileSync } from "node:fs"
@@ -37,6 +40,7 @@ if (!arquivoJson) {
   process.exit(1)
 }
 const gravar = opcoes.includes("--gravar")
+const comEncomendas = opcoes.includes("--com-encomendas")
 const arquivo = arquivoJson.split("/").pop()
 const OPERADOR = `Importação de ${arquivo}`
 const GRUPO_ENCOMENDA = "19"
@@ -79,7 +83,7 @@ for (const l of linhas) {
 const novos = []
 for (const [chave, ls] of porChave) {
   const grupoCodigo = String(ls[0].id_grupo).split(" - ")[0].trim()
-  if (grupoCodigo === GRUPO_ENCOMENDA) continue
+  if (grupoCodigo === GRUPO_ENCOMENDA && !comEncomendas) continue
   const saldos = ls
     .map((l) => ({ loja: LOJAS[l.id_local_estoque], quantidade: numero(l.nu_saldo_qtd) }))
     .filter((s) => s.loja && Number.isFinite(s.quantidade) && s.quantidade !== 0)
