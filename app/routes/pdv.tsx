@@ -7,6 +7,7 @@ import { AjudaAtalhos } from "~/components/pdv/ajuda-atalhos"
 import { ClienteDialogo, type ClienteResumo } from "~/components/pdv/cliente-dialogo"
 import { CobrancaDialogo } from "~/components/pdv/cobranca-dialogo"
 import { CondicaoDialogo } from "~/components/pdv/condicao-dialogo"
+import { NotaDialogo, type NotaNoBalcao } from "~/components/pdv/nota-dialogo"
 import { BarraAtalhos, type Atalho } from "~/components/pdv/barra-atalhos"
 import { BarraComando, type ModoComando } from "~/components/pdv/barra-comando"
 import { ListaItens } from "~/components/pdv/lista-itens"
@@ -42,7 +43,7 @@ import { ultimoCustoPorProduto } from "~/lib/compras.server"
 import { saldosDeCredito } from "~/lib/creditos.server"
 import { modeloDaVenda, type ModeloNota } from "~/lib/fiscal"
 import { ambienteFocus, focusConfigurada } from "~/lib/focus.server"
-import { emitirDaVenda } from "~/lib/nota-fiscal.server"
+import { atualizarStatusDaNota, emitirDaVenda } from "~/lib/nota-fiscal.server"
 import { SOMENTE_ATIVOS } from "~/lib/produtos.server"
 import { autenticar, exigirUsuario } from "~/lib/sessao.server"
 import {
@@ -575,6 +576,17 @@ export async function action({ request }: Route.ActionArgs) {
     }
   }
 
+  /*
+   * Tentar de novo a nota que não saiu no fechamento, sem sair do caixa. O
+   * mesmo `emitirNaVenda` do fechamento: o `ref` da venda faz a Focus reenviar
+   * a que foi recusada em vez de abrir outra.
+   */
+  if ((bruto as { intencao?: string })?.intencao === "reemitirNota") {
+    const eu = await exigirUsuario(request)
+    const vendaId = String((bruto as { vendaId?: string }).vendaId ?? "")
+    return { ok: true as const, tipo: "nota" as const, vendaId, nota: await emitirNaVenda(vendaId, eu.nome) }
+  }
+
   // --- Pix no balcão: cria a cobrança pelo total recalculado do banco ---
   if ((bruto as { intencao?: string })?.intencao === "pixCriar") {
     const pedido = lerPedido(bruto)
@@ -868,6 +880,7 @@ async function emitirNaVenda(vendaId: string, operador: string) {
       return {
         emitida: false as const,
         erro: resultado.erro,
+        notaId: null,
         danfe: null,
         numero: null,
         modelo: null,
@@ -876,31 +889,46 @@ async function emitirNaVenda(vendaId: string, operador: string) {
       }
     }
 
-    const nota = await db.notaFiscalEmitida.findUnique({
+    /*
+     * A NF-e na Focus é assíncrona: a resposta do envio é "processando", e a
+     * autorização chega segundos depois. Sem esperar, o fechamento entregava o
+     * cupom não fiscal e a nota só aparecia autorizada quando alguém abria a
+     * tela de Vendas — e o vendedor ia lá "emitir" a nota que já existia.
+     * Pergunta algumas vezes; passado o prazo, ela segue pendente em Vendas.
+     */
+    let nota = await db.notaFiscalEmitida.findUnique({
       where: { id: resultado.notaId },
-      select: { status: true, caminhoDanfe: true, numero: true, modelo: true },
+      select: { status: true, caminhoDanfe: true, numero: true, modelo: true, erro: true },
     })
+    for (let tentativa = 0; tentativa < 8 && nota?.status === "processando_autorizacao"; tentativa++) {
+      await new Promise((pronto) => setTimeout(pronto, 1500))
+      await atualizarStatusDaNota(resultado.notaId)
+      nota = await db.notaFiscalEmitida.findUnique({
+        where: { id: resultado.notaId },
+        select: { status: true, caminhoDanfe: true, numero: true, modelo: true, erro: true },
+      })
+    }
 
     const autorizada = nota?.status === "autorizado"
 
     /*
-     * O DANFE substitui o cupom na bobina em dois casos, e só neles: NFC-e, e em
-     * produção.
-     *
-     * NFC-e porque o DANFE dela é do tamanho da bobina — o da NF-e é A4, e sairia
-     * espremido e ilegível na impressora térmica. A NF-e fica no botão da tela de
-     * Vendas, para o vendedor mandar para a impressora comum ou por e-mail.
+     * Com a nota autorizada em produção, o DANFE sai no lugar do cupom — NFC-e e
+     * NF-e. A NF-e antes ficava só no botão da tela de Vendas, porque o DANFE dela
+     * é A4; mas aí o balcão entregava o cupom não fiscal a quem pediu nota
+     * (pedido do Marcio, 03/11/2026). A NF-e vai para a caixa de impressão, onde
+     * se escolhe a impressora comum.
      *
      * Produção porque em homologação a SEFAZ carimba "SEM VALOR FISCAL" e troca a
      * descrição do primeiro item pela frase de teste: entregar isso ao cliente no
      * lugar do cupom seria pior do que não emitir nada.
      */
-    const valeComoDocumento =
-      autorizada && nota?.modelo === "nfce" && ambienteFocus() === "producao"
+    const valeComoDocumento = autorizada && ambienteFocus() === "producao"
 
     return {
       emitida: autorizada,
-      erro: null,
+      // A recusa que chegou na consulta (CSC, IE, NCM) vem junto, por extenso.
+      erro: autorizada ? null : (nota?.erro ?? null),
+      notaId: resultado.notaId,
       // O endereço é o NOSSO: a impressão do caixa busca o documento pelo
       // navegador, e a Focus não responde a pedido de outro domínio.
       danfe: valeComoDocumento ? `/notas/${resultado.notaId}/danfe` : null,
@@ -918,6 +946,7 @@ async function emitirNaVenda(vendaId: string, operador: string) {
     return {
       emitida: false as const,
       erro: "Falha ao emitir a nota",
+      notaId: null,
       danfe: null,
       numero: null,
       modelo: null,
@@ -1084,6 +1113,8 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     erro: string | null
     emitindo: boolean
   } | null>(null)
+  /** O desfecho da nota pedida no fechamento: NF-e autorizada ou nota que não saiu. */
+  const [notaNoBalcao, setNotaNoBalcao] = useState<NotaNoBalcao | null>(null)
   const { escuro, alternar: alternarTema } = useTema()
   const relogio = useRelogio()
   useAtalhosDeSecao(eu.papel, !ajudaAberta)
@@ -1455,6 +1486,30 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       return
     }
 
+    if (resposta.tipo === "nota" && "nota" in resposta) {
+      const n = resposta.nota
+      setNotaNoBalcao((atual) =>
+        atual === null || atual.vendaId !== resposta.vendaId
+          ? atual
+          : {
+              ...atual,
+              modelo: n.modelo ?? atual.modelo,
+              notaId: n.notaId ?? atual.notaId,
+              numero: n.numero,
+              emitida: n.emitida,
+              teste: n.teste,
+              erro: n.emitida ? null : (n.erro ?? "A SEFAZ ainda não respondeu"),
+              emitindo: false,
+            }
+      )
+      if (n.danfe && imprimirCupom) {
+        imprimirDocumento(n.danfe).then((erro) => {
+          if (erro) avisar(erro, "erro")
+        })
+      }
+      return
+    }
+
     // Antes da checagem genérica: a falha da emissão pertence ao comprovante,
     // não à barra de status — a venda já está gravada.
     if (resposta.tipo === "cobranca") {
@@ -1580,11 +1635,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
 
     const partes = [`Venda #${numero} registrada`]
     if (troco > 0) partes.push(`troco ${moeda(troco)}`)
-    if (nota?.naTelaDeVendas) {
-      // Venda para empresa: quem fecha precisa saber que a nota ainda não saiu, e
-      // onde ela sai.
-      partes.push("NF-e: emita em Vendas")
-    } else if (nota?.emitida) {
+    if (nota?.emitida) {
       const documento = `${nota.modelo === "nfe" ? "NF-e" : "NFC-e"} ${nota.numero ?? ""}`.trim()
       // Dizer "de teste" é o que impede alguém de achar que o balcão já está
       // emitindo nota de verdade enquanto o token é o de homologação.
@@ -1593,10 +1644,29 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
 
     // A falha da nota é dita, e não escondida: a venda valeu, mas alguém precisa
     // saber que o documento fiscal ficou para trás.
-    if (nota && !nota.emitida && nota.erro) {
-      avisar(`${partes.join(" · ")} · nota pendente: ${nota.erro}`, "erro")
+    if (nota && !nota.emitida) {
+      avisar(`${partes.join(" · ")} · nota não saiu`, "erro")
     } else {
       avisar(partes.join(" · "), "sucesso")
+    }
+
+    /*
+     * A nota que não saiu abre a janela dela, com o motivo e o "tentar de novo".
+     * Antes era uma linha na barra de status que sumia, e o vendedor ia procurar
+     * a venda em Vendas para descobrir o que houve.
+     */
+    if (nota && !nota.emitida) {
+      setNotaNoBalcao({
+        vendaId: resposta.vendaId,
+        vendaNumero: numero,
+        modelo: nota.modelo,
+        notaId: nota.notaId,
+        numero: nota.numero,
+        emitida: nota.emitida,
+        teste: nota.teste,
+        erro: nota.emitida ? null : (nota.erro ?? "A SEFAZ ainda não respondeu"),
+        emitindo: false,
+      })
     }
     // `autorizacaoId` entra nas dependências para a baixa usar o id do render
     // corrente; a guarda de `ultimaResposta` torna re-execuções inócuas.
@@ -2250,6 +2320,14 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
         return
       }
 
+      if (notaNoBalcao) {
+        if (key === "Escape" || key === "Enter") {
+          evento.preventDefault()
+          if (!notaNoBalcao.emitindo) setNotaNoBalcao(null)
+        }
+        return
+      }
+
       // Cliente, condição e finalização têm handler próprio em captura.
       if (clienteAberto || condicaoAberta || finalizando) return
 
@@ -2709,6 +2787,20 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           erro={comprovante.erro}
           emitindo={comprovante.emitindo}
           onFechar={() => setComprovante(null)}
+        />
+      ) : null}
+
+      {notaNoBalcao && !comprovante ? (
+        <NotaDialogo
+          nota={notaNoBalcao}
+          onFechar={() => setNotaNoBalcao(null)}
+          onTentarDeNovo={() => {
+            setNotaNoBalcao((atual) => (atual ? { ...atual, emitindo: true, erro: null } : atual))
+            fetcher.submit(
+              { intencao: "reemitirNota", vendaId: notaNoBalcao.vendaId },
+              { method: "post", encType: "application/json" }
+            )
+          }}
         />
       ) : null}
 
