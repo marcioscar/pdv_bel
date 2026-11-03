@@ -348,6 +348,12 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
   // A NF-e passa por um diálogo antes de sair: frete e observação são decisões
   // de quem está vendendo, e depois de autorizada a nota não se corrige.
   const [emitindoNfe, setEmitindoNfe] = useState<string | null>(null)
+  /*
+   * A recusa da NF-e mora no próprio diálogo: o aviso da barra de status fica
+   * atrás dele, e quem clicou em "Emitir" via o botão voltar ao normal sem
+   * nenhuma explicação — parecia que nada tinha acontecido.
+   */
+  const [erroNfe, setErroNfe] = useState<string | null>(null)
 
   const linhaAtiva = useRef<HTMLTableRowElement>(null)
   const ultimaResposta = useRef<unknown>(null)
@@ -420,6 +426,7 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
 
     setConfirmando(null)
     if (resposta.tipo === "nota" && resposta.ok) setEmitindoNfe(null)
+    if (resposta.tipo === "nota" && !resposta.ok) setErroNfe(resposta.erro)
     avisar(
       resposta.ok ? resposta.mensagem : resposta.erro,
       resposta.ok ? "sucesso" : "erro"
@@ -465,6 +472,7 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
       return
     }
 
+    setErroNfe(null)
     setEmitindoNfe(ativa.id)
   }, [ativa, cancelando, avisar, fetcher, notas])
 
@@ -1119,13 +1127,15 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
         <DialogoNfe
           venda={vendaEmitindoNfe}
           enviando={cancelando}
+          erro={erroNfe}
           onFechar={() => setEmitindoNfe(null)}
-          onEmitir={(dados) =>
+          onEmitir={(dados) => {
+            setErroNfe(null)
             fetcher.submit(
               { acao: "nota", vendaId: vendaEmitindoNfe.id, ...dados },
               { method: "post" }
             )
-          }
+          }}
         />
       ) : null}
 
@@ -1234,11 +1244,13 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
 function DialogoNfe({
   venda,
   enviando,
+  erro,
   onFechar,
   onEmitir,
 }: {
   venda: { numero: number; total: number; clienteNome: string | null }
   enviando: boolean
+  erro: string | null
   onFechar: () => void
   onEmitir: (dados: { freteModalidade: string; freteValor: string; observacao: string }) => void
 }) {
@@ -1330,6 +1342,15 @@ function DialogoNfe({
             </p>
           </div>
         </div>
+
+        {erro ? (
+          <p
+            role="alert"
+            className="mt-4 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm font-medium text-destructive"
+          >
+            {erro}
+          </p>
+        ) : null}
 
         <div className="mt-5 flex items-center justify-between">
           <span className="text-xs text-muted-foreground">
