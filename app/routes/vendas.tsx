@@ -1003,6 +1003,7 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                   onClick={emitirNotaFiscal}
                 />
               ) : null}
+              <BotaoReimprimirCupom vendaId={ativa?.id ?? null} />
               {ativa && notas[ativa.id]?.status === "autorizado" ? (
                 <EmailDaNota key={notas[ativa.id].id} nota={notas[ativa.id]} />
               ) : null}
@@ -1496,6 +1497,44 @@ function BotaoNota({
           : nota?.status === "erro_autorizacao"
             ? `Reenviar ${rotulo}`
             : `Emitir ${rotulo}`}
+    </Button>
+  )
+}
+
+/**
+ * A 2ª via do cupom não fiscal — o papel de como a venda foi feita: itens,
+ * pagamento, parcelas. Sai marcado "2ª via" para não passar por outra venda.
+ *
+ * É o cupom e não o DANFE de propósito: a nota se reimprime pelo botão dela, e
+ * o cliente que volta pedindo "o papel da compra" quer ver o que levou e como
+ * pagou.
+ */
+function BotaoReimprimirCupom({ vendaId }: { vendaId: string | null }) {
+  const [gerando, setGerando] = useState(false)
+  const [erro, setErro] = useState<string | null>(null)
+
+  return (
+    <Button
+      type="button"
+      tabIndex={-1}
+      variant="outline"
+      size="sm"
+      disabled={!vendaId || gerando}
+      title={erro ?? "Reimprimir o cupom não fiscal desta venda (2ª via)"}
+      className={cn("rounded-lg", erro && "border-destructive text-destructive")}
+      onClick={async () => {
+        if (!vendaId) return
+        setGerando(true)
+        setErro(await imprimirDocumento(`/vendas/${vendaId}/cupom?via=2`))
+        setGerando(false)
+      }}
+    >
+      {gerando ? (
+        <Loader2 className="size-4 animate-spin" aria-hidden />
+      ) : (
+        <Printer className="size-4" aria-hidden />
+      )}
+      Reimprimir cupom
     </Button>
   )
 }

@@ -62,6 +62,10 @@ export async function loader({ params, request }: Route.LoaderArgs) {
    */
   const logo = loja.logo ? new URL(loja.logo, request.url).href : null
 
+  // A reimpressão sai marcada: um segundo papel igual ao primeiro pode passar
+  // por outra venda — na conferência do caixa ou nas mãos de quem quer trocar.
+  const segundaVia = new URL(request.url).searchParams.get("via") === "2"
+
   const forma = rotuloDaForma(venda.forma)
   // A venda mista lista o que entrou por cada forma, logo abaixo do "a pagar".
   const linhasDoPagamento = venda.forma === FORMA_MISTA
@@ -155,6 +159,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     ${loja.bairro ? `<div>${escapar(loja.bairro)} · ${escapar(loja.cidade ?? "")}/${escapar(loja.uf ?? "")}</div>` : ""}
     ${loja.telefone ? `<div>${escapar(loja.telefone)}</div>` : ""}
     <div class="selo">CUPOM NÃO FISCAL</div>
+    ${segundaVia ? `<div class="selo">2&ordf; VIA &middot; ${new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}</div>` : ""}
+    ${venda.canceladaEm ? `<div class="selo">VENDA CANCELADA</div>` : ""}
   </div>
 
   <div class="separador"></div>

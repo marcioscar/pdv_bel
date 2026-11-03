@@ -588,7 +588,7 @@ function Detalhe({
       ) : null}
 
       <a
-        href={`/vendas/${venda.id}/cupom`}
+        href={`/vendas/${venda.id}/cupom?via=2`}
         target="_blank"
         rel="noreferrer"
         className="mt-4 flex items-center justify-center gap-1.5 rounded-lg border border-border py-2 text-xs hover:bg-muted/40"
