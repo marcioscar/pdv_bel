@@ -1436,8 +1436,15 @@ function SeloDaNota({ nota }: { nota: NotaDaVenda | undefined }) {
 
   if (nota.status === "erro_autorizacao" || nota.status === "denegado") {
     return (
-      <span className="text-xs font-medium text-destructive" title={nota.erro ?? undefined}>
-        {rotulo} recusada
+      <span className="flex max-w-64 flex-col gap-0.5">
+        <span className="text-xs font-medium text-destructive">{rotulo} recusada</span>
+        {/* O motivo à vista, e não só no title: no tablet não há mouse para
+            passar por cima, e sem ele ninguém sabe a quem pedir o conserto. */}
+        {nota.erro ? (
+          <span className="whitespace-normal text-[11px] leading-snug text-muted-foreground">
+            {nota.erro}
+          </span>
+        ) : null}
       </span>
     )
   }

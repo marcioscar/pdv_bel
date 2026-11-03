@@ -160,6 +160,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       numero: nota.numero,
       serie: nota.serie,
       status: nota.status,
+      erro: nota.erro,
       chave: nota.chave,
       criadaEm: nota.criadaEm.toISOString(),
       valorTotal: nota.valorTotal,
@@ -414,6 +415,11 @@ export default function NotasEmitidas({ loaderData }: Route.ComponentProps) {
                     )}
                     {nota.serie ? (
                       <span className="block text-[11px] text-muted-foreground">série {nota.serie}</span>
+                    ) : null}
+                    {nota.erro && (nota.status === "erro_autorizacao" || nota.status === "denegado") ? (
+                      <span className="mt-0.5 block max-w-64 whitespace-normal text-[11px] leading-snug text-destructive">
+                        {nota.erro}
+                      </span>
                     ) : null}
                   </td>
                   <td className="px-2 py-2.5">
