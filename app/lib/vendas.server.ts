@@ -1134,7 +1134,8 @@ export const VENDA_QUE_CONTA: Prisma.VendaWhereInput = {
 
 export const VENDAS_POR_PAGINA = 50
 
-export type SituacaoFiltrada = "todas" | "validas" | "canceladas"
+/** "pixNaoConferido": o Pix antecipado válido que o escritório ainda não achou no extrato. */
+export type SituacaoFiltrada = "todas" | "validas" | "canceladas" | "pixNaoConferido"
 
 export type FiltroDeNota = "" | "sem" | "com"
 
@@ -1222,7 +1223,9 @@ export function lerFiltroVendas(url: URL, lojasPermitidas: string[]): FiltroVend
     valor: texto("valor").slice(0, 15),
     nota: texto("nota") === "sem" || texto("nota") === "com" ? (texto("nota") as FiltroDeNota) : "",
     situacao:
-      situacao === "validas" || situacao === "canceladas" ? situacao : "todas",
+      situacao === "validas" || situacao === "canceladas" || situacao === "pixNaoConferido"
+        ? situacao
+        : "todas",
     pagina: Math.max(1, Math.trunc(Number(params.get("pagina"))) || 1),
   }
 }
@@ -1352,6 +1355,12 @@ export async function consultarVendas(filtro: FiltroVendas) {
 
   if (filtro.situacao === "validas") conteudo.push(NAO_CANCELADA)
   if (filtro.situacao === "canceladas") conteudo.push({ NOT: NAO_CANCELADA })
+  if (filtro.situacao === "pixNaoConferido") {
+    conteudo.push(NAO_CANCELADA, { forma: FORMA_PIX_ANTECIPADO }, {
+      // Campo ausente não é null no Mongo: as duas formas de "sem conferência".
+      OR: [{ pixConferidoEm: null }, { pixConferidoEm: { isSet: false } }],
+    })
+  }
 
   const condicoes: Prisma.VendaWhereInput[] = [
     { criadaEm: { gte: inicioDoDia(filtro.de), lt: depoisDoDia(filtro.ate) } },

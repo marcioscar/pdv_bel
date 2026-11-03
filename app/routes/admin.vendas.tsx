@@ -76,6 +76,8 @@ const SITUACOES = [
   { id: "todas", rotulo: "Todas" },
   { id: "validas", rotulo: "Só válidas" },
   { id: "canceladas", rotulo: "Só canceladas" },
+  // Atalho do escritório: o Pix antecipado que ainda falta achar no extrato.
+  { id: "pixNaoConferido", rotulo: "Pix antecipado não conferido" },
 ] as const
 
 export default function AdminVendas({ loaderData }: Route.ComponentProps) {
@@ -231,7 +233,7 @@ export default function AdminVendas({ loaderData }: Route.ComponentProps) {
             onChange={(e) =>
               aplicar({ situacao: e.target.value as FiltroVendas["situacao"] })
             }
-            className={cn(ESTILO_CAMPO, "w-36")}
+            className={cn(ESTILO_CAMPO, "min-w-36")}
           >
             {SITUACOES.map((situacao) => (
               <option key={situacao.id} value={situacao.id}>
