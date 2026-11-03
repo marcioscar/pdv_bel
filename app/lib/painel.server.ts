@@ -2,6 +2,7 @@ import type { Prisma } from "@prisma/client"
 
 import { curvaAbc as abcDoSistemaAntigo } from "~/lib/abc.server"
 import { db } from "~/lib/db.server"
+import { depoisDoDia, emDia, inicioDoDia } from "~/lib/dia"
 import { arredondar } from "~/lib/moeda"
 import { NAO_CANCELADA, NAO_E_TRANSFERENCIA } from "~/lib/vendas.server"
 
@@ -21,27 +22,28 @@ function vendasValendo(lojas: string[], criadaEm: Prisma.DateTimeFilter): Prisma
   return { AND: [{ loja: { in: lojas }, criadaEm }, NAO_CANCELADA, NAO_E_TRANSFERENCIA] }
 }
 
-const DIA_MS = 86_400_000
+/**
+ * O período do painel: do começo do dia `de` até o fim do dia `ate`, os dois
+ * como "2026-11-03". Um dia só é `de` igual a `ate`.
+ */
+export type PeriodoDoPainel = { de: string; ate: string }
 
-/** "2026-09-21" no fuso local, que é como o negócio conta o dia. */
-function diaLocal(d: Date) {
-  return new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 10)
+function noPeriodo({ de, ate }: PeriodoDoPainel): Prisma.DateTimeFilter {
+  return { gte: inicioDoDia(de), lt: depoisDoDia(ate) }
 }
 
 export type PontoDiario = { dia: string; porLoja: Record<string, number>; total: number }
 
 /** O faturamento dia a dia, por loja, no período pedido: a soma das vendas. */
-export async function faturamentoDiario(dias: number, lojas: string[]) {
-  const inicio = new Date(Date.now() - dias * DIA_MS)
-
+export async function faturamentoDiario(periodo: PeriodoDoPainel, lojas: string[]) {
   const vendas = await db.venda.findMany({
-    where: vendasValendo(lojas, { gte: inicio }),
+    where: vendasValendo(lojas, noPeriodo(periodo)),
     select: { criadaEm: true, loja: true, total: true },
   })
 
   const porDia = new Map<string, Map<string, number>>()
   for (const v of vendas) {
-    const dia = diaLocal(v.criadaEm)
+    const dia = emDia(v.criadaEm)
     if (!porDia.has(dia)) porDia.set(dia, new Map())
     const m = porDia.get(dia)!
     m.set(v.loja, (m.get(v.loja) ?? 0) + v.total)
@@ -53,8 +55,12 @@ export async function faturamentoDiario(dias: number, lojas: string[]) {
    * desenho podem estar a uma semana um do outro.
    */
   const pontos: PontoDiario[] = []
-  for (let i = dias - 1; i >= 0; i--) {
-    const dia = diaLocal(new Date(Date.now() - i * DIA_MS))
+  for (
+    let data = inicioDoDia(periodo.de);
+    data < depoisDoDia(periodo.ate);
+    data.setDate(data.getDate() + 1)
+  ) {
+    const dia = emDia(data)
     const m = porDia.get(dia) ?? new Map()
     const porLoja = Object.fromEntries(lojas.map((l) => [l, arredondar(m.get(l) ?? 0)]))
     pontos.push({
@@ -86,11 +92,9 @@ export async function curvaAbc(limite = 10) {
  * Aqui o volume é pequeno de propósito — é o que o PDV registrou desde que
  * entrou no ar. A tela diz isso em vez de fingir que o ranking é da rede.
  */
-export async function rankingsDoPdv(dias: number, lojas: string[]) {
-  const inicio = new Date(Date.now() - dias * DIA_MS)
-
+export async function rankingsDoPdv(periodo: PeriodoDoPainel, lojas: string[]) {
   const vendas = await db.venda.findMany({
-    where: vendasValendo(lojas, { gte: inicio }),
+    where: vendasValendo(lojas, noPeriodo(periodo)),
     select: { vendedorId: true, vendedorNome: true, clienteId: true, clienteNome: true, total: true },
   })
 

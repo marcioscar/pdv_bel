@@ -12,6 +12,8 @@ import {
   TabelaAbc,
 } from "~/components/painel/graficos"
 import { configDasLojas } from "~/components/painel/paleta"
+import { Campo, ESTILO_CAMPO } from "~/components/pdv/filtros"
+import { depoisDoDia, diaAtras, diaDeHoje, diaEmTexto, emDia, inicioDoDia } from "~/lib/dia"
 import { listarLojas } from "~/lib/lojas.server"
 import { moeda } from "~/lib/moeda"
 import { ehGerente, secoesAdminDoPapel } from "~/lib/permissoes"
@@ -28,12 +30,34 @@ export function meta(_: Route.MetaArgs) {
   return [{ title: "Painel — BrasSaco" }]
 }
 
-/** Períodos que o painel oferece. 30 dias abre: é o mês de trabalho. */
-const PERIODOS = [
-  { dias: 7, rotulo: "7 dias" },
-  { dias: 30, rotulo: "30 dias" },
-  { dias: 90, rotulo: "90 dias" },
-] as const
+const DIA = /^\d{4}-\d{2}-\d{2}$/
+/** Um ano e um dia: o gráfico diário desenha uma barra por dia do período. */
+const MAIOR_PERIODO = 366
+
+/**
+ * Os períodos prontos, calculados no servidor para a tela e o loader
+ * concordarem sobre qual está escolhido. "30 dias" abre: é o mês de trabalho.
+ */
+function atalhos() {
+  const hoje = new Date()
+  const inicioMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1)
+  const fimMesPassado = new Date(hoje.getFullYear(), hoje.getMonth(), 0)
+  const inicioMesPassado = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1)
+  return [
+    { rotulo: "Hoje", de: diaDeHoje(), ate: diaDeHoje() },
+    { rotulo: "Ontem", de: diaAtras(1), ate: diaAtras(1) },
+    { rotulo: "7 dias", de: diaAtras(6), ate: diaDeHoje() },
+    { rotulo: "30 dias", de: diaAtras(29), ate: diaDeHoje() },
+    { rotulo: "90 dias", de: diaAtras(89), ate: diaDeHoje() },
+    { rotulo: "Este mês", de: emDia(inicioMes), ate: diaDeHoje() },
+    { rotulo: "Mês passado", de: emDia(inicioMesPassado), ate: emDia(fimMesPassado) },
+  ]
+}
+
+/** Quantos dias o período cobre, contando as duas pontas. */
+function diasNoPeriodo(de: string, ate: string) {
+  return Math.round((depoisDoDia(ate).getTime() - inicioDoDia(de).getTime()) / 86_400_000)
+}
 
 export async function loader({ request }: Route.LoaderArgs) {
   const eu = await exigirUsuario(request)
@@ -49,8 +73,29 @@ export async function loader({ request }: Route.LoaderArgs) {
     throw redirect(secoesAdminDoPapel(eu.papel)[0]?.para ?? "/")
   }
 
-  const pedido = Number(new URL(request.url).searchParams.get("dias"))
-  const dias = PERIODOS.some((p) => p.dias === pedido) ? pedido : 30
+  /*
+   * O período vive na URL (`de` e `ate`), como nas outras telas de escritório:
+   * dá para recarregar e mandar o link. Faltando uma ponta, vale a outra — um
+   * dia só. Invertido, desinverte. Sem nada, os últimos 30 dias.
+   */
+  const url = new URL(request.url)
+  const deBruto = url.searchParams.get("de") ?? ""
+  const ateBruto = url.searchParams.get("ate") ?? ""
+  const temDe = DIA.test(deBruto)
+  const temAte = DIA.test(ateBruto)
+  let de = temDe ? deBruto : temAte ? ateBruto : diaAtras(29)
+  let ate = temAte ? ateBruto : temDe ? deBruto : diaDeHoje()
+  if (ate < de) [de, ate] = [ate, de]
+  // Mais de um ano vira um gráfico ilegível e uma consulta pesada: o período
+  // é encurtado a partir do fim, e a tela diz que foi.
+  let encurtado = false
+  if (diasNoPeriodo(de, ate) > MAIOR_PERIODO) {
+    const inicio = inicioDoDia(ate)
+    inicio.setDate(inicio.getDate() - (MAIOR_PERIODO - 1))
+    de = emDia(inicio)
+    encurtado = true
+  }
+  const periodo = { de, ate }
 
   /*
    * A ordem das lojas vem do cadastro (matriz, filial, depois as outras), e é
@@ -62,16 +107,16 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   const [resumo, diario, abc, rankings] = await Promise.all([
     resumoDoMes(lojas),
-    faturamentoDiario(dias, lojas),
+    faturamentoDiario(periodo, lojas),
     curvaAbc(10),
-    rankingsDoPdv(dias, lojas),
+    rankingsDoPdv(periodo, lojas),
   ])
 
-  return { eu, dias, lojas, resumo, diario, abc, rankings }
+  return { eu, periodo, encurtado, atalhos: atalhos(), lojas, resumo, diario, abc, rankings }
 }
 
 export default function AdminInicio({ loaderData }: Route.ComponentProps) {
-  const { eu, dias, lojas, resumo, diario, abc, rankings } = loaderData
+  const { eu, periodo, encurtado, atalhos, lojas, resumo, diario, abc, rankings } = loaderData
   const [params, setParams] = useSearchParams()
   const [tabelaAbc, setTabelaAbc] = useState(false)
 
@@ -92,6 +137,24 @@ export default function AdminInicio({ loaderData }: Route.ComponentProps) {
     .sort((a, b) => b.total - a.total)
   const maiorLoja = Math.max(...porLojaNoPeriodo.map((l) => l.total), 1)
 
+  /** "03/11/2026", ou "01/11/2026 a 03/11/2026" — o que os cartões repetem. */
+  const textoPeriodo =
+    periodo.de === periodo.ate
+      ? diaEmTexto(periodo.de)
+      : `${diaEmTexto(periodo.de)} a ${diaEmTexto(periodo.ate)}`
+  const atalhoAtivo = atalhos.find((a) => a.de === periodo.de && a.ate === periodo.ate)
+
+  function mudarPeriodo(mudanca: { de?: string; ate?: string }) {
+    const novos = new URLSearchParams(params)
+    novos.delete("dias")
+    const de = mudanca.de ?? periodo.de
+    const ate = mudanca.ate ?? periodo.ate
+    if (!de || !ate) return
+    novos.set("de", de)
+    novos.set("ate", ate)
+    setParams(novos, { preventScrollReset: true })
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex flex-wrap items-center gap-3 border-b border-border px-5 py-3">
@@ -102,25 +165,48 @@ export default function AdminInicio({ loaderData }: Route.ComponentProps) {
           registradas neste PDV
         </span>
 
-        <div className="ml-auto flex gap-1">
-          {PERIODOS.map((p) => (
-            <Button
-              key={p.dias}
-              type="button"
-              size="xs"
-              variant={dias === p.dias ? "default" : "outline"}
-              onClick={() => {
-                const novos = new URLSearchParams(params)
-                novos.set("dias", String(p.dias))
-                setParams(novos, { preventScrollReset: true })
-              }}
-              className="rounded-lg"
-            >
-              {p.rotulo}
-            </Button>
-          ))}
+        <div className="ml-auto flex flex-wrap items-end gap-2">
+          <Campo rotulo="De">
+            <input
+              type="date"
+              value={periodo.de}
+              max={periodo.ate}
+              onChange={(e) => mudarPeriodo({ de: e.target.value })}
+              className={ESTILO_CAMPO}
+            />
+          </Campo>
+          <Campo rotulo="Até">
+            <input
+              type="date"
+              value={periodo.ate}
+              min={periodo.de}
+              onChange={(e) => mudarPeriodo({ ate: e.target.value })}
+              className={ESTILO_CAMPO}
+            />
+          </Campo>
+          <div className="flex flex-wrap gap-1">
+            {atalhos.map((a) => (
+              <Button
+                key={a.rotulo}
+                type="button"
+                size="sm"
+                variant={atalhoAtivo?.rotulo === a.rotulo ? "default" : "outline"}
+                onClick={() => mudarPeriodo({ de: a.de, ate: a.ate })}
+                className="rounded-lg"
+              >
+                {a.rotulo}
+              </Button>
+            ))}
+          </div>
         </div>
       </div>
+
+      {encurtado ? (
+        <p className="border-b border-border bg-amber-500/5 px-5 py-1.5 text-xs text-amber-700 dark:text-amber-500">
+          O painel mostra no máximo {MAIOR_PERIODO} dias — o período começa em{" "}
+          {diaEmTexto(periodo.de)}.
+        </p>
+      ) : null}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
         {/* ---- Os números do mês ---- */}
@@ -142,9 +228,9 @@ export default function AdminInicio({ loaderData }: Route.ComponentProps) {
             apoio="faturamento ÷ vendas do PDV"
           />
           <Ficha
-            rotulo={`Faturamento em ${dias} dias`}
+            rotulo="Faturamento no período"
             valor={moeda(totalPeriodo)}
-            apoio={`${porLojaNoPeriodo[0]?.loja ?? "—"} lidera com ${moeda(porLojaNoPeriodo[0]?.total ?? 0)}`}
+            apoio={`${textoPeriodo} · ${porLojaNoPeriodo[0]?.loja ?? "—"} lidera com ${moeda(porLojaNoPeriodo[0]?.total ?? 0)}`}
           />
         </div>
 
@@ -152,13 +238,13 @@ export default function AdminInicio({ loaderData }: Route.ComponentProps) {
           {/* ---- Série diária ---- */}
           <Cartao
             titulo="Faturamento por dia"
-            apoio="a altura é o grupo; as faixas são as lojas"
+            apoio={`${textoPeriodo} · a altura é o grupo; as faixas são as lojas`}
           >
             <GraficoDiario pontos={diario} lojas={lojas} config={configLojas} />
           </Cartao>
 
           {/* ---- Comparação entre lojas ---- */}
-          <Cartao titulo="Por loja" apoio={`no período de ${dias} dias`}>
+          <Cartao titulo="Por loja" apoio={textoPeriodo}>
             <GraficoRanking
               config={configLojas}
               corPorNome
@@ -224,7 +310,7 @@ export default function AdminInicio({ loaderData }: Route.ComponentProps) {
 
         {/* ---- Vendedor e cliente, do PDV ---- */}
         <div className="mt-4 grid gap-4 md:grid-cols-2">
-          <Cartao titulo="Por vendedor" apoio={`vendas do PDV, ${dias} dias`}>
+          <Cartao titulo="Por vendedor" apoio={`vendas do PDV, ${textoPeriodo}`}>
             {rankings.vendedores.length === 0 ? (
               <Vazio>Nenhuma venda com vendedor informado neste período.</Vazio>
             ) : (
@@ -245,7 +331,7 @@ export default function AdminInicio({ loaderData }: Route.ComponentProps) {
             ) : null}
           </Cartao>
 
-          <Cartao titulo="Maiores clientes" apoio={`vendas do PDV, ${dias} dias`}>
+          <Cartao titulo="Maiores clientes" apoio={`vendas do PDV, ${textoPeriodo}`}>
             {rankings.clientes.length === 0 ? (
               <Vazio>Nenhuma venda com cliente vinculado neste período.</Vazio>
             ) : (
