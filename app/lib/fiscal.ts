@@ -20,6 +20,8 @@ import { FORMA_MISTA, pagamentosDaVenda, type PagamentoDaVenda } from "~/lib/pdv
 export const CFOP_VENDA_INTERNA = "5102"
 /** A mesma venda, para fora do estado. */
 export const CFOP_VENDA_INTERESTADUAL = "6102"
+/** Venda para outro estado a quem não tem IE — o consumidor final de fora. */
+export const CFOP_VENDA_INTERESTADUAL_NAO_CONTRIBUINTE = "6108"
 /** Venda de mercadoria já com o ICMS retido por substituição tributária. */
 export const CFOP_VENDA_ST = "5405"
 /**
@@ -159,8 +161,14 @@ export function tributacaoDoItem(
     interestadual = false,
     transferencia = false,
     devolucao = false,
+    naoContribuinte = false,
   }: {
     interestadual?: boolean
+    /**
+     * Destinatário sem IE. Na venda para outro estado o CFOP é o 6108 (venda a
+     * não contribuinte), e não o 6102 — que diz que o comprador vai revender.
+     */
+    naoContribuinte?: boolean
     transferencia?: boolean
     /** A nota de ENTRADA que documenta a mercadoria que o cliente trouxe. */
     devolucao?: boolean
@@ -175,7 +183,9 @@ export function tributacaoDoItem(
     : transferencia
     ? loja.cfopTransferencia || CFOP_TRANSFERENCIA
     : interestadual
-      ? loja.cfopVendaInterestadual || CFOP_VENDA_INTERESTADUAL
+      ? naoContribuinte
+        ? CFOP_VENDA_INTERESTADUAL_NAO_CONTRIBUINTE
+        : loja.cfopVendaInterestadual || CFOP_VENDA_INTERESTADUAL
       : loja.cfopVendaInterna || CFOP_VENDA_INTERNA
 
   /*

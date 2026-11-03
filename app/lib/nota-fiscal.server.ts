@@ -241,7 +241,12 @@ export async function emitirDaVenda(
 
   const items = venda.itens.map((item, i) => {
     const produto = porId.get(item.produtoId)!
-    const tributacao = tributacaoDoItem(produto, loja, { interestadual, transferencia })
+    const tributacao = tributacaoDoItem(produto, loja, {
+      interestadual,
+      transferencia,
+      // NF-e para quem não tem IE; a NFC-e nunca é interestadual.
+      naoContribuinte: modelo === "nfe" && indicadorDeIe(cliente?.inscricaoEstadual ?? null) === 9,
+    })
 
     return {
       numero_item: i + 1,
@@ -381,7 +386,7 @@ export async function emitirDaVenda(
           telefone_destinatario:
             cliente!.ddd && cliente!.telefone ? `${cliente!.ddd}${cliente!.telefone}` : undefined,
           email_destinatario: cliente!.email || undefined,
-          consumidor_final: documentoCliente.length === 14 ? 0 : 1,
+          consumidor_final: consumidorFinal(cliente!.inscricaoEstadual),
         }
 
   const ambiente = ambienteFocus()
@@ -438,11 +443,26 @@ export async function emitirDaVenda(
   }
 }
 
-/** 1 contribuinte com IE, 2 isento, 9 não contribuinte (o consumidor comum). */
+/**
+ * 1 contribuinte com IE, 9 não contribuinte. O 2 ("contribuinte isento") NÃO
+ * sai mais: a SEFAZ do DF e a de SP o recusam ("não permite Contribuinte Isento
+ * de Inscrição Estadual"), e quem é isento de IE, para a nota, é não
+ * contribuinte — o "ISENTO" do cadastro vira 9, sem IE.
+ */
 function indicadorDeIe(inscricao: string | null) {
-  if (!inscricao) return 9
-  if (inscricao === "ISENTO") return 2
+  if (!inscricao || inscricao === "ISENTO") return 9
   return 1
+}
+
+/**
+ * Consumidor final segue o indicador, e não o tipo de documento: empresa sem IE
+ * (igreja, associação, prestador de serviço) é não contribuinte, e a SEFAZ
+ * recusa não contribuinte que não seja consumidor final ("Operação com não
+ * contribuinte deve indicar operação com consumidor final"). Só quem tem IE
+ * compra para revender.
+ */
+function consumidorFinal(inscricao: string | null) {
+  return indicadorDeIe(inscricao) === 1 ? 0 : 1
 }
 
 /**
@@ -745,7 +765,7 @@ export async function emitirDaDevolucao(
           municipio_destinatario: cliente!.cidade,
           uf_destinatario: cliente!.uf,
           cep_destinatario: cliente!.cep,
-          consumidor_final: documento.length === 14 ? 0 : 1,
+          consumidor_final: consumidorFinal(cliente!.inscricaoEstadual),
         }
       })()
 
