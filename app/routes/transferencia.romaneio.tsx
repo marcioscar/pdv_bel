@@ -14,9 +14,9 @@ import { faltaDoItem } from "~/lib/transferencias"
  * depois vai ao sistema lançar. Um romaneio que já viesse com as duas colunas
  * preenchidas seria um papel para assinar sem ler — que é como some mercadoria.
  *
- * Sai em duas vias na mesma folha: uma fica com quem entrega, outra com quem
- * recebe. Quando aparece divergência três dias depois, as duas vias são a única
- * coisa que existe fora do sistema.
+ * Sai em UMA via, que viaja com a carga e volta assinada (pedido do Marcio,
+ * 03/11/2026). Eram duas na mesma folha, uma para cada ponta, e a segunda
+ * sobrava: a conferência fica registrada no sistema.
  */
 export async function loader({ params, request }: Route.LoaderArgs) {
   const eu = await exigirUsuario(request)
@@ -126,10 +126,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     font-size: 10.5px; line-height: 1.3;
   }
 
-  /* Duas vias na mesma folha, separadas por uma linha de corte: uma fica com
-     quem entrega e a outra com quem recebe, sem gastar duas folhas. */
   .via { padding-bottom: 5mm; }
-  .via + .via { border-top: 1px dashed #666; padding-top: 5mm; }
 
   .topo { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
   h1 { font-size: 15px; margin: 0; }
@@ -182,8 +179,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 </style>
 </head>
 <body>
-  ${via("Via de quem entrega")}
-  ${via("Via de quem recebe")}
+  ${via("Acompanha a carga")}
 </body>
 </html>`
 
