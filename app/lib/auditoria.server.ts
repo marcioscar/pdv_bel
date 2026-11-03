@@ -68,7 +68,7 @@ export async function auditoriaDoCaixa(
     for (const p of pagamentosDaVenda(v)) {
       if (p.forma === "debito") linha.debito += p.valor
       if (p.forma === "credito") linha.credito += p.valor
-      if (p.forma === "pix") linha.pix += p.valor
+      if (p.forma === "pix" || p.forma === "antecipado") linha.pix += p.valor
       if (p.forma === "dinheiro") linha.dinheiro += p.valor
     }
     linha.vendas++

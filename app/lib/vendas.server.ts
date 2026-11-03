@@ -35,6 +35,7 @@ import {
   dividirParcelas,
   ehTransferenciaEntreLojas,
   FORMA_MISTA,
+  FORMA_PIX_ANTECIPADO,
   FORMA_PIX_ENTREGA,
   FORMA_TRANSFERENCIA,
   FORMAS_COMBINAVEIS,
@@ -78,6 +79,8 @@ export type PedidoRecebido = {
   cpfNaNota: string | null
   /** "nfce" ou "nfe" escolhido na conferência; null deixa o padrão decidir. */
   modeloNota?: "nfce" | "nfe" | null
+  /** Pix antecipado: quem pagou, como o vendedor viu no comprovante. */
+  pixPagador?: string | null
   /**
    * A mercadoria que o cliente trouxe de volta no fechamento desta compra — a
    * troca no balcão. O valor abate o que se paga; os preços vêm da tela mas são
@@ -235,6 +238,8 @@ export function lerPedido(bruto: unknown): PedidoRecebido | null {
     clienteId,
     cpfNaNota,
     modeloNota: corpo.modeloNota === "nfe" || corpo.modeloNota === "nfce" ? corpo.modeloNota : null,
+    pixPagador:
+      typeof corpo.pixPagador === "string" ? corpo.pixPagador.trim().slice(0, 120) || null : null,
     devolucao: lerDevolucao(corpo.devolucao),
     condicao: typeof corpo.condicao === "string" ? corpo.condicao : null,
     // Aceito como texto e conferido contra o banco na gravação: aqui só se
@@ -478,6 +483,11 @@ async function validarVenda(
     return { ok: false, erro: "Forma de pagamento inválida" }
   }
   if (!pedido.loja) return { ok: false, erro: "Venda sem loja" }
+
+  // Sem o nome de quem pagou, o escritório não tem o que procurar no extrato.
+  if (pedido.forma === FORMA_PIX_ANTECIPADO && !pedido.pixPagador) {
+    return { ok: false, erro: "Pix antecipado: informe quem fez o Pix" }
+  }
 
   /**
    * Pix só existe com o txid que o Inter confirmou — e cada txid paga UMA venda.
@@ -1012,6 +1022,7 @@ async function gravarUmaVez(
         condicao,
         pixTxid: pedido.pixTxid ?? null,
         pixPagoEm: pedido.pixPagoEm ?? null,
+        pixPagador: pedido.forma === FORMA_PIX_ANTECIPADO ? (pedido.pixPagador ?? null) : null,
       },
     })
 
@@ -1244,6 +1255,33 @@ function agruparPorVendedor(
   return [...mapa.values()]
     .map((linha) => ({ ...linha, faturamento: arredondar(linha.faturamento) }))
     .sort((a, b) => b.faturamento - a.faturamento)
+}
+
+/**
+ * O escritório achou o Pix antecipado no extrato e marca a venda como conferida.
+ *
+ * Só marca, nunca desmarca: quem conferiu e quando é o rastro que importa se
+ * o dinheiro sumir depois. Venda de outra forma ou já conferida é recusada.
+ */
+export async function conferirPixAntecipado(
+  vendaId: string,
+  { por, lojasPermitidas }: { por: string; lojasPermitidas: string[] }
+): Promise<{ ok: true } | { ok: false; erro: string }> {
+  if (!OBJECT_ID.test(vendaId)) return { ok: false, erro: "Venda inválida" }
+  const venda = await db.venda.findUnique({
+    where: { id: vendaId },
+    select: { forma: true, loja: true, pixConferidoEm: true, canceladaEm: true },
+  })
+  if (!venda) return { ok: false, erro: "Venda não encontrada" }
+  if (!lojasPermitidas.includes(venda.loja)) return { ok: false, erro: `Venda da loja ${venda.loja}` }
+  if (venda.forma !== FORMA_PIX_ANTECIPADO) return { ok: false, erro: "Esta venda não é Pix antecipado" }
+  if (venda.pixConferidoEm) return { ok: false, erro: "Este Pix já foi conferido" }
+
+  await db.venda.update({
+    where: { id: vendaId },
+    data: { pixConferidoEm: new Date(), pixConferidoPor: por },
+  })
+  return { ok: true }
 }
 
 export type VendaConsultada = Awaited<

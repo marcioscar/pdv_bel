@@ -365,6 +365,15 @@ export const FORMAS_PAGAMENTO = [
    */
   { id: "entrega", rotulo: "Pix na entrega" },
   /*
+   * O cliente pagou na chave CNPJ antes — por telefone, pelo WhatsApp — e manda
+   * alguém buscar. Não há QR nem txid: o vendedor DECLARA quem pagou, a venda
+   * nasce paga, e fica "Pix não conferido" até o escritório achar o valor no
+   * extrato e marcar (decisão do Marcio, 03/11/2026). A chave CNPJ é de outro
+   * sistema e não avisa o PDV, então conferir automático não é possível.
+   * No fim da lista para não mudar o ⇧F das formas que já existiam.
+   */
+  { id: "antecipado", rotulo: "Pix antecipado" },
+  /*
    * A saída para outra loja da rede — QNE, NRT, SDS. Não é pagamento nenhum: o
    * dinheiro não entra, o estoque já foi movido pela transferência e a nota sai
    * só para acompanhar a mercadoria na estrada.
@@ -489,6 +498,9 @@ export function ehTransferenciaEntreLojas(forma: string) {
 export const FORMAS_DE_CAIXA = FORMAS_PAGAMENTO.filter(
   (f) => f.id !== FORMA_TRANSFERENCIA && f.id !== FORMA_MISTA
 )
+
+/** Pix pago na chave antes de vir buscar: declarado no caixa, conferido depois. */
+export const FORMA_PIX_ANTECIPADO = "antecipado"
 
 /** A forma do Pix na entrega: venda fechada, Pix com vencimento a receber. */
 export const FORMA_PIX_ENTREGA = "entrega"

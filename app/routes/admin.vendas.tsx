@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { useNavigation, useSearchParams } from "react-router"
+import { data, useFetcher, useNavigation, useSearchParams } from "react-router"
 import { FileText, Receipt, Search, X } from "lucide-react"
 
 import type { Route } from "./+types/admin.vendas"
@@ -15,12 +15,14 @@ import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import {
   CONDICOES_PAGAMENTO,
   FORMA_MISTA,
+  FORMA_PIX_ANTECIPADO,
   FORMAS_PAGAMENTO,
   formaGeraCobranca,
   rotuloDoPagamento,
 } from "~/lib/pdv"
 import { exigirGerente } from "~/lib/sessao.server"
 import {
+  conferirPixAntecipado,
   consultarVendas,
   lerFiltroVendas,
   type FiltroVendas,
@@ -54,6 +56,20 @@ export async function loader({ request }: Route.LoaderArgs) {
     lojas: lojas.filter((loja) => eu.lojasPermitidas.includes(loja.codigo)),
     ...consulta,
   }
+}
+
+/** Marcar o Pix antecipado como achado no extrato. */
+export async function action({ request }: Route.ActionArgs) {
+  const eu = await exigirGerente(request, "verVendasDaRede")
+  const form = await request.formData()
+  if (form.get("intencao") !== "conferirPix") {
+    return data({ ok: false as const, erro: "Ação desconhecida" }, { status: 400 })
+  }
+  const r = await conferirPixAntecipado(String(form.get("vendaId") ?? ""), {
+    por: eu.nome,
+    lojasPermitidas: eu.lojasPermitidas,
+  })
+  return r.ok ? { ok: true as const, erro: null } : data({ ok: false as const, erro: r.erro }, { status: 400 })
 }
 
 const SITUACOES = [
@@ -427,6 +443,18 @@ export default function AdminVendas({ loaderData }: Route.ComponentProps) {
  * caixa. Sem isso, uma venda em Pix verificada fica igual a uma só marcada como Pix.
  */
 function Pagamento({ venda }: { venda: VendaConsultada }) {
+  if (venda.forma === FORMA_PIX_ANTECIPADO) {
+    return venda.pixConferidoEm ? (
+      <Badge className="text-[10px]" title={`Conferido por ${venda.pixConferidoPor ?? "?"}`}>
+        conferido
+      </Badge>
+    ) : (
+      <Badge variant="outline" className="border-amber-500/60 text-[10px] text-amber-700 dark:text-amber-400">
+        não conferido
+      </Badge>
+    )
+  }
+
   if (venda.forma === "pix" || (venda.forma === FORMA_MISTA && venda.pixTxid)) {
     return venda.pixPagoEm ? (
       <span className="flex items-center gap-1.5">
@@ -506,6 +534,8 @@ function Detalhe({
         />
         <Linha rotulo="Forma" valor={condicao ? `${forma} · ${condicao.rotulo}` : forma} />
       </dl>
+
+      {venda.forma === FORMA_PIX_ANTECIPADO ? <ConferenciaDoPix venda={venda} /> : null}
 
       <h3 className="mt-4 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
         {venda.itens.length} {venda.itens.length === 1 ? "item" : "itens"}
@@ -596,6 +626,47 @@ function Detalhe({
         <Receipt className="size-3.5" aria-hidden /> Abrir cupom
       </a>
     </aside>
+  )
+}
+
+/**
+ * O Pix antecipado foi DECLARADO no caixa: quem pagou, e só. Aqui o escritório
+ * procura no extrato da chave CNPJ — valor, dia, nome — e marca quando acha.
+ */
+function ConferenciaDoPix({ venda }: { venda: VendaConsultada }) {
+  const fetcher = useFetcher<typeof action>()
+  const enviando = fetcher.state !== "idle"
+  const erro = fetcher.data && !fetcher.data.ok ? fetcher.data.erro : null
+
+  return (
+    <div
+      className={cn(
+        "mt-3 rounded-lg border p-3 text-xs",
+        venda.pixConferidoEm ? "border-border bg-muted/30" : "border-amber-500/50 bg-amber-500/5",
+      )}
+    >
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        Pix antecipado
+      </div>
+      <div className="mt-1">
+        Pago por <b>{venda.pixPagador ?? "—"}</b> · {moeda(venda.total - (venda.creditoUsado ?? 0))}
+      </div>
+      {venda.pixConferidoEm ? (
+        <div className="mt-1 text-muted-foreground">
+          Conferido no extrato por {venda.pixConferidoPor ?? "?"} em{" "}
+          {new Date(venda.pixConferidoEm).toLocaleString("pt-BR")}
+        </div>
+      ) : venda.canceladaEm ? null : (
+        <fetcher.Form method="post" className="mt-2">
+          <input type="hidden" name="intencao" value="conferirPix" />
+          <input type="hidden" name="vendaId" value={venda.id} />
+          <Button type="submit" size="sm" disabled={enviando} className="w-full rounded-lg">
+            {enviando ? "Marcando…" : "Achei no extrato — marcar como conferido"}
+          </Button>
+          {erro ? <p className="mt-1.5 text-destructive">{erro}</p> : null}
+        </fetcher.Form>
+      )}
+    </div>
   )
 }
 

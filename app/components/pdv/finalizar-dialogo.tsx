@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  BadgeCheck,
   Banknote,
   Bike,
   CalendarClock,
@@ -60,6 +61,7 @@ const ICONES: Record<
   prazo: CalendarClock,
   link: Link2,
   entrega: Bike,
+  antecipado: BadgeCheck,
   transferencia: Truck,
   misto: Split,
 };
@@ -103,6 +105,9 @@ type Props = {
   /** NFC-e ou NF-e escolhido no F7; null deixa o padrão de `modeloDaVenda`. */
   modeloNota: ModeloNota | null;
   onModeloNotaChange: (modelo: ModeloNota | null) => void;
+  /** Pix antecipado: o nome de quem fez o Pix, como está no comprovante. */
+  pixPagador: string;
+  onPixPagadorChange: (nome: string) => void;
   /**
    * O que o cliente trouxe de volta nesta compra (a troca no balcão). O valor
    * abate o total antes do crédito; o servidor grava a devolução com a venda.
@@ -203,6 +208,8 @@ export function FinalizarDialogo({
   onEmitirNotaChange,
   modeloNota,
   onModeloNotaChange,
+  pixPagador,
+  onPixPagadorChange,
   devolucao,
   onDevolucaoChange,
   indiceProdutos,
@@ -365,6 +372,9 @@ export function FinalizarDialogo({
   // Pix na entrega também: a cobrança com vencimento exige o devedor.
   const naEntrega = forma === "entrega";
   const faltaCliente = (aPrazo || naEntrega) && cliente === null;
+  // Pix antecipado: sem o nome de quem pagou, o escritório não acha no extrato.
+  const antecipado = forma === "antecipado";
+  const faltaPagador = antecipado && pixPagador.trim() === "";
 
   /**
    * O nome é resolvido aqui na tela, contra a lista que veio pronta, só para o
@@ -1449,6 +1459,38 @@ export function FinalizarDialogo({
         </>
         )}
 
+        {antecipado ? (
+          <div
+            className={cn(
+              "mt-3 rounded-lg border p-3",
+              faltaPagador ? "border-destructive/50 bg-destructive/5" : "border-border bg-muted/30",
+            )}
+          >
+            <label
+              htmlFor="pix-pagador"
+              className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
+            >
+              Quem fez o Pix
+            </label>
+            <Input
+              id="pix-pagador"
+              type="search"
+              autoFocus
+              value={pixPagador}
+              onChange={(e) => onPixPagadorChange(e.target.value)}
+              placeholder="nome como aparece no comprovante"
+              autoComplete="off"
+              data-1p-ignore=""
+              data-lpignore="true"
+              className="mt-1 h-9 rounded-lg"
+            />
+            <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
+              Confira no comprovante o valor, a data e se foi para a chave CNPJ da loja. A venda fica
+              como Pix não conferido até o escritório achar no extrato.
+            </p>
+          </div>
+        ) : null}
+
         {recebeDinheiro ? (
           <div className="mt-3 flex items-center gap-3 rounded-lg border border-border bg-muted/30 p-3">
             <label
@@ -1507,6 +1549,7 @@ export function FinalizarDialogo({
             faltaDinheiro ||
             faltaDivisao ||
             faltaCliente ||
+            faltaPagador ||
             faltaVendedor ||
             cpfInvalido ||
             erroDevolucao !== null

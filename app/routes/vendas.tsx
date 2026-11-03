@@ -934,7 +934,14 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                           {/* Distingue pagamento CONFIRMADO pelo banco de pagamento
                               apenas declarado no caixa. Sem isso, uma venda em Pix
                               verificada ficava igual a uma só marcada como Pix. */}
-                          {venda.forma === "pix" || (venda.forma === FORMA_MISTA && venda.pixTxid) ? (
+                          {venda.forma === "antecipado" ? (
+                            <span
+                              className="text-xs text-muted-foreground"
+                              title={`Pago por ${venda.pixPagador ?? "?"} — declarado no caixa`}
+                            >
+                              {venda.pixConferidoEm ? "conferido" : "não conferido"}
+                            </span>
+                          ) : venda.forma === "pix" || (venda.forma === FORMA_MISTA && venda.pixTxid) ? (
                             venda.pixPagoEm ? (
                               <span className="flex items-center gap-1.5">
                                 <Badge className="text-[10px]">pago</Badge>

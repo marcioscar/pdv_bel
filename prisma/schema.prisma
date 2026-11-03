@@ -597,6 +597,12 @@ model Venda {
   /// que não é Pix. A unicidade vem do txid ser aleatório de 35 caracteres.
   pixTxid        String?
   pixPagoEm      DateTime?
+  /// Pix antecipado: o cliente pagou na chave CNPJ antes de vir buscar, e o
+  /// vendedor fechou declarando quem pagou. Não há txid nem confirmação do
+  /// banco — quem confere é o escritório, depois, no extrato.
+  pixPagador       String?
+  pixConferidoEm   DateTime?
+  pixConferidoPor  String?
   subtotal Float
   desconto Float      @default(0)
   /// O acréscimo do prazo do boleto (`acrescimo` da condição, em reais), já

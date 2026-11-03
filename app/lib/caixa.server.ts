@@ -120,7 +120,8 @@ export async function resumoDoDia(loja: string, dia: string) {
     creditoEmDinheiro: 0,
     creditoDoCliente: arredondar(vendas.reduce((a, v) => a + (v.creditoUsado ?? 0), 0)),
     esperado: arredondar(abertura + vendasDinheiro - sangrias + suprimentos - devolucoes),
-    vendasPix: por("pix"),
+    // O Pix antecipado também caiu na conta, e não na gaveta: mesma linha do Pix.
+    vendasPix: arredondar(por("pix") + por("antecipado")),
     vendasDebito: por("debito"),
     vendasCredito: por("credito"),
     // O Pix na entrega é a receber como o boleto, e também não passa pela

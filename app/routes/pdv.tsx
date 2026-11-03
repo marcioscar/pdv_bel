@@ -1004,6 +1004,8 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
    * cliente: quem pede crédito da Nota Legal informa o CPF e vai embora.
    */
   const [cpfNaNota, setCpfNaNota] = useState("")
+  /** Pix antecipado: quem fez o Pix na chave, declarado pelo vendedor. */
+  const [pixPagador, setPixPagador] = useState("")
   const [erroFinalizacao, setErroFinalizacao] = useState<string | null>(null)
   const [ajudaAberta, setAjudaAberta] = useState(false)
   const [aviso, setAviso] = useState<Aviso>(null)
@@ -1331,13 +1333,14 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           emitirNota,
           modeloNota,
           cpfNaNota,
+          pixPagador: forma === "antecipado" ? pixPagador : null,
         },
         { method: "post", encType: "application/json" }
       )
     },
     [
       autorizacaoId, cliente, cpfNaNota, creditoDoSaldo, devolucaoDoPedido, divisao, emitirNota,
-      fetcher, forma, modeloNota,
+      fetcher, forma, modeloNota, pixPagador,
       gravando, totais.desconto, venda.itens, vendedorCodigo,
     ]
   )
@@ -1994,6 +1997,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     if (finalizando) {
       setEmitirNota(false)
       setModeloNota(null)
+      setPixPagador("")
     }
   }, [finalizando])
 
@@ -2103,6 +2107,10 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       setCondicaoAberta(true)
       return
     }
+    if (forma === "antecipado" && !pixPagador.trim()) {
+      setErroFinalizacao("Pix antecipado: informe quem fez o Pix")
+      return
+    }
     // Pix na entrega: a cobrança com vencimento precisa do devedor.
     if (forma === "entrega" && !cliente) {
       setErroFinalizacao("Pix na entrega exige cliente — F6 escolhe aqui mesmo")
@@ -2122,6 +2130,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     forma,
     gerarPix,
     gravando,
+    pixPagador,
     recebidoTexto,
     totais.desconto,
     totais.total,
@@ -2665,6 +2674,8 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           emitirNota={emitirNota}
           onEmitirNotaChange={setEmitirNota}
           modeloNota={modeloNota}
+          pixPagador={pixPagador}
+          onPixPagadorChange={setPixPagador}
           onModeloNotaChange={setModeloNota}
           devolucao={devolucao}
           onDevolucaoChange={(nova) => {
