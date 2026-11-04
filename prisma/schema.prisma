@@ -1265,8 +1265,13 @@ model AlteracaoDePreco {
   operador   String
   operadorId String @db.ObjectId
 
+  /// A nota de entrada em que o preço foi refeito, quando foi lá — para a nota
+  /// já processada mostrar o preço que ela pôs no sistema.
+  notaFiscalRecebidaId String? @db.ObjectId
+
   @@index([produtoId, criadoEm])
   @@index([criadoEm])
+  @@index([notaFiscalRecebidaId])
   @@map("alteracoes_preco")
 }
 

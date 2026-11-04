@@ -202,7 +202,8 @@ export async function atualizarProduto(
  */
 export async function alterarPrecos(
   itens: { produtoId: string; preco: number }[],
-  quem: { nome: string; id: string }
+  quem: { nome: string; id: string },
+  origem: { notaFiscalRecebidaId?: string } = {}
 ): Promise<{ ok: true; alterados: number } | { ok: false; erro: string }> {
   for (const item of itens) {
     if (!OBJECT_ID.test(item.produtoId)) return { ok: false, erro: "Produto inválido" }
@@ -219,7 +220,17 @@ export async function alterarPrecos(
     if (existente.preco === novo) continue
     await db.produto.update({ where: { id: produtoId }, data: { preco: novo } })
     await db.alteracaoDePreco.create({
-      data: { produtoId, de: existente.preco, para: novo, operador: quem.nome, operadorId: quem.id },
+      data: {
+        produtoId,
+        de: existente.preco,
+        para: novo,
+        operador: quem.nome,
+        operadorId: quem.id,
+        notaFiscalRecebidaId:
+          origem.notaFiscalRecebidaId && OBJECT_ID.test(origem.notaFiscalRecebidaId)
+            ? origem.notaFiscalRecebidaId
+            : null,
+      },
     })
     alterados++
   }

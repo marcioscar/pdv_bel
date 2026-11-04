@@ -165,6 +165,8 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   const freteEditavel =
     (temItens || manual) && nota.situacao !== "recebida" && jaLancadosPelaNota.length === 0
 
+  const entrouNoSistema = await oQueEntrouNoSistema(nota.id, itensDaNota)
+
   return {
     nota,
     itensDaNota,
@@ -184,6 +186,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
       unidade: porProduto.get(m.produtoId)?.unidade ?? "",
     })),
     jaLancadosPelaNota,
+    entrouNoSistema,
     pedidos: pedidos.map((p) => ({
       id: p.id,
       numero: p.numero,
@@ -220,7 +223,94 @@ type RespostaAction =
   | RespostaCiencia
   | RespostaFrete
 
-export async function action({ request }: Route.ActionArgs): Promise<RespostaAction> {
+/**
+ * O que a nota pôs no sistema, produto a produto: em que loja, quanto, a que
+ * custo, e o preço de venda que ficou. É a resposta a "o que aconteceu com essa
+ * nota?" depois de processada — o XML diz o que o fornecedor mandou, e isto
+ * diz como entrou aqui.
+ *
+ * O preço vem do histórico de alterações. As feitas na tela da nota ficam
+ * ligadas a ela (desde 04/11/2026); para as anteriores, vale a alteração do
+ * mesmo produto nas horas seguintes à entrada, marcada como aproximada.
+ */
+async function oQueEntrouNoSistema(
+  notaId: string,
+  itensDaNota: { descricao: string | null; codigo: string | null }[] | null
+) {
+  const movimentos = await db.movimentoEstoque.findMany({
+    where: { notaFiscalRecebidaId: notaId, tipo: "entrada" },
+    select: {
+      produtoId: true,
+      loja: true,
+      quantidade: true,
+      custoUnitario: true,
+      criadoEm: true,
+      operador: true,
+      notaFiscalItens: true,
+    },
+    orderBy: { criadoEm: "asc" },
+  })
+  if (movimentos.length === 0) return []
+
+  const ids = [...new Set(movimentos.map((m) => m.produtoId))]
+  const [produtos, ligadas] = await Promise.all([
+    db.produto.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, codigo: true, descricao: true, unidade: true, preco: true },
+    }),
+    db.alteracaoDePreco.findMany({
+      where: { notaFiscalRecebidaId: notaId },
+      orderBy: { criadoEm: "asc" },
+      select: { produtoId: true, de: true, para: true },
+    }),
+  ])
+  const porProduto = new Map(produtos.map((p) => [p.id, p]))
+
+  // A alteração da nota, por produto: a primeira diz de onde saiu, a última
+  // para onde foi (o gerente pode ter ajustado duas vezes).
+  const precoPorProduto = new Map<string, { de: number; para: number; aproximado: boolean }>()
+  for (const a of ligadas) {
+    const atual = precoPorProduto.get(a.produtoId)
+    precoPorProduto.set(a.produtoId, { de: atual?.de ?? a.de, para: a.para, aproximado: false })
+  }
+
+  const semLigacao = ids.filter((id) => !precoPorProduto.has(id))
+  if (semLigacao.length > 0) {
+    const inicio = new Date(movimentos[0].criadoEm.getTime() - 10 * 60_000)
+    const fim = new Date(movimentos[movimentos.length - 1].criadoEm.getTime() + 3 * 60 * 60_000)
+    const proximas = await db.alteracaoDePreco.findMany({
+      where: { produtoId: { in: semLigacao }, criadoEm: { gte: inicio, lte: fim } },
+      orderBy: { criadoEm: "asc" },
+      select: { produtoId: true, de: true, para: true },
+    })
+    for (const a of proximas) {
+      const atual = precoPorProduto.get(a.produtoId)
+      precoPorProduto.set(a.produtoId, { de: atual?.de ?? a.de, para: a.para, aproximado: true })
+    }
+  }
+
+  return movimentos.map((m) => {
+    const produto = porProduto.get(m.produtoId)
+    const daNota = m.notaFiscalItens
+      .map((i) => itensDaNota?.[i]?.descricao)
+      .filter((d): d is string => Boolean(d))
+    return {
+      codigo: produto?.codigo ?? "",
+      descricao: produto?.descricao ?? "Produto removido",
+      unidade: produto?.unidade ?? "",
+      itemDaNota: daNota.join(" · ") || null,
+      loja: m.loja,
+      quantidade: m.quantidade,
+      custoUnitario: m.custoUnitario,
+      precoAtual: produto?.preco ?? null,
+      alteracaoDePreco: precoPorProduto.get(m.produtoId) ?? null,
+      entradaEm: m.criadoEm.toISOString(),
+      operador: m.operador,
+    }
+  })
+}
+
+export async function action({ request, params }: Route.ActionArgs): Promise<RespostaAction> {
   const eu = await exigirGerente(request, "buscarNotaFiscal")
 
   const form = await request.formData()
@@ -267,7 +357,12 @@ export async function action({ request }: Route.ActionArgs): Promise<RespostaAct
     } catch {
       return { intencao: "atualizarPrecos", ok: false, erro: "Dados inválidos" }
     }
-    const resultado = await alterarPrecos(itens, { nome: gerente.nome, id: gerente.id })
+    const resultado = await alterarPrecos(
+      itens,
+      { nome: gerente.nome, id: gerente.id },
+      // A nota da URL: o preço refeito aqui fica ligado a ela no histórico.
+      { notaFiscalRecebidaId: params.notaId }
+    )
     return resultado.ok
       ? { intencao: "atualizarPrecos", ok: true, alterados: resultado.alterados }
       : { intencao: "atualizarPrecos", ok: false, erro: resultado.erro }
@@ -336,6 +431,7 @@ export default function DetalheNotaDeEntrada({ loaderData }: Route.ComponentProp
     temItens,
     manual,
     lancadosAMao,
+    entrouNoSistema,
     jaLancadosPelaNota,
     pedidos,
     pedidoEscolhidoId,
@@ -482,6 +578,8 @@ export default function DetalheNotaDeEntrada({ loaderData }: Route.ComponentProp
             />
           </div>
         ) : null}
+
+        {entrouNoSistema.length > 0 ? <EntrouNoSistema linhas={entrouNoSistema} /> : null}
 
         <div className="rounded-lg border p-4">
           <GerarDespesas
@@ -667,6 +765,119 @@ function SoResumo({
   )
 }
 
+/**
+ * A nota já processada: produto do sistema, loja, quantidade, custo gravado na
+ * entrada e o preço de venda — o que mudou na entrada e o que vale hoje.
+ */
+function EntrouNoSistema({
+  linhas,
+}: {
+  linhas: {
+    codigo: string
+    descricao: string
+    unidade: string
+    itemDaNota: string | null
+    loja: string
+    quantidade: number
+    custoUnitario: number | null
+    precoAtual: number | null
+    alteracaoDePreco: { de: number; para: number; aproximado: boolean } | null
+    entradaEm: string
+    operador: string
+  }[]
+}) {
+  const totalCusto = linhas.reduce((a, l) => a + (l.custoUnitario ?? 0) * l.quantidade, 0)
+  const temAproximado = linhas.some((l) => l.alteracaoDePreco?.aproximado)
+
+  return (
+    <div className="rounded-lg border p-4">
+      <h3 className="text-base font-semibold">O que entrou no sistema</h3>
+      <p className="mt-0.5 text-xs text-muted-foreground">
+        Os produtos do cadastro em que cada item da nota entrou, com o custo gravado no estoque e o
+        preço de venda.
+      </p>
+      <div className="mt-3 overflow-x-auto rounded-lg border">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b bg-muted/40 text-left text-muted-foreground">
+              <th className="px-2 py-1.5">Produto no sistema</th>
+              <th className="px-2 py-1.5">Loja</th>
+              <th className="px-2 py-1.5 text-right">Qtd</th>
+              <th className="px-2 py-1.5 text-right">Custo unit.</th>
+              <th className="px-2 py-1.5 text-right">Preço na entrada</th>
+              <th className="px-2 py-1.5 text-right">Preço hoje</th>
+              <th className="px-2 py-1.5">Entrada</th>
+            </tr>
+          </thead>
+          <tbody>
+            {linhas.map((l, i) => (
+              <tr key={i} className="border-b align-top last:border-0">
+                <td className="px-2 py-1.5">
+                  <span className="font-mono text-muted-foreground">{l.codigo}</span> {l.descricao}
+                  {l.itemDaNota ? (
+                    <span className="block text-[11px] text-muted-foreground">
+                      na nota: {l.itemDaNota}
+                    </span>
+                  ) : null}
+                </td>
+                <td className="px-2 py-1.5">{l.loja}</td>
+                <td className="px-2 py-1.5 text-right font-mono tabular-nums">
+                  {formatarQuantidade(l.quantidade)} {l.unidade}
+                </td>
+                <td className="px-2 py-1.5 text-right font-mono tabular-nums">
+                  {l.custoUnitario != null ? moeda(l.custoUnitario) : "—"}
+                </td>
+                <td className="px-2 py-1.5 text-right font-mono tabular-nums">
+                  {l.alteracaoDePreco ? (
+                    <span title={l.alteracaoDePreco.aproximado ? "Alteração do mesmo produto nas horas seguintes à entrada" : undefined}>
+                      <span className="text-muted-foreground line-through">{moeda(l.alteracaoDePreco.de)}</span>{" "}
+                      {moeda(l.alteracaoDePreco.para)}
+                      {l.alteracaoDePreco.aproximado ? "*" : ""}
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground">sem mudança</span>
+                  )}
+                </td>
+                <td className="px-2 py-1.5 text-right font-mono tabular-nums">
+                  {l.precoAtual != null ? moeda(l.precoAtual) : "—"}
+                </td>
+                <td className="px-2 py-1.5 text-muted-foreground">
+                  {new Date(l.entradaEm).toLocaleString("pt-BR", {
+                    day: "2-digit",
+                    month: "2-digit",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}{" "}
+                  · {l.operador}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr className="border-t bg-muted/20">
+              <td colSpan={3} className="px-2 py-1.5 font-medium">
+                {linhas.length} {linhas.length === 1 ? "lançamento" : "lançamentos"}
+              </td>
+              <td className="px-2 py-1.5 text-right font-mono font-medium tabular-nums">
+                {moeda(totalCusto)}
+              </td>
+              <td colSpan={3} className="px-2 py-1.5 text-[11px] text-muted-foreground">
+                custo total que entrou no estoque
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      {temAproximado ? (
+        <p className="mt-2 text-[11px] text-muted-foreground">
+          * Preço alterado antes de o sistema ligar a alteração à nota: é a mudança do mesmo
+          produto nas horas seguintes à entrada.
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
 /** Os itens de uma nota de resumo que foram lançados à mão, já recebidos. */
 function LancadosAMao({
   itens,
@@ -693,36 +904,10 @@ function LancadosAMao({
         {recebidoEm ? ` Entrada em ${new Date(recebidoEm).toLocaleString("pt-BR")}` : ""}
         {recebidoPor ? ` por ${recebidoPor}` : ""}.
       </p>
-      {itens.length > 0 ? (
-        <div className="mt-3 overflow-x-auto rounded-lg border">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b bg-muted/40 text-left text-muted-foreground">
-                <th className="px-2 py-1.5">Código</th>
-                <th className="px-2 py-1.5">Descrição</th>
-                <th className="px-2 py-1.5">Loja</th>
-                <th className="px-2 py-1.5 text-right">Qtd</th>
-                <th className="px-2 py-1.5 text-right">Custo unit.</th>
-              </tr>
-            </thead>
-            <tbody>
-              {itens.map((item, i) => (
-                <tr key={i} className="border-b last:border-0">
-                  <td className="px-2 py-1.5">{item.codigo}</td>
-                  <td className="px-2 py-1.5">{item.descricao}</td>
-                  <td className="px-2 py-1.5">{item.loja}</td>
-                  <td className="px-2 py-1.5 text-right">
-                    {formatarQuantidade(item.quantidade)} {item.unidade}
-                  </td>
-                  <td className="px-2 py-1.5 text-right">
-                    {item.custoUnitario != null ? moeda(item.custoUnitario) : "—"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : null}
+      <p className="mt-2 text-xs text-muted-foreground">
+        {itens.length} {itens.length === 1 ? "item lançado" : "itens lançados"} — os produtos, o custo e o
+        preço estão em “O que entrou no sistema”.
+      </p>
     </div>
   )
 }
