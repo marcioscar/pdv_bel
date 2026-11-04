@@ -150,10 +150,18 @@ export default function AdminFornecedores({ loaderData }: Route.ComponentProps) 
     )
   }, [busca, visiveis])
 
+  /*
+   * O foco vai ao primeiro campo quando o formulário ABRE (ou troca de
+   * fornecedor), não a cada tecla. Dependendo de `form` inteiro, o efeito
+   * rodava a cada letra digitada e puxava o cursor da razão social de volta
+   * para o código.
+   */
+  const formAberto = form !== null
+  const formDe = form?.id ?? null
   useEffect(() => {
-    if (form) primeiroCampo.current?.focus()
+    if (formAberto) primeiroCampo.current?.focus()
     else campoBusca.current?.focus()
-  }, [form])
+  }, [formAberto, formDe])
 
   useEffect(() => {
     if (!aviso) return

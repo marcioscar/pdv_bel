@@ -79,9 +79,13 @@ export default function AdminGrupos({ loaderData }: Route.ComponentProps) {
   const fetcher = useFetcher<typeof action>()
   const gravando = fetcher.state !== "idle"
 
+  // Foco no código quando o formulário ABRE, não a cada tecla: dependendo de
+  // `form` inteiro, digitar o nome devolvia o cursor para o código.
+  const formAberto = form !== null
+  const formDe = form?.id ?? null
   useEffect(() => {
-    if (form) primeiroCampo.current?.focus()
-  }, [form])
+    if (formAberto) primeiroCampo.current?.focus()
+  }, [formAberto, formDe])
 
   useEffect(() => {
     if (!aviso) return
