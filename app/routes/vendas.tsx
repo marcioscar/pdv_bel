@@ -522,11 +522,6 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
     [cancelando]
   )
 
-  const devolver = useCallback(
-    (vendaId: string) => navigate(`/vendas/${vendaId}/devolucao`),
-    [navigate]
-  )
-
   const pedirCancelamento = useCallback(() => {
     if (!ativa || cancelando) return
     // Espelha exigirGerente: o operador recebe o motivo, não um 403 seco.
@@ -1051,8 +1046,11 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                 Os dois ficam ao lado do cancelar porque é a mesma pergunta que
                 traz alguém a esta tela — achar a venda e desfazer parte dela.
 
-                Trocar é do gerente, porque cancela a venda. Devolver é de
-                qualquer um (decisão do Marcio, 22/10/2026): quem atende resolve.
+                Trocar é do gerente, porque cancela a venda.
+
+                O botão Devolver SAIU desta barra (pedido do Marcio, 04/11/2026).
+                A rota /vendas/:id/devolucao continua existindo; a devolução sem
+                venda segue no botão do topo.
               */}
               {podeCancelar ? (
                 <Button
@@ -1068,18 +1066,6 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                   <Repeat className="size-4" /> Trocar
                 </Button>
               ) : null}
-              <Button
-                type="button"
-                tabIndex={-1}
-                variant="outline"
-                size="sm"
-                disabled={!ativa || Boolean(ativa?.canceladaEm) || cancelando}
-                title="Registra a volta de parte da venda, com a venda de pé e nota de devolução"
-                onClick={() => ativa && devolver(ativa.id)}
-                className="rounded-lg"
-              >
-                <Undo2 className="size-4" /> Devolver
-              </Button>
               {podeCancelar ? (
                 <Button
                   type="button"
