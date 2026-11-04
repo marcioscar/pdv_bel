@@ -367,8 +367,12 @@ export function FinalizarDialogo({
 
   const valorRecebido = interpretarValor(recebido);
   const troco = valorRecebido === null ? null : valorRecebido - parteEmDinheiro;
-  const faltaDinheiro =
-    recebeDinheiro && (valorRecebido === null || troco === null || troco < 0);
+  /*
+   * O valor recebido é OPCIONAL (pedido do Marcio, 04/11/2026): vazio, a venda
+   * fecha como paga no valor exato, sem troco. Só trava quando foi digitado um
+   * valor MENOR que o devido — aí é erro de digitação ou falta dinheiro.
+   */
+  const faltaDinheiro = recebeDinheiro && troco !== null && troco < 0;
   // Pix na entrega também: a cobrança com vencimento exige o devedor.
   const naEntrega = forma === "entrega";
   const faltaCliente = (aPrazo || naEntrega) && cliente === null;
@@ -1507,8 +1511,8 @@ export function FinalizarDialogo({
               onChange={(e) => onRecebidoChange(e.target.value)}
               placeholder={
                 dividido
-                  ? `entregou pelos ${moeda(parteEmDinheiro)}`
-                  : "quanto o cliente entregou"
+                  ? `opcional · entregou pelos ${moeda(parteEmDinheiro)}`
+                  : "opcional · quanto o cliente entregou"
               }
               inputMode="decimal"
               autoComplete="off"

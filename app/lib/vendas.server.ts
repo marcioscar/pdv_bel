@@ -670,8 +670,9 @@ async function validarVenda(
       : pedido.pagamentos?.find((p) => p.forma === "dinheiro")?.valor ?? null
 
   if (emDinheiro !== null) {
-    if (pedido.recebido === null) return { ok: false, erro: "Informe o valor recebido" }
-    if (pedido.recebido < emDinheiro) {
+    // Sem valor recebido a venda fecha no exato, sem troco: informar o que o
+    // cliente entregou é opcional. Informado, não pode ser menos que o devido.
+    if (pedido.recebido !== null && pedido.recebido < emDinheiro) {
       return {
         ok: false,
         erro:

@@ -2053,8 +2053,9 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
         return
       }
       const valor = interpretarValor(recebidoTexto)
+      // Vazio é "recebeu o exato": o valor recebido não é obrigatório.
       if (valor === null) {
-        setErroFinalizacao("Informe o valor recebido em dinheiro")
+        fechar(null)
         return
       }
       if (valor < emDinheiro) {
@@ -2067,8 +2068,9 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
 
     if (forma === "dinheiro") {
       const valor = interpretarValor(recebidoTexto)
+      // Vazio é "recebeu o exato": o valor recebido não é obrigatório.
       if (valor === null) {
-        setErroFinalizacao("Informe o valor recebido")
+        concluir(null)
         return
       }
       /*
