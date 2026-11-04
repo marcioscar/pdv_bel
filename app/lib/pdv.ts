@@ -19,6 +19,13 @@ export type ProdutoCatalogo = {
    */
   custo?: number | null
   estoque: number
+  /**
+   * O saldo nas OUTRAS lojas da rede, na ordem das lojas. Só o caixa carrega:
+   * o vendedor vê na busca se o que falta aqui tem na QI ou na SDS, e manda
+   * buscar em vez de perder a venda. Não muda nenhuma trava — o teto do
+   * carrinho continua sendo o saldo desta loja.
+   */
+  estoqueNaRede?: { loja: string; saldo: number }[]
   /** Aceita 3,5 / 1,375 em vez de só peças inteiras (ver `quantidadeAceita`). */
   vendeFracionado?: boolean
 }

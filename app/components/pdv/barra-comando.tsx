@@ -164,6 +164,7 @@ export function BarraComando({
 											? "sem estoque"
 											: `${quantidade(produto.estoque)} em estoque`}
 									</span>
+									<EstoqueNaRede produto={produto} className='hidden w-44 md:flex' />
 									<Badge
 										variant='outline'
 										className='shrink-0 font-mono text-[10px]'>
@@ -219,12 +220,45 @@ function Previa({
 					? "sem estoque"
 					: `${quantidade(produto.estoque)} em estoque`}
 			</span>
+			<EstoqueNaRede produto={produto} className='hidden lg:flex' />
 			<span className='shrink-0 font-mono tabular-nums'>
 				{moeda(preco)}
 				{combo ? (
 					<span className='ml-1 text-[10px] uppercase text-primary'>combo</span>
 				) : null}
 			</span>
+		</span>
+	);
+}
+
+/**
+ * O saldo nas outras lojas, em código curto: "QI 159 · NRT 30 · SDS 0". Loja
+ * sem saldo fica apagada, para o olho achar de cara onde TEM. Só informa — o
+ * que se pode vender aqui continua sendo o saldo desta loja.
+ */
+function EstoqueNaRede({
+	produto,
+	className,
+}: {
+	produto: ProdutoCatalogo;
+	className?: string;
+}) {
+	const outras = produto.estoqueNaRede ?? [];
+	if (outras.length === 0) return null;
+	return (
+		<span
+			className={cn(
+				"shrink-0 items-center gap-2 font-mono text-[11px] tabular-nums",
+				className,
+			)}
+			title={outras.map((o) => `${o.loja}: ${quantidade(o.saldo)}`).join("\n")}>
+			{outras.map((o) => (
+				<span
+					key={o.loja}
+					className={cn(o.saldo > 0 ? "text-foreground" : "text-muted-foreground/50")}>
+					<span className='text-muted-foreground'>{o.loja}</span> {quantidade(o.saldo)}
+				</span>
+			))}
 		</span>
 	);
 }

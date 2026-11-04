@@ -37,8 +37,8 @@ import { db } from "~/lib/db.server"
 import { enderecoDoApp } from "~/lib/env.server"
 import { criarCliente, lerCliente, listarClientes } from "~/lib/clientes.server"
 import { emitirParaVenda, type CobrancaDaVenda } from "~/lib/cobranca.server"
-import { saldosPorProduto } from "~/lib/estoque.server"
-import { contaDaLoja, lojaPeloDocumento, lojasPorCnpj } from "~/lib/lojas.server"
+import { saldosPorProdutoELoja } from "~/lib/estoque.server"
+import { contaDaLoja, listarLojas, lojaPeloDocumento, lojasPorCnpj } from "~/lib/lojas.server"
 import { ultimoCustoPorProduto } from "~/lib/compras.server"
 import { saldosDeCredito } from "~/lib/creditos.server"
 import { modeloDaVenda, type ModeloNota } from "~/lib/fiscal"
@@ -174,9 +174,12 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   // O catálogo inteiro vai para o cliente para a busca responder sem latência
   // por tecla. Acima de ~5 mil produtos, trocar por busca no servidor.
-  const [cadastro, saldos, clientes, vendedores, loja, lojaPorCnpj] = await Promise.all([
+  const [cadastro, saldosDaRede, lojasDaRede, clientes, vendedores, loja, lojaPorCnpj] = await Promise.all([
     db.produto.findMany({ where: SOMENTE_ATIVOS, orderBy: { descricao: "asc" } }),
-    saldosPorProduto(eu.loja),
+    // A rede inteira numa agregação só: o saldo daqui e o das outras lojas,
+    // que a busca mostra para o vendedor saber onde tem.
+    saldosPorProdutoELoja(),
+    listarLojas(),
     listarClientes(),
     // Poucos nomes, e vão inteiros para a tela pelo mesmo motivo do catálogo: o
     // caixa não pode esperar a rede para ver de quem é a comissão que digitou.
@@ -193,11 +196,16 @@ export async function loader({ request }: Route.LoaderArgs) {
    */
   const custos = await ultimoCustoPorProduto(cadastro.map((p) => p.id))
   const creditos = await saldosDeCredito(clientes.map((c) => c.id))
-  const produtos = cadastro.map((produto) => ({
-    ...produto,
-    estoque: saldos.get(produto.id) ?? 0,
-    custo: custos.get(produto.id) ?? null,
-  }))
+  const outrasLojas = lojasDaRede.map((l) => l.codigo).filter((codigo) => codigo !== eu.loja)
+  const produtos = cadastro.map((produto) => {
+    const porLoja = saldosDaRede.get(produto.id)
+    return {
+      ...produto,
+      estoque: porLoja?.get(eu.loja) ?? 0,
+      estoqueNaRede: outrasLojas.map((codigo) => ({ loja: codigo, saldo: porLoja?.get(codigo) ?? 0 })),
+      custo: custos.get(produto.id) ?? null,
+    }
+  })
 
   /**
    * `?retomar=<id>` traz de volta o carrinho de uma venda que o gerente liberou.
