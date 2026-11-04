@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { data, Form, useNavigation } from "react-router"
-import { Loader2, PackageCheck, Printer, Search, Send, Truck, X } from "lucide-react"
+import { Loader2, PackageCheck, Plus, Printer, Search, Send, Truck, X } from "lucide-react"
 
 import type { Route } from "./+types/transferencias"
 import { Topo } from "~/components/pdv/topo"
@@ -176,6 +176,23 @@ export default function Transferencias({ loaderData, actionData }: Route.Compone
     (t) => t.situacao !== "em_transito" && !faltaEmAberto(t) && !sobraEmAberto(t)
   )
 
+  /*
+   * A tela abre no que está ANDAMENTO — chegando e saindo —, e a remessa nova
+   * fica atrás do botão (pedido do Marcio, 04/11/2026). Sem nada em andamento
+   * ela já vem aberta: não há o que ver antes. Fechada, continua montada, para
+   * não perder os itens de quem fechou sem querer.
+   */
+  const temEmAndamento = chegando.length > 0 || saindo.length > 0
+  const [montando, setMontando] = useState(!temEmAndamento)
+  // Despachada, a remessa fecha e a próxima começa vazia.
+  const [remessa, setRemessa] = useState(0)
+  useEffect(() => {
+    if (actionData?.ok && actionData.mensagem.includes("despachada")) {
+      setMontando(false)
+      setRemessa((n) => n + 1)
+    }
+  }, [actionData])
+
   return (
     <main className="flex h-screen flex-col overflow-hidden bg-card text-foreground">
       <Topo
@@ -195,6 +212,16 @@ export default function Transferencias({ loaderData, actionData }: Route.Compone
         <span className="text-xs text-muted-foreground">
           você está operando em <b className="font-mono">{eu.loja}</b>
         </span>
+        <Button
+          type="button"
+          size="sm"
+          variant={montando ? "outline" : "default"}
+          onClick={() => setMontando((m) => !m)}
+          className="ml-auto rounded-lg"
+        >
+          {montando ? <X className="size-4" aria-hidden /> : <Plus className="size-4" aria-hidden />}
+          {montando ? "Fechar remessa" : "Nova transferência"}
+        </Button>
       </div>
 
       <p className="mt-1 max-w-2xl text-xs text-muted-foreground">
@@ -217,6 +244,21 @@ export default function Transferencias({ loaderData, actionData }: Route.Compone
         </p>
       ) : null}
 
+      <div className={cn(!montando && "hidden")}>
+        <Secao titulo="Nova remessa" detalhe={`sai de ${eu.loja}`}>
+          <NovaRemessa
+            key={remessa}
+            produtos={produtos}
+            lojas={lojas.filter((l) => l.codigo !== eu.loja)}
+            origem={eu.loja}
+          />
+        </Secao>
+      </div>
+
+      {!temEmAndamento && !montando ? (
+        <p className="mt-7 text-sm text-muted-foreground">Nenhuma transferência em andamento.</p>
+      ) : null}
+
       {chegando.length > 0 ? (
         <Secao
           titulo={`Chegando em ${eu.loja}`}
@@ -228,14 +270,6 @@ export default function Transferencias({ loaderData, actionData }: Route.Compone
           ))}
         </Secao>
       ) : null}
-
-      <Secao titulo="Nova remessa" detalhe={`sai de ${eu.loja}`}>
-        <NovaRemessa
-          produtos={produtos}
-          lojas={lojas.filter((l) => l.codigo !== eu.loja)}
-          origem={eu.loja}
-        />
-      </Secao>
 
       {saindo.length > 0 ? (
         <Secao titulo="Saíram daqui, ainda no caminho">
