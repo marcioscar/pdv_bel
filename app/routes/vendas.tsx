@@ -41,6 +41,7 @@ import {
   FORMAS_PAGAMENTO,
   formaGeraCobranca,
   rotuloDoPagamento,
+  valorDoPixAntecipado,
 } from "~/lib/pdv"
 import { useAtalhosDeSecao } from "~/lib/navegacao"
 import { useRelogio, useTema } from "~/lib/tema"
@@ -934,7 +935,7 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                           {/* Distingue pagamento CONFIRMADO pelo banco de pagamento
                               apenas declarado no caixa. Sem isso, uma venda em Pix
                               verificada ficava igual a uma só marcada como Pix. */}
-                          {venda.forma === "antecipado" ? (
+                          {valorDoPixAntecipado(venda) > 0 ? (
                             <span
                               className="text-xs text-muted-foreground"
                               title={`Pago por ${venda.pixPagador ?? "?"} — declarado no caixa`}

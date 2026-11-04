@@ -19,6 +19,7 @@ import {
   FORMAS_PAGAMENTO,
   formaGeraCobranca,
   rotuloDoPagamento,
+  valorDoPixAntecipado,
 } from "~/lib/pdv"
 import { exigirGerente } from "~/lib/sessao.server"
 import {
@@ -445,7 +446,8 @@ export default function AdminVendas({ loaderData }: Route.ComponentProps) {
  * caixa. Sem isso, uma venda em Pix verificada fica igual a uma só marcada como Pix.
  */
 function Pagamento({ venda }: { venda: VendaConsultada }) {
-  if (venda.forma === FORMA_PIX_ANTECIPADO) {
+  // A venda toda em Pix antecipado, ou a dividida com uma parte nele.
+  if (venda.forma === FORMA_PIX_ANTECIPADO || valorDoPixAntecipado(venda) > 0) {
     return venda.pixConferidoEm ? (
       <Badge className="text-[10px]" title={`Conferido por ${venda.pixConferidoPor ?? "?"}`}>
         conferido
@@ -537,7 +539,7 @@ function Detalhe({
         <Linha rotulo="Forma" valor={condicao ? `${forma} · ${condicao.rotulo}` : forma} />
       </dl>
 
-      {venda.forma === FORMA_PIX_ANTECIPADO ? <ConferenciaDoPix venda={venda} /> : null}
+      {valorDoPixAntecipado(venda) > 0 ? <ConferenciaDoPix venda={venda} /> : null}
 
       <h3 className="mt-4 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
         {venda.itens.length} {venda.itens.length === 1 ? "item" : "itens"}
@@ -651,7 +653,7 @@ function ConferenciaDoPix({ venda }: { venda: VendaConsultada }) {
         Pix antecipado
       </div>
       <div className="mt-1">
-        Pago por <b>{venda.pixPagador ?? "—"}</b> · {moeda(venda.total - (venda.creditoUsado ?? 0))}
+        Pago por <b>{venda.pixPagador ?? "—"}</b> · {moeda(valorDoPixAntecipado(venda))}
       </div>
       {venda.pixConferidoEm ? (
         <div className="mt-1 text-muted-foreground">

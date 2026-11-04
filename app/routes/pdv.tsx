@@ -985,6 +985,10 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   const [recebidoTexto, setRecebidoTexto] = useState("")
   // O que vai em cada forma quando o pagamento é dividido (forma "misto").
   const [divisao, setDivisao] = useState<DivisaoDoPagamento>(DIVISAO_VAZIA)
+  /** A venda leva Pix antecipado — sozinho ou numa parte da divisão. */
+  const pagaComAntecipado =
+    forma === "antecipado" ||
+    (forma === FORMA_MISTA && linhasDaDivisao(divisao).some((l) => l.forma === "antecipado"))
   // Nasce vazio a cada venda, de propósito: ver `faltaVendedor` no diálogo.
   const [vendedorCodigo, setVendedorCodigo] = useState("")
   const [imprimirCupom, setImprimirCupom] = useState(true)
@@ -1333,14 +1337,14 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           emitirNota,
           modeloNota,
           cpfNaNota,
-          pixPagador: forma === "antecipado" ? pixPagador : null,
+          pixPagador: pagaComAntecipado ? pixPagador : null,
         },
         { method: "post", encType: "application/json" }
       )
     },
     [
       autorizacaoId, cliente, cpfNaNota, creditoDoSaldo, devolucaoDoPedido, divisao, emitirNota,
-      fetcher, forma, modeloNota, pixPagador,
+      fetcher, forma, modeloNota, pagaComAntecipado, pixPagador,
       gravando, totais.desconto, venda.itens, vendedorCodigo,
     ]
   )
@@ -1377,6 +1381,8 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           emitirNota,
           modeloNota,
           cpfNaNota,
+          // A parte em Pix antecipado da divisão leva quem pagou junto.
+          pixPagador: pagaComAntecipado ? pixPagador : null,
           vendedorCodigo,
           clienteId: cliente?.id ?? null,
           // O Pix cobra o que sobra depois da devolução e do crédito; o
@@ -1391,7 +1397,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     },
     [
       autorizacaoId, cliente, cpfNaNota, creditoDoSaldo, devolucaoDoPedido, divisao, emitirNota,
-      fetcher, forma, modeloNota,
+      fetcher, forma, modeloNota, pagaComAntecipado, pixPagador,
       totais.desconto, venda.itens, vendedorCodigo,
     ]
   )
@@ -2109,7 +2115,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       setCondicaoAberta(true)
       return
     }
-    if (forma === "antecipado" && !pixPagador.trim()) {
+    if (pagaComAntecipado && !pixPagador.trim()) {
       setErroFinalizacao("Pix antecipado: informe quem fez o Pix")
       return
     }
@@ -2132,6 +2138,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     forma,
     gerarPix,
     gravando,
+    pagaComAntecipado,
     pixPagador,
     recebidoTexto,
     totais.desconto,

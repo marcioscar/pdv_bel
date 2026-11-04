@@ -411,7 +411,7 @@ export const FORMA_MISTA = "misto"
  * O Pix entra como no balcão comum: o QR cobra só a parte dele, e a venda
  * inteira nasce quando o Inter confirma — com as outras partes já recebidas.
  */
-export const FORMAS_COMBINAVEIS = ["dinheiro", "pix", "debito", "credito"] as const
+export const FORMAS_COMBINAVEIS = ["dinheiro", "pix", "debito", "credito", "antecipado"] as const
 
 export function formaCombinavel(forma: string) {
   return (FORMAS_COMBINAVEIS as readonly string[]).includes(forma)
@@ -426,7 +426,13 @@ export function formaCombinavel(forma: string) {
  */
 export type DivisaoDoPagamento = Record<(typeof FORMAS_COMBINAVEIS)[number], string>
 
-export const DIVISAO_VAZIA: DivisaoDoPagamento = { dinheiro: "", pix: "", debito: "", credito: "" }
+export const DIVISAO_VAZIA: DivisaoDoPagamento = {
+  dinheiro: "",
+  pix: "",
+  debito: "",
+  credito: "",
+  antecipado: "",
+}
 
 /** As linhas que de fato entraram: as com valor. */
 export function linhasDaDivisao(divisao: DivisaoDoPagamento): PagamentoDaVenda[] {
@@ -439,6 +445,18 @@ export function linhasDaDivisao(divisao: DivisaoDoPagamento): PagamentoDaVenda[]
 /** Se a divisão tem parte em Pix — aí a venda passa pelo QR antes de nascer. */
 export function temPixNaDivisao(divisao: DivisaoDoPagamento) {
   return linhasDaDivisao(divisao).some((l) => l.forma === "pix")
+}
+
+/**
+ * Quanto da venda entrou em Pix antecipado — a venda toda nessa forma, ou a
+ * linha dela na venda dividida. Zero quando não houve.
+ */
+export function valorDoPixAntecipado(venda: Parameters<typeof pagamentosDaVenda>[0]) {
+  return arredondar(
+    pagamentosDaVenda(venda)
+      .filter((p) => p.forma === FORMA_PIX_ANTECIPADO)
+      .reduce((a, p) => a + p.valor, 0)
+  )
 }
 
 /** Uma linha do pagamento: espelha `type VendaPagamento` do schema. */

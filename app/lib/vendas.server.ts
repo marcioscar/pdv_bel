@@ -37,6 +37,7 @@ import {
   FORMA_MISTA,
   FORMA_PIX_ANTECIPADO,
   FORMA_PIX_ENTREGA,
+  valorDoPixAntecipado,
   FORMA_TRANSFERENCIA,
   FORMAS_COMBINAVEIS,
   FORMAS_PAGAMENTO,
@@ -484,8 +485,13 @@ async function validarVenda(
   }
   if (!pedido.loja) return { ok: false, erro: "Venda sem loja" }
 
-  // Sem o nome de quem pagou, o escritório não tem o que procurar no extrato.
-  if (pedido.forma === FORMA_PIX_ANTECIPADO && !pedido.pixPagador) {
+  // Sem o nome de quem pagou, o escritório não tem o que procurar no extrato —
+  // na venda toda em Pix antecipado e na dividida com uma parte nele.
+  const temAntecipado =
+    pedido.forma === FORMA_PIX_ANTECIPADO ||
+    (pedido.forma === FORMA_MISTA &&
+      (pedido.pagamentos ?? []).some((p) => p.forma === FORMA_PIX_ANTECIPADO))
+  if (temAntecipado && !pedido.pixPagador) {
     return { ok: false, erro: "Pix antecipado: informe quem fez o Pix" }
   }
 
@@ -1023,7 +1029,9 @@ async function gravarUmaVez(
         condicao,
         pixTxid: pedido.pixTxid ?? null,
         pixPagoEm: pedido.pixPagoEm ?? null,
-        pixPagador: pedido.forma === FORMA_PIX_ANTECIPADO ? (pedido.pixPagador ?? null) : null,
+        pixPagador: valorDoPixAntecipado({ forma: pedido.forma, total, creditoUsado, pagamentos: pedido.pagamentos })
+          ? (pedido.pixPagador ?? null)
+          : null,
       },
     })
 
@@ -1274,11 +1282,19 @@ export async function conferirPixAntecipado(
   if (!OBJECT_ID.test(vendaId)) return { ok: false, erro: "Venda inválida" }
   const venda = await db.venda.findUnique({
     where: { id: vendaId },
-    select: { forma: true, loja: true, pixConferidoEm: true, canceladaEm: true },
+    select: {
+      forma: true,
+      total: true,
+      creditoUsado: true,
+      pagamentos: true,
+      loja: true,
+      pixConferidoEm: true,
+      canceladaEm: true,
+    },
   })
   if (!venda) return { ok: false, erro: "Venda não encontrada" }
   if (!lojasPermitidas.includes(venda.loja)) return { ok: false, erro: `Venda da loja ${venda.loja}` }
-  if (venda.forma !== FORMA_PIX_ANTECIPADO) return { ok: false, erro: "Esta venda não é Pix antecipado" }
+  if (!valorDoPixAntecipado(venda)) return { ok: false, erro: "Esta venda não tem Pix antecipado" }
   if (venda.pixConferidoEm) return { ok: false, erro: "Este Pix já foi conferido" }
 
   await db.venda.update({
@@ -1357,7 +1373,9 @@ export async function consultarVendas(filtro: FiltroVendas) {
   if (filtro.situacao === "validas") conteudo.push(NAO_CANCELADA)
   if (filtro.situacao === "canceladas") conteudo.push({ NOT: NAO_CANCELADA })
   if (filtro.situacao === "pixNaoConferido") {
-    conteudo.push(NAO_CANCELADA, { forma: FORMA_PIX_ANTECIPADO }, {
+    conteudo.push(NAO_CANCELADA, {
+      OR: [{ forma: FORMA_PIX_ANTECIPADO }, { pagamentos: { some: { forma: FORMA_PIX_ANTECIPADO } } }],
+    }, {
       // Campo ausente não é null no Mongo: as duas formas de "sem conferência".
       OR: [{ pixConferidoEm: null }, { pixConferidoEm: { isSet: false } }],
     })

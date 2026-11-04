@@ -377,7 +377,10 @@ export function FinalizarDialogo({
   const naEntrega = forma === "entrega";
   const faltaCliente = (aPrazo || naEntrega) && cliente === null;
   // Pix antecipado: sem o nome de quem pagou, o escritório não acha no extrato.
-  const antecipado = forma === "antecipado";
+  // Também na venda dividida com uma parte em Pix antecipado.
+  const antecipado =
+    forma === "antecipado" ||
+    (dividido && linhasDivididas.some((l) => l.forma === "antecipado"));
   const faltaPagador = antecipado && pixPagador.trim() === "";
 
   /**
