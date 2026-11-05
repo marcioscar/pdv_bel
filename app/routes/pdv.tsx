@@ -1519,7 +1519,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
               emitindo: false,
             }
       )
-      if (n.danfe && imprimirCupom) {
+      if (n.danfe) {
         imprimirDocumento(n.danfe).then((erro) => {
           if (erro) avisar(erro, "erro")
         })
@@ -1641,10 +1641,14 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
      * Com a nota autorizada, o que sai é o DANFE dela: é o documento fiscal, e
      * imprimir os dois entregaria dois papéis dizendo a mesma coisa. Sem nota, o
      * cupom não fiscal continua sendo o que o cliente leva.
+     *
+     * O DANFE não depende de `imprimirCupom`: quem pediu a nota pediu o papel dela.
+     * Esse interruptor nasce desligado no boleto, para não sair cupom além do
+     * boleto, e a NF-e autorizada acabava sem imprimir.
      */
     const nota = resposta.nota
-    if (imprimirCupom) {
-      const documento = nota?.danfe ?? `/vendas/${resposta.vendaId}/cupom`
+    const documento = nota?.danfe ?? (imprimirCupom ? `/vendas/${resposta.vendaId}/cupom` : null)
+    if (documento) {
       imprimirDocumento(documento).then((erro) => {
         if (erro) avisar(erro, "erro")
       })
@@ -1996,9 +2000,10 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
   }, [fetcherPix.state, fetcherPix.data, imprimirCupom, avisar, cancelandoPix, limparParaProximaVenda])
 
   /**
-   * A prazo o comprovante é o boleto, que o próprio comprovante manda imprimir —
-   * ligar o cupom junto empilharia duas caixas de impressão a cada venda. Nas
-   * outras formas o cupom é o único documento, então vem ligado.
+   * A prazo o comprovante é o boleto, impresso na janela da cobrança — ligar o
+   * cupom junto daria dois papéis a cada venda. Nas outras formas o cupom é o
+   * único documento, então vem ligado. Vale só para o cupom: o DANFE da nota
+   * emitida sai de qualquer jeito.
    *
    * Trocar a forma redefine este padrão: é previsível, e quem quiser os dois
    * documentos liga com F7 depois de escolher a forma.

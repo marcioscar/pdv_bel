@@ -726,26 +726,20 @@ export function FinalizarDialogo({
   const saida = (() => {
     if (estado === "fiscal") {
       /*
-       * O DANFE da NF-e é A4 e não vai para a bobina; o da NFC-e em homologação
-       * não vale como documento. Nos dois casos quem sai é o cupom, e dizer isso
-       * evita o vendedor procurar um papel que não veio.
+       * Em produção o DANFE autorizado sai com a venda, NFC-e ou NF-e. Em
+       * homologação ele não vale como documento, e dizer isso evita o vendedor
+       * procurar um papel que não veio.
        */
-      const papelDaVez =
-        modelo === "nfe"
-          ? "a nota sai na tela de Vendas"
-          : fiscal.producao
-            ? null
-            : "sai o cupom; a nota é de teste";
+      const papelDaVez = fiscal.producao ? null : "sai o cupom; a nota é de teste";
 
       return {
         estado,
         destaque: true,
         rotulo: nomeDoModelo,
-        situacao:
-          modelo === "nfe" || !fiscal.producao ? "emitir com a venda" : "emitir e imprimir",
+        situacao: fiscal.producao ? "emitir e imprimir" : "emitir com a venda",
         aviso:
-          modelo === "nfe" && papelDaVez
-            ? `${papelDaVez} · sem frete e sem observação`
+          modelo === "nfe"
+            ? [papelDaVez, "sem frete e sem observação"].filter(Boolean).join(" · ")
             : papelDaVez,
       };
     }
