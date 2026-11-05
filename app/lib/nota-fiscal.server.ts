@@ -1,6 +1,6 @@
 import { db } from "~/lib/db.server"
 import { enviarNfeAoAutorizar } from "~/lib/nota-email.server"
-import { mesmaEmpresa } from "~/lib/documento"
+import { limparDocumento, mesmaEmpresa } from "~/lib/documento"
 import {
   ambienteFocus,
   cancelarNota,
@@ -332,7 +332,7 @@ export async function emitirDaVenda(
    * primeiro — quem tem ficha tem nome, endereço e IE, e a nota fica mais
    * completa —, mas o CPF sozinho basta para a NFC-e, que é o caso da Nota Legal.
    */
-  const documentoCliente = (cliente?.cpfCnpj ?? venda.cpfNaNota ?? "").replace(/\D/g, "")
+  const documentoCliente = limparDocumento(cliente?.cpfCnpj ?? venda.cpfNaNota ?? "")
 
   const payload =
     modelo === "nfce"
@@ -769,8 +769,8 @@ export async function emitirDaDevolucao(
         }
       })()
 
-  /** O CPF que o consumidor pediu na nota original, quando pediu. */
-  const cpfDeQuemDevolveu = (vendaOriginal.cpfNaNota ?? "").replace(/\D/g, "")
+  /** O CPF ou CNPJ que o consumidor pediu na nota original, quando pediu. */
+  const documentoDeQuemDevolveu = limparDocumento(vendaOriginal.cpfNaNota ?? "")
 
   const payload = {
     data_emissao: dataComFuso(new Date()),
@@ -807,7 +807,7 @@ export async function emitirDaDevolucao(
        * O CPF entra quando o consumidor pediu na nota original.
        */
       contraSiMesma
-        ? `Devolucao de consumidor final nao contribuinte${cpfDeQuemDevolveu ? `, CPF ${cpfDeQuemDevolveu}` : " nao identificado"}.`
+        ? `Devolucao de consumidor final nao contribuinte${documentoDeQuemDevolveu ? `, ${documentoDeQuemDevolveu.length === 14 ? "CNPJ" : "CPF"} ${documentoDeQuemDevolveu}` : " nao identificado"}.`
         : "",
     ]
       .filter(Boolean)

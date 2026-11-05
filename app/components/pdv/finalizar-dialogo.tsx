@@ -25,7 +25,7 @@ import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { Kbd } from "~/components/ui/kbd";
 import { Separator } from "~/components/ui/separator";
-import { formatarCpfCnpj, mascararCpfCnpj, validarCpf } from "~/lib/documento";
+import { formatarCpfCnpj, limparDocumento, mascararCpfCnpj, validarCpfCnpj } from "~/lib/documento";
 import { modeloDaVenda, type ModeloNota } from "~/lib/fiscal";
 import {
   arredondar,
@@ -116,7 +116,7 @@ type Props = {
   onDevolucaoChange: (devolucao: DevolucaoNoFechamento) => void;
   /** O catálogo, para escolher o produto que voltou. */
   indiceProdutos: EntradaIndice<ProdutoDoCatalogo>[];
-  /** CPF que o consumidor pediu na nota, sem virar cadastro (Nota Legal). */
+  /** CPF ou CNPJ pedido na nota, sem virar cadastro (Nota Legal). */
   cpfNaNota: string;
   onCpfNaNotaChange: (cpf: string) => void;
   gravando: boolean;
@@ -397,6 +397,18 @@ export function FinalizarDialogo({
   // creditaria a alguém uma saída que não é venda de ninguém.
   const faltaVendedor = vendedor === null && !paraARede;
 
+  /*
+   * O documento avulso da nota. Com 11 dígitos pode ser um CPF errado ou um CNPJ
+   * ainda sendo digitado; o aviso de CPF some assim que o CNPJ fica completo.
+   * Só vale enquanto o campo está na tela: com cliente vinculado, o documento é
+   * o do cadastro.
+   */
+  const documentoNaNota = !cliente && fiscal.emite ? limparDocumento(cpfNaNota) : "";
+  const documentoCompleto = documentoNaNota.length === 11 || documentoNaNota.length === 14;
+  const documentoIncompleto = documentoNaNota.length > 0 && !documentoCompleto;
+  const documentoErrado = documentoCompleto && !validarCpfCnpj(documentoNaNota);
+  const faltaDocumento = documentoIncompleto || documentoErrado;
+
   /**
    * A escolha do cliente acontece AQUI DENTRO, trocando esta seção por uma busca.
    *
@@ -599,6 +611,13 @@ export function FinalizarDialogo({
           setEditandoDevolucao(true);
           return;
         }
+        // Documento errado ou pela metade: o Enter volta para o campo, e o
+        // servidor não precisa recusar a venda inteira sem dizer o motivo.
+        if (faltaDocumento) {
+          campoCpf.current?.focus();
+          campoCpf.current?.select();
+          return;
+        }
         onConfirmar();
         return;
       }
@@ -646,6 +665,7 @@ export function FinalizarDialogo({
     restante,
     onDivisaoChange,
     faltaVendedor,
+    faltaDocumento,
     valorRecebido,
     imprimir,
     indiceCliente,
@@ -677,11 +697,6 @@ export function FinalizarDialogo({
    * tela de Vendas; e a loja que ainda não emite continua no cupom não fiscal.
    * Prometer errado aqui é o que faz alguém procurar um documento que não veio.
    */
-  // Só a partir de 11 dígitos vale julgar: julgar antes acusaria de inválido
-  // todo CPF pela metade, enquanto ainda está sendo digitado.
-  const digitosCpf = cpfNaNota.replace(/\D/g, "");
-  const cpfInvalido = digitosCpf.length === 11 && !validarCpf(digitosCpf);
-
   /**
    * O que esta venda produz — em um lugar só.
    *
@@ -1253,7 +1268,7 @@ export function FinalizarDialogo({
         </div>
 
         {/*
-          O CPF na nota é outra coisa que o cliente: quem pede crédito da Nota
+          O CPF/CNPJ na nota é outra coisa que o cliente: quem pede crédito da Nota
           Legal informa o CPF, leva o cupom e vai embora — não quer cadastro, e
           obrigar a um seria perder a venda por causa de um formulário. Some da
           tela quando há cliente vinculado, porque aí o documento é o dele.
@@ -1262,7 +1277,7 @@ export function FinalizarDialogo({
           <div
             className={cn(
               "mt-2 flex items-center gap-3 rounded-lg border p-3",
-              cpfInvalido ? "border-destructive/40 bg-destructive/5" : "border-border"
+              documentoErrado ? "border-destructive/40 bg-destructive/5" : "border-border"
             )}
           >
             <IdCard className="size-4 shrink-0 text-muted-foreground" aria-hidden />
@@ -1271,22 +1286,32 @@ export function FinalizarDialogo({
                 htmlFor="cpf-na-nota"
                 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
               >
-                CPF na nota
+                CPF/CNPJ na nota
               </label>
               <Input
                 id="cpf-na-nota"
                 ref={campoCpf}
                 value={cpfNaNota}
                 onChange={(evento) => onCpfNaNotaChange(mascararCpfCnpj(evento.target.value))}
-                placeholder="000.000.000-00"
-                inputMode="numeric"
+                placeholder="CPF ou CNPJ"
                 autoComplete="off"
-                aria-invalid={cpfInvalido || undefined}
+                aria-invalid={documentoErrado || undefined}
                 className="mt-0.5 h-8 rounded-lg border-0 bg-transparent px-0 font-mono text-sm tabular-nums shadow-none focus-visible:ring-0"
               />
             </div>
-            <span className="shrink-0 text-[10px] text-muted-foreground">
-              {cpfInvalido ? "CPF inválido" : "Nota Legal · opcional"}
+            <span
+              className={cn(
+                "shrink-0 text-[10px]",
+                documentoErrado ? "font-medium text-destructive" : "text-muted-foreground"
+              )}
+            >
+              {documentoErrado
+                ? documentoNaNota.length === 14
+                  ? "CNPJ inválido"
+                  : "CPF inválido"
+                : documentoIncompleto
+                  ? "Incompleto"
+                  : "Nota Legal · opcional"}
             </span>
             <Kbd className="shrink-0">F2</Kbd>
           </div>
@@ -1558,7 +1583,7 @@ export function FinalizarDialogo({
             faltaCliente ||
             faltaPagador ||
             faltaVendedor ||
-            cpfInvalido ||
+            faltaDocumento ||
             erroDevolucao !== null
           }
           onClick={onConfirmar}

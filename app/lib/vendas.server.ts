@@ -6,7 +6,7 @@ import {
   marcarAutorizacaoUsada,
 } from "~/lib/autorizacao.server"
 import { caixaAberto } from "~/lib/caixa.server"
-import { validarCpf } from "~/lib/documento"
+import { limparDocumento, validarCpfCnpj } from "~/lib/documento"
 import { db } from "~/lib/db.server"
 import { depoisDoDia, diaAtras, diaDeHoje, inicioDoDia } from "~/lib/dia"
 import { movimentosDeVenda } from "~/lib/estoque.server"
@@ -76,7 +76,7 @@ export type PedidoRecebido = {
    */
   creditoUsado: number
   clienteId: string | null
-  /** CPF pedido na nota, sem cadastro. Só dígitos, ou null. */
+  /** CPF ou CNPJ pedido na nota, sem cadastro. Sem máscara, ou null. */
   cpfNaNota: string | null
   /** "nfce" ou "nfe" escolhido na conferência; null deixa o padrão decidir. */
   modeloNota?: "nfce" | "nfe" | null
@@ -212,22 +212,23 @@ export function lerPedido(bruto: unknown): PedidoRecebido | null {
       ? corpo.autorizacaoId
       : null
 
-  /*
-   * O CPF da nota é conferido AQUI, e não só na tela: um CPF com dígito errado
-   * derruba a nota inteira na SEFAZ, e o erro apareceria depois da venda
-   * fechada. Vazio é o caso comum e não é erro.
-   */
-  const cpfBruto =
-    typeof corpo.cpfNaNota === "string" ? corpo.cpfNaNota.replace(/\D/g, "") : ""
-  if (cpfBruto && !validarCpf(cpfBruto)) return null
-  const cpfNaNota = cpfBruto || null
-
   const clienteId =
     typeof corpo.clienteId === "string" && OBJECT_ID.test(corpo.clienteId)
       ? corpo.clienteId
       : null
   // Um clienteId presente mas malformado é recusado, não silenciosamente ignorado.
   if (corpo.clienteId != null && clienteId === null) return null
+
+  /*
+   * O CPF/CNPJ da nota é conferido AQUI, e não só na tela: um dígito errado
+   * derruba a nota inteira na SEFAZ, e o erro apareceria depois da venda
+   * fechada. Vazio é o caso comum e não é erro. Com cliente vinculado o documento
+   * é o do cadastro, e o campo avulso nem aparece: o que sobrou nele é ignorado.
+   */
+  const documentoAvulso =
+    !clienteId && typeof corpo.cpfNaNota === "string" ? limparDocumento(corpo.cpfNaNota) : ""
+  if (documentoAvulso && !validarCpfCnpj(documentoAvulso)) return null
+  const cpfNaNota = documentoAvulso || null
 
   return {
     itens,
