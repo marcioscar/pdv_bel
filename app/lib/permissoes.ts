@@ -92,6 +92,24 @@ export function secoesDoPapel(papel: string) {
  * gerente. Cada seção declara aqui o que exige, e o layout de /admin cobra —
  * então tela nova nasce protegida em vez de depender de alguém lembrar.
  */
+/**
+ * Operadores que veem os Pedidos de compra sem poder mexer neles. Hoje só o
+ * Marcelo, vendedor 7 (pedido do Marcio, 05/11/2026). Pelo id, que não muda se o
+ * nome ou o e-mail forem corrigidos.
+ */
+const VEEM_PEDIDOS_DE_COMPRA = ["6a7c762883f25a8a145fe4b1"]
+const TELA_PEDIDOS_DE_COMPRA = "/admin/pedidos-de-compra"
+
+export function podeVerPedidosDeCompra(papel: string, usuarioId?: string) {
+  return ehGerente(papel) || (usuarioId !== undefined && VEEM_PEDIDOS_DE_COMPRA.includes(usuarioId))
+}
+
+/** Se esta pessoa alcança a seção: a mesma regra para o menu e para a guarda do layout. */
+export function alcancaSecao(secao: SecaoAdmin, papel: string, usuarioId?: string) {
+  if (secao.para === TELA_PEDIDOS_DE_COMPRA) return podeVerPedidosDeCompra(papel, usuarioId)
+  return !secao.somenteGerente || ehGerente(papel)
+}
+
 export type SecaoAdmin = {
   para: string
   rotulo: string
@@ -347,10 +365,10 @@ export function secoesAdminDoPapel(papel: string) {
  * Os grupos com as seções que o papel alcança. Grupo que ficaria vazio não é
  * mostrado — para o operador, "Vendas" seria uma gaveta que abre no nada.
  */
-export function gruposAdminDoPapel(papel: string) {
+export function gruposAdminDoPapel(papel: string, usuarioId?: string) {
   return GRUPOS_ADMIN.map((grupo) => ({
     ...grupo,
-    secoes: grupo.secoes.filter((secao) => !secao.somenteGerente || ehGerente(papel)),
+    secoes: grupo.secoes.filter((secao) => alcancaSecao(secao, papel, usuarioId)),
   })).filter((grupo) => grupo.secoes.length > 0)
 }
 
@@ -384,9 +402,9 @@ const ROTULO_NO_TOPO: Record<string, string> = {
   financeiro: "Contas e caixas",
 }
 
-export function menusDoTopo(papel: string) {
+export function menusDoTopo(papel: string, usuarioId?: string) {
   const secoes = secoesDoPapel(papel)
-  const grupos = gruposAdminDoPapel(papel)
+  const grupos = gruposAdminDoPapel(papel, usuarioId)
   return MENUS_DO_TOPO.map((menu) => ({
     id: menu.id,
     rotulo: menu.rotulo,

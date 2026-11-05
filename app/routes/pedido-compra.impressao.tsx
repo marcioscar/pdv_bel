@@ -3,7 +3,8 @@ import { db } from "~/lib/db.server"
 import { escapar } from "~/lib/html"
 import { formatarCpfCnpj } from "~/lib/documento"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
-import { exigirGerente } from "~/lib/sessao.server"
+import { ACOES_DE_GERENTE, podeVerPedidosDeCompra } from "~/lib/permissoes"
+import { exigirUsuario } from "~/lib/sessao.server"
 
 /**
  * O papel que se manda ao fornecedor, ou que fica com quem liga cobrando entrega.
@@ -13,7 +14,10 @@ import { exigirGerente } from "~/lib/sessao.server"
  * já basta para negociar e para arquivar.
  */
 export async function loader({ params, request }: Route.LoaderArgs) {
-  await exigirGerente(request, "verRelatorios")
+  const eu = await exigirUsuario(request)
+  if (!podeVerPedidosDeCompra(eu.papel, eu.id)) {
+    throw new Response(ACOES_DE_GERENTE.verRelatorios, { status: 403 })
+  }
 
   const pedido = await db.pedidoDeCompra.findUnique({ where: { id: params.pedidoId } })
   if (!pedido) throw new Response("Pedido não encontrado", { status: 404 })

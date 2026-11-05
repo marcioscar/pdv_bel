@@ -17,7 +17,7 @@ import { Topo } from "~/components/pdv/topo"
 import { Button } from "~/components/ui/button"
 import { useAtalhosDeSecao } from "~/lib/navegacao"
 import {
-  ehGerente,
+  alcancaSecao,
   grupoDaSecao,
   gruposAdminDoPapel,
   secaoAdminDoCaminho,
@@ -47,7 +47,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   const eu = await exigirUsuario(request)
   const secao = secaoAdminDoCaminho(new URL(request.url).pathname)
 
-  if (secao?.somenteGerente && !ehGerente(eu.papel)) {
+  if (secao && !alcancaSecao(secao, eu.papel, eu.id)) {
     throw new Response(`Só gerente acessa ${secao.rotulo}`, { status: 403 })
   }
 
@@ -61,7 +61,7 @@ export default function Admin({ loaderData }: Route.ComponentProps) {
   const relogio = useRelogio()
   useAtalhosDeSecao(eu.papel)
 
-  const grupos = gruposAdminDoPapel(eu.papel)
+  const grupos = gruposAdminDoPapel(eu.papel, eu.id)
 
   /**
    * Abre o grupo da tela em que se está, e deixa os outros como o usuário os
@@ -91,6 +91,7 @@ export default function Admin({ loaderData }: Route.ComponentProps) {
       <Topo
         operador={eu.nome}
         papel={eu.papel}
+        usuarioId={eu.id}
         loja={eu.loja}
         lojasPermitidas={eu.lojasPermitidas.length}
         relogio={relogio}

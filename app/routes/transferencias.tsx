@@ -198,6 +198,7 @@ export default function Transferencias({ loaderData, actionData }: Route.Compone
       <Topo
         operador={eu.nome}
         papel={eu.papel}
+        usuarioId={eu.id}
         loja={eu.loja}
         lojasPermitidas={eu.lojasPermitidas.length}
         relogio={relogio}

@@ -24,6 +24,8 @@ type Props = {
   operador: string
   /** Decide quais seções aparecem — mesma fonte que as guardas do servidor. */
   papel: string
+  /** Para o menu mostrar o acesso dado a uma pessoa, além do papel. */
+  usuarioId?: string
   /** Loja do turno. Fica em destaque: operar na loja errada não pode ser sutil. */
   loja: string
   /** Quantas lojas o usuário alcança — com uma só, não há o que trocar. */
@@ -37,6 +39,7 @@ type Props = {
 export function Topo({
   operador,
   papel,
+  usuarioId,
   loja,
   lojasPermitidas = 1,
   relogio,
@@ -92,7 +95,7 @@ export function Topo({
             </Button>
           ) : null}
 
-          <MenusDoTopo papel={papel} pathname={pathname} />
+          <MenusDoTopo papel={papel} usuarioId={usuarioId} pathname={pathname} />
         </nav>
 
         {/* A loja é a única informação de contexto no topo. O selo "Caixa 01" saiu:
@@ -185,15 +188,17 @@ export function Topo({
  */
 const MenusDoTopo = memo(function MenusDoTopo({
   papel,
+  usuarioId,
   pathname,
 }: {
   papel: string
+  usuarioId?: string
   pathname: string
 }) {
   // Prefixo, não igualdade: /vendas/123/cupom continua sendo Vendas.
   const estaEm = (para: string) =>
     pathname === para || (para !== "/" && pathname.startsWith(`${para}/`))
-  const menus = menusDoTopo(papel)
+  const menus = menusDoTopo(papel, usuarioId)
 
   return (
     <>

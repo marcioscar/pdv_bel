@@ -26,7 +26,8 @@ import {
 } from "~/lib/pedidos-compra.server"
 import { listarLojas } from "~/lib/lojas.server"
 import { pedidosComNotaDisponivel } from "~/lib/conciliacao.server"
-import { exigirGerente } from "~/lib/sessao.server"
+import { ACOES_DE_GERENTE, ehGerente, podeVerPedidosDeCompra } from "~/lib/permissoes"
+import { exigirGerente, exigirUsuario } from "~/lib/sessao.server"
 import { cn } from "~/lib/utils"
 
 export function meta(_: Route.MetaArgs) {
@@ -39,7 +40,10 @@ export function meta(_: Route.MetaArgs) {
  * conferir o que acabou de gerar sem sair da tela.
  */
 export async function loader({ request }: Route.LoaderArgs) {
-  await exigirGerente(request, "verRelatorios")
+  const eu = await exigirUsuario(request)
+  if (!podeVerPedidosDeCompra(eu.papel, eu.id)) {
+    throw new Response(ACOES_DE_GERENTE.verRelatorios, { status: 403 })
+  }
 
   const filtro = lerFiltroPedidos(new URL(request.url))
   const [consulta, lojas] = await Promise.all([consultarPedidos(filtro), listarLojas()])
@@ -47,6 +51,8 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   return {
     filtro,
+    // Quem não é gerente só consulta: a action continua exigindo gerente.
+    somenteLeitura: !ehGerente(eu.papel),
     lojas: lojas.map((l) => l.codigo),
     pedidosComNota: Object.fromEntries(comNota),
     ...consulta,
@@ -70,7 +76,7 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function AdminPedidosDeCompra({ loaderData }: Route.ComponentProps) {
-  const { filtro, lojas, pedidos, pedidosComNota, total, foraDoPeriodo, paginas, resumo } = loaderData
+  const { filtro, somenteLeitura, lojas, pedidos, pedidosComNota, total, foraDoPeriodo, paginas, resumo } = loaderData
 
   const [params, setParams] = useSearchParams()
   const navegacao = useNavigation()
@@ -119,13 +125,15 @@ export default function AdminPedidosDeCompra({ loaderData }: Route.ComponentProp
         <h1 className="text-base font-semibold">Pedidos de compra</h1>
         <span className="text-xs text-muted-foreground">gerados entre {periodo}</span>
 
-        <Link
-          to="/admin/pedido-novo"
-          className="ml-auto inline-flex h-9 items-center gap-1.5 rounded-lg border border-border px-3 text-xs font-medium hover:bg-accent"
-        >
-          <ShoppingBag className="size-3.5" aria-hidden />
-          Novo pedido
-        </Link>
+        {somenteLeitura ? null : (
+          <Link
+            to="/admin/pedido-novo"
+            className="ml-auto inline-flex h-9 items-center gap-1.5 rounded-lg border border-border px-3 text-xs font-medium hover:bg-accent"
+          >
+            <ShoppingBag className="size-3.5" aria-hidden />
+            Novo pedido
+          </Link>
+        )}
       </div>
 
       <form
@@ -276,6 +284,7 @@ export default function AdminPedidosDeCompra({ loaderData }: Route.ComponentProp
           <ul className="divide-y divide-border rounded-xl border border-border">
             {pedidos.map((p) => (
               <LinhaPedido
+                somenteLeitura={somenteLeitura}
                 key={p.id}
                 pedido={p}
                 lojas={lojas}
@@ -315,6 +324,7 @@ function LinhaPedido({
   pedido: p,
   lojas,
   gravando,
+  somenteLeitura,
   cnpjDaNota,
   onMudarSituacao,
   onReceber,
@@ -323,6 +333,7 @@ function LinhaPedido({
   pedido: PedidoDaConsulta
   lojas: string[]
   gravando: boolean
+  somenteLeitura: boolean
   cnpjDaNota: string | null
   onMudarSituacao: (id: string, passo: "enviar" | "cancelar") => void
   onReceber: (id: string, loja: string) => void
@@ -349,7 +360,7 @@ function LinhaPedido({
 
       <EntregaPrometida
         pedido={p}
-        gravando={gravando}
+        gravando={gravando || somenteLeitura}
         onAnotar={(dia) => onEntrega(p.id, dia)}
       />
 
@@ -363,6 +374,8 @@ function LinhaPedido({
           <Printer className="size-3.5" aria-hidden />
           Imprimir
         </a>
+        {somenteLeitura ? null : (
+          <>
         {/* A entrada acontece na nota, não aqui: é ela que chega com a
             mercadoria. Daqui só se aponta para as notas deste fornecedor. */}
         {cnpjDaNota ? (
@@ -421,6 +434,8 @@ function LinhaPedido({
             <ReceberPedido lojas={lojas} gravando={gravando} onReceber={(loja) => onReceber(p.id, loja)} />
           )
         ) : null}
+          </>
+        )}
       </div>
     </li>
   )

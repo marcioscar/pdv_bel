@@ -675,6 +675,7 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
       <Topo
         operador={eu.nome}
         papel={eu.papel}
+        usuarioId={eu.id}
         loja={eu.loja}
         lojasPermitidas={eu.lojasPermitidas.length}
         relogio={relogio}

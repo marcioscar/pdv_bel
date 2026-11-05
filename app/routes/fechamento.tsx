@@ -172,6 +172,7 @@ export default function Fechamento({ loaderData, actionData }: Route.ComponentPr
       <Topo
         operador={eu.nome}
         papel={eu.papel}
+        usuarioId={eu.id}
         loja={eu.loja}
         lojasPermitidas={eu.lojasPermitidas.length}
         relogio={relogio}
