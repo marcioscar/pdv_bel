@@ -550,3 +550,46 @@ export async function diasSemFechamento(lojasPermitidas: string[], desde: string
     .map((c) => ({ loja: c.split("|")[0], dia: c.split("|")[1] }))
     .sort((a, b) => (a.dia === b.dia ? a.loja.localeCompare(b.loja) : b.dia.localeCompare(a.dia)))
 }
+
+/**
+ * As sangrias das lojas no período, pelo dia do caixa, da mais recente para a mais
+ * antiga. A cancelada vem na lista, com quem cancelou, mas fica fora dos totais:
+ * o dinheiro dela não saiu, e sumir com a linha esconderia que alguém a desfez.
+ */
+export async function sangriasDoPeriodo(lojas: string[], de: string, ate: string) {
+  const sangrias = await db.movimentoCaixa.findMany({
+    where: { tipo: "sangria", loja: { in: lojas }, dia: { gte: de, lte: ate } },
+    orderBy: { criadoEm: "desc" },
+    select: {
+      id: true,
+      loja: true,
+      dia: true,
+      criadoEm: true,
+      valor: true,
+      operador: true,
+      observacao: true,
+      autorizadaPor: true,
+      canceladoEm: true,
+      canceladoPor: true,
+    },
+  })
+
+  const valendo = sangrias.filter((s) => !s.canceladoEm)
+  const total = arredondar(valendo.reduce((soma, s) => soma + s.valor, 0))
+
+  const acumulado = new Map<string, { loja: string; quantidade: number; total: number }>()
+  for (const s of valendo) {
+    const linha = acumulado.get(s.loja) ?? { loja: s.loja, quantidade: 0, total: 0 }
+    linha.quantidade += 1
+    linha.total = arredondar(linha.total + s.valor)
+    acumulado.set(s.loja, linha)
+  }
+
+  return {
+    sangrias,
+    total,
+    quantidade: valendo.length,
+    canceladas: sangrias.length - valendo.length,
+    porLoja: [...acumulado.values()].sort((a, b) => b.total - a.total),
+  }
+}

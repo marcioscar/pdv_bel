@@ -286,6 +286,12 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         descricao: "Cartão por dia, desconto e sangria por operador, lançamentos cancelados",
         somenteGerente: true,
       },
+      {
+        para: "/admin/relatorios/sangria",
+        rotulo: "Sangrias",
+        descricao: "As sangrias dos caixas da rede, por período e por loja",
+        somenteGerente: true,
+      },
     ],
   },
   {
