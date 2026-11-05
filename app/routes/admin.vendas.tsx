@@ -77,6 +77,8 @@ const SITUACOES = [
   { id: "todas", rotulo: "Todas" },
   { id: "validas", rotulo: "Só válidas" },
   { id: "canceladas", rotulo: "Só canceladas" },
+  // Venda desfeita com a nota de pé: o que o contador precisa olhar.
+  { id: "canceladasComNota", rotulo: "Canceladas com nota válida" },
   // Atalho do escritório: o Pix antecipado que ainda falta achar no extrato.
   { id: "pixNaoConferido", rotulo: "Pix antecipado não conferido" },
 ] as const
@@ -525,6 +527,13 @@ function Detalhe({
           Cancelada em {new Date(venda.canceladaEm).toLocaleString("pt-BR")}
           {venda.canceladaPor ? ` por ${venda.canceladaPor}` : ""} — os itens voltaram
           para o estoque.
+          {venda.notaMantidaNoCancelamento ? (
+            <>
+              {" "}
+              <b className="font-semibold">A nota fiscal continua válida na SEFAZ.</b>{" "}
+              {venda.notaMantidaNoCancelamento}
+            </>
+          ) : null}
         </p>
       ) : null}
 

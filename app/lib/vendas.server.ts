@@ -1145,7 +1145,7 @@ export const VENDA_QUE_CONTA: Prisma.VendaWhereInput = {
 export const VENDAS_POR_PAGINA = 50
 
 /** "pixNaoConferido": o Pix antecipado válido que o escritório ainda não achou no extrato. */
-export type SituacaoFiltrada = "todas" | "validas" | "canceladas" | "pixNaoConferido"
+export type SituacaoFiltrada = "todas" | "validas" | "canceladas" | "canceladasComNota" | "pixNaoConferido"
 
 export type FiltroDeNota = "" | "sem" | "com"
 
@@ -1233,7 +1233,10 @@ export function lerFiltroVendas(url: URL, lojasPermitidas: string[]): FiltroVend
     valor: texto("valor").slice(0, 15),
     nota: texto("nota") === "sem" || texto("nota") === "com" ? (texto("nota") as FiltroDeNota) : "",
     situacao:
-      situacao === "validas" || situacao === "canceladas" || situacao === "pixNaoConferido"
+      situacao === "validas" ||
+      situacao === "canceladas" ||
+      situacao === "canceladasComNota" ||
+      situacao === "pixNaoConferido"
         ? situacao
         : "todas",
     pagina: Math.max(1, Math.trunc(Number(params.get("pagina"))) || 1),
@@ -1373,6 +1376,10 @@ export async function consultarVendas(filtro: FiltroVendas) {
 
   if (filtro.situacao === "validas") conteudo.push(NAO_CANCELADA)
   if (filtro.situacao === "canceladas") conteudo.push({ NOT: NAO_CANCELADA })
+  // Campo ausente não é null no Mongo: "preenchido" é estar presente e não ser null.
+  if (filtro.situacao === "canceladasComNota") {
+    conteudo.push({ notaMantidaNoCancelamento: { isSet: true } }, { NOT: { notaMantidaNoCancelamento: null } })
+  }
   if (filtro.situacao === "pixNaoConferido") {
     conteudo.push(NAO_CANCELADA, {
       OR: [{ forma: FORMA_PIX_ANTECIPADO }, { pagamentos: { some: { forma: FORMA_PIX_ANTECIPADO } } }],

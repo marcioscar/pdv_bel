@@ -240,9 +240,11 @@ export async function action({ request }: Route.ActionArgs) {
    * nota de pé deixaria um documento fiscal sem venda, e isso não aparece em
    * tela nenhuma — só na apuração do contador.
    *
-   * Recusa da SEFAZ interrompe o cancelamento inteiro. Quase sempre é prazo
-   * vencido, e aí a nota é fato consumado: o caminho é uma nota de devolução,
-   * não um botão que apaga a venda e deixa o documento valendo.
+   * Recusa da SEFAZ interrompe o cancelamento e devolve a escolha ao gerente:
+   * quase sempre é prazo vencido, e aí ele pode cancelar só a venda, para estoque
+   * e caixa (pedido do Marcio, 05/11/2026). O servidor tenta a SEFAZ de novo nesse
+   * segundo pedido, e a nota só fica de pé se ela recusar outra vez. O campo
+   * `notaMantidaNoCancelamento` deixa o caso à vista do contador.
    */
   const numeroDaVenda = await db.venda.findUnique({
     where: { id: vendaId },
@@ -252,9 +254,15 @@ export async function action({ request }: Route.ActionArgs) {
     vendaId,
     `Cancelamento da venda ${numeroDaVenda?.numero ?? ""} no PDV por ${eu.nome}`.trim()
   )
-  if (!nota.ok) {
+  const manterNota = form.get("manterNota") === "1"
+  if (!nota.ok && !(manterNota && nota.podeManterNota)) {
     return data(
-      { ok: false as const, tipo: "cancelamento" as const, erro: nota.erro },
+      {
+        ok: false as const,
+        tipo: "cancelamento" as const,
+        erro: nota.erro,
+        podeManterNota: nota.podeManterNota,
+      },
       { status: 400 }
     )
   }
@@ -271,7 +279,7 @@ export async function action({ request }: Route.ActionArgs) {
     )
   }
 
-  const resultado = await cancelarVenda(vendaId, eu.loja, eu.nome)
+  const resultado = await cancelarVenda(vendaId, eu.loja, eu.nome, nota.ok ? null : nota.erro)
   if (!resultado.ok) {
     return data({ ...resultado, tipo: "cancelamento" as const }, { status: 400 })
   }
@@ -279,7 +287,8 @@ export async function action({ request }: Route.ActionArgs) {
   const partes = [
     `${resultado.estornados} ${resultado.estornados === 1 ? "item estornado" : "itens estornados"}`,
   ]
-  if (nota.cancelada) partes.push("nota fiscal cancelada na SEFAZ")
+  if (!nota.ok) partes.push("a nota fiscal continua válida na SEFAZ")
+  else if (nota.cancelada) partes.push("nota fiscal cancelada na SEFAZ")
   if (cobrancas.canceladas > 0) {
     partes.push(
       `${cobrancas.canceladas} ${cobrancas.canceladas === 1 ? "boleto cancelado" : "boletos cancelados"} no Inter`
@@ -338,6 +347,8 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
 
   const [indiceAtivo, setIndiceAtivo] = useState(0)
   const [confirmando, setConfirmando] = useState<string | null>(null)
+  /** A recusa da SEFAZ que abre a opção de cancelar só a venda. */
+  const [recusaDaNota, setRecusaDaNota] = useState<string | null>(null)
   const [comprovante, setComprovante] = useState<{
     vendaNumero: number
     vendaId: string
@@ -425,7 +436,24 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
       return
     }
 
+    /*
+     * Recusa da SEFAZ num cancelamento comum: o diálogo fica aberto e oferece
+     * cancelar só a venda. Na troca, não: o carrinho voltaria ao caixa e a venda
+     * nova sairia com outra nota, duas notas para a mesma mercadoria.
+     */
+    if (
+      resposta.tipo === "cancelamento" &&
+      !resposta.ok &&
+      "podeManterNota" in resposta &&
+      resposta.podeManterNota &&
+      !trocando
+    ) {
+      setRecusaDaNota(resposta.erro)
+      return
+    }
+
     setConfirmando(null)
+    setRecusaDaNota(null)
     if (resposta.tipo === "nota" && resposta.ok) setEmitindoNfe(null)
     if (resposta.tipo === "nota" && !resposta.ok) setErroNfe(resposta.erro)
     avisar(
@@ -534,6 +562,7 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
       return
     }
     // Cancelar estorna estoque; exige uma segunda confirmação deliberada.
+    setRecusaDaNota(null)
     setConfirmando(ativa.id)
   }, [ativa, avisar, cancelando, podeCancelar])
 
@@ -541,6 +570,17 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
     if (!confirmando) return
     fetcher.submit({ vendaId: confirmando }, { method: "post" })
   }, [confirmando, fetcher])
+
+  const cancelarSoAVenda = useCallback(() => {
+    if (!confirmando) return
+    fetcher.submit({ vendaId: confirmando, manterNota: "1" }, { method: "post" })
+  }, [confirmando, fetcher])
+
+  const voltarDoCancelamento = useCallback(() => {
+    setConfirmando(null)
+    setRecusaDaNota(null)
+    setTrocando(null)
+  }, [])
 
   useEffect(() => {
     function aoTeclar(evento: KeyboardEvent) {
@@ -566,10 +606,12 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
       if (confirmando) {
         if (key === "Enter") {
           evento.preventDefault()
-          confirmarCancelamento()
+          // Deixar a nota valendo pede o clique: um segundo Enter apressado, logo
+          // depois da recusa, não pode decidir isso.
+          if (!recusaDaNota) confirmarCancelamento()
         } else if (key === "Escape") {
           evento.preventDefault()
-          setConfirmando(null)
+          voltarDoCancelamento()
         }
         return
       }
@@ -618,6 +660,8 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
     comprovante,
     confirmando,
     confirmarCancelamento,
+    recusaDaNota,
+    voltarDoCancelamento,
     pedirCancelamento,
     verCobranca,
     vendas.length,
@@ -1141,6 +1185,45 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
           aria-label="Confirmar cancelamento"
           className="absolute inset-0 z-30 flex items-center justify-center bg-background/80 p-8 backdrop-blur-sm"
         >
+          {recusaDaNota ? (
+            <div className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-xl">
+              <h2 className="text-base font-semibold">
+                A SEFAZ não cancelou a nota da venda #{vendaConfirmando.numero}
+              </h2>
+              <p className="mt-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                {recusaDaNota}
+              </p>
+              <p className="mt-3 text-sm text-muted-foreground">
+                Você pode cancelar só a venda: ela sai do caixa e do faturamento,
+                e os itens voltam para o estoque.{" "}
+                <b className="font-semibold text-foreground">
+                  A nota continua válida na SEFAZ
+                </b>{" "}
+                e segue na apuração do contador.
+              </p>
+              <div className="mt-5 flex justify-end gap-2">
+                <Button
+                  type="button"
+                  tabIndex={-1}
+                  variant="outline"
+                  onClick={voltarDoCancelamento}
+                  className="rounded-lg"
+                >
+                  <Kbd>Esc</Kbd> Voltar
+                </Button>
+                <Button
+                  type="button"
+                  tabIndex={-1}
+                  variant="destructive"
+                  disabled={cancelando}
+                  onClick={cancelarSoAVenda}
+                  className="rounded-lg"
+                >
+                  {cancelando ? "Cancelando…" : "Cancelar só a venda"}
+                </Button>
+              </div>
+            </div>
+          ) : (
           <div className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-xl">
             <h2 className="text-base font-semibold">
               {trocando
@@ -1193,8 +1276,9 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                     A {notas[vendaConfirmando.id].modelo === "nfe" ? "NF-e" : "NFC-e"}{" "}
                     {notas[vendaConfirmando.id].numero} será cancelada na SEFAZ
                   </b>{" "}
-                  — passado o prazo dela, o cancelamento é recusado e a venda
-                  continua de pé.
+                  {trocando
+                    ? " — passado o prazo dela, a troca é recusada e a venda continua de pé."
+                    : " — passado o prazo dela, a próxima tela oferece cancelar só a venda."}
                 </>
               ) : null}
             </p>
@@ -1203,7 +1287,7 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                 type="button"
                 tabIndex={-1}
                 variant="outline"
-                onClick={() => setConfirmando(null)}
+                onClick={voltarDoCancelamento}
                 className="rounded-lg"
               >
                 <Kbd>Esc</Kbd> Voltar
@@ -1221,6 +1305,7 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
               </Button>
             </div>
           </div>
+          )}
         </div>
       ) : null}
     </main>

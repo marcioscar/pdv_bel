@@ -164,7 +164,9 @@ export type ResultadoCancelamento =
 export async function cancelarVenda(
   vendaId: string,
   loja: string,
-  operador: string
+  operador: string,
+  /** A recusa da SEFAZ, quando o gerente decidiu cancelar só a venda. */
+  notaMantida: string | null = null
 ): Promise<ResultadoCancelamento> {
   const venda = await db.venda.findUnique({ where: { id: vendaId } })
   if (!venda) return { ok: false, erro: "Venda não encontrada" }
@@ -189,7 +191,11 @@ export async function cancelarVenda(
           id: vendaId,
           OR: [{ canceladaEm: null }, { canceladaEm: { isSet: false } }],
         },
-        data: { canceladaEm: new Date(), canceladaPor: operador },
+        data: {
+          canceladaEm: new Date(),
+          canceladaPor: operador,
+          ...(notaMantida ? { notaMantidaNoCancelamento: notaMantida } : {}),
+        },
       })
       // Outra requisição cancelou entre a leitura e a transação.
       if (marcadas.count === 0) {

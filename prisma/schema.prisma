@@ -635,6 +635,10 @@ model Venda {
   /// Venda cancelada não é apagada: fica com a marca e os movimentos estornados.
   canceladaEm  DateTime?
   canceladaPor String?
+  /// Preenchido quando o gerente cancelou só a venda porque a SEFAZ recusou
+  /// cancelar a nota, quase sempre por prazo: guarda a recusa. A nota continua
+  /// válida, e este campo é o que permite ao contador achar esses casos.
+  notaMantidaNoCancelamento String?
 
   @@unique([loja, numero])
   @@index([loja, criadaEm])

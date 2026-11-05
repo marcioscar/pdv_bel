@@ -512,15 +512,16 @@ export function notasPendentes(loja: string, limite = 10) {
  * Venda sem nota é o caso comum e não é erro: devolve `cancelada: false` e o
  * cancelamento segue.
  *
- * Quando a SEFAZ recusa o cancelamento, a venda NÃO é desfeita. Quase sempre é
- * prazo vencido (a NFC-e tem minutos; a NF-e, 24 horas), e nesse ponto a nota é
- * um fato fiscal: o caminho é uma nota de devolução, com o contador, não um
- * botão de cancelar que apaga a venda e deixa o documento de pé.
+ * Quando a SEFAZ recusa o cancelamento, a venda NÃO é desfeita sozinha. Quase
+ * sempre é prazo vencido (a NFC-e tem 30 minutos; a NF-e, 24 horas), e a nota é um
+ * fato fiscal. `podeManterNota` diz que a recusa é definitiva o bastante para o
+ * gerente decidir cancelar só a venda. Fila da SEFAZ, queda de conexão e token
+ * errado não contam: nesses casos a nota ainda pode ser cancelada mais tarde.
  */
 export async function desfazerNotaDaVenda(
   vendaId: string,
   justificativa: string
-): Promise<{ ok: true; cancelada: boolean } | { ok: false; erro: string }> {
+): Promise<{ ok: true; cancelada: boolean } | { ok: false; erro: string; podeManterNota: boolean }> {
   const nota = await db.notaFiscalEmitida.findFirst({
     where: { vendaId, status: { in: ["autorizado", "processando_autorizacao"] } },
     orderBy: { criadaEm: "desc" },
@@ -540,6 +541,7 @@ export async function desfazerNotaDaVenda(
       return {
         ok: false,
         erro: "A nota ainda está sendo autorizada pela SEFAZ — tente cancelar em instantes",
+        podeManterNota: false,
       }
     }
     if (agora?.status !== "autorizado") return { ok: true, cancelada: false }
@@ -551,6 +553,20 @@ export async function desfazerNotaDaVenda(
 
   try {
     const resposta = await cancelarNota(nota.loja, nota.modelo as ModeloNota, nota.ref, motivo)
+    /*
+     * A Focus pode responder 200 com `erro_cancelamento`: a chamada deu certo, e
+     * a SEFAZ recusou. Só "cancelado" é cancelado; gravar outra coisa como tal
+     * esconderia uma nota que continua valendo.
+     */
+    if (resposta.status !== "cancelado") {
+      return {
+        ok: false,
+        erro: `A nota ${nota.numero ? `${nota.numero} ` : ""}não pôde ser cancelada: ${
+          resposta.mensagem_sefaz || resposta.mensagem || "a SEFAZ não confirmou o cancelamento"
+        }`,
+        podeManterNota: resposta.status === "erro_cancelamento",
+      }
+    }
     await db.notaFiscalEmitida.update({
       where: { id: nota.id },
       data: { ...daResposta(resposta), status: "cancelado" },
@@ -561,6 +577,12 @@ export async function desfazerNotaDaVenda(
     return {
       ok: false,
       erro: `A nota ${nota.numero ? `${nota.numero} ` : ""}não pôde ser cancelada: ${detalhe}`,
+      // 4xx é recusa do pedido; 401/403/429 e 5xx são problema de acesso ou da Focus.
+      podeManterNota:
+        erro instanceof ErroFocus &&
+        erro.status >= 400 &&
+        erro.status < 500 &&
+        ![401, 403, 429].includes(erro.status),
     }
   }
 }
