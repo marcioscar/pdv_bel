@@ -1,15 +1,14 @@
 import { db } from "~/lib/db.server"
 import { saldosDosProdutos } from "~/lib/estoque.server"
-import { arredondarQuantidade, quantidade as formatarQuantidade } from "~/lib/moeda"
-import { enviarTelegramEmSegundoPlano, texto } from "~/lib/telegram.server"
+import { arredondarQuantidade } from "~/lib/moeda"
 
 /**
  * O estoque que ficou negativo — e o gerente sabendo disso.
  *
  * A venda e a transferência não recusam mais por falta de saldo: a mercadoria
  * chega, o gerente não está para dar entrada, e a loja não pode parar. Em troca,
- * todo documento que deixa um produto abaixo de zero registra um aviso e manda
- * uma mensagem ao gerente. Ele não autoriza nada; dá ciência — é o lembrete de
+ * todo documento que deixa um produto abaixo de zero registra um aviso na tela
+ * Estoque negativo. O gerente não autoriza nada; dá ciência — é o lembrete de
  * que há entrada a lançar.
  */
 
@@ -61,24 +60,6 @@ export async function registrarAvisosDeNegativo(entrada: {
     })
     if (avisos.length === 0) return
     await db.avisoEstoqueNegativo.createMany({ data: avisos })
-
-    const linhas = avisos
-      .slice(0, 10)
-      .map(
-        (a) =>
-          `• ${texto(a.codigo)} ${texto(a.descricao)}: saldo ${formatarQuantidade(a.saldoDepois)} ${texto(a.unidade)}`
-      )
-    enviarTelegramEmSegundoPlano(
-      [
-        `<b>Estoque negativo · ${texto(entrada.loja)}</b>`,
-        `${texto(entrada.documento)} por ${texto(entrada.operador)}`,
-        ...linhas,
-        avisos.length > 10 ? `… e mais ${avisos.length - 10}` : "",
-        "Falta dar entrada na mercadoria. Dê ciência em Estoque negativo.",
-      ]
-        .filter(Boolean)
-        .join("\n")
-    )
   } catch (erro) {
     console.error("[estoque negativo] aviso não registrado:", erro instanceof Error ? erro.message : erro)
   }
