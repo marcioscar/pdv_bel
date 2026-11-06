@@ -20,7 +20,7 @@ import {
 } from "~/lib/cobranca.server"
 import { cancelarVenda } from "~/lib/estoque.server"
 import { focusConfigurada, urlDoArquivo } from "~/lib/focus.server"
-import { FRETE_SEM_TRANSPORTE, MODALIDADES_FRETE, modeloDaVenda } from "~/lib/fiscal"
+import { FRETE_SEM_TRANSPORTE, MODALIDADES_FRETE, modeloDaVenda, OBSERVACAO_NOTA_MAXIMO } from "~/lib/fiscal"
 import {
   atualizarStatusDaNota,
   desfazerNotaDaVenda,
@@ -1329,7 +1329,7 @@ function DialogoNfe({
   onFechar,
   onEmitir,
 }: {
-  venda: { numero: number; total: number; clienteNome: string | null }
+  venda: { numero: number; total: number; clienteNome: string | null; observacaoNota: string | null }
   enviando: boolean
   erro: string | null
   onFechar: () => void
@@ -1337,7 +1337,9 @@ function DialogoNfe({
 }) {
   const [freteModalidade, setFreteModalidade] = useState(FRETE_SEM_TRANSPORTE)
   const [freteValor, setFreteValor] = useState("")
-  const [observacao, setObservacao] = useState("")
+  // Abre com o que foi digitado no caixa: a nota recusada volta para cá, e o
+  // recado não pode sumir sem aviso na segunda tentativa.
+  const [observacao, setObservacao] = useState(venda.observacaoNota ?? "")
 
   const primeiroCampo = useRef<HTMLSelectElement>(null)
   useEffect(() => primeiroCampo.current?.focus(), [])
@@ -1414,7 +1416,7 @@ function DialogoNfe({
               value={observacao}
               onChange={(evento) => setObservacao(evento.target.value)}
               rows={3}
-              maxLength={500}
+              maxLength={OBSERVACAO_NOTA_MAXIMO}
               placeholder="Pedido 1234, entregar até sexta…"
               className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
             />

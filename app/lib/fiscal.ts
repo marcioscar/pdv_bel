@@ -229,6 +229,9 @@ export type ModeloNota = "nfce" | "nfe"
  * o que escreve "Emitir NFC-e" ou "Emitir NF-e" no botão antes de qualquer
  * chamada — e um `.server` importado pelo componente quebra o build.
  */
+/** O tamanho do recado da NF-e: o mesmo no caixa e na tela de Vendas. */
+export const OBSERVACAO_NOTA_MAXIMO = 500
+
 export function modeloDaVenda(venda: {
   forma: string
   clienteCpfCnpj: string | null

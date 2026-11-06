@@ -574,6 +574,11 @@ model Venda {
   /// anteriores ao campo têm.
   modeloNota     String?
 
+  /// O recado digitado na conferência para sair na NF-e. Fica na venda porque a
+  /// emissão pode vir depois de fechar — o Pix só emite quando o banco confirma, e
+  /// a nota recusada é reenviada — e o recado precisa continuar lá.
+  observacaoNota String?
+
   /// A devolução lançada no fechamento desta venda, cujo valor entrou em
   /// `creditoUsado` (a troca no balcão: o cliente traz o que volta e paga só a
   /// diferença). Null na venda comum.

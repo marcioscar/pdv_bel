@@ -219,7 +219,10 @@ export async function emitirDaVenda(
       ? extras.freteModalidade
       : FRETE_SEM_TRANSPORTE
   const valorFrete = modelo === "nfe" ? arredondar(extras?.freteValor ?? 0) : 0
-  const observacao = modelo === "nfe" ? (extras?.observacao ?? "").trim() : ""
+  // O que veio da tela de Vendas vale sobre o da venda: aquele diálogo abre com o
+  // recado do caixa preenchido, então o que chega dali é a versão revisada.
+  const observacao =
+    modelo === "nfe" ? (extras?.observacao ?? venda.observacaoNota ?? "").trim() : ""
 
   /*
    * A frase do Simples é exigida por lei e não pode ser substituída pelo recado

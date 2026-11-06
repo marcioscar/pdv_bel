@@ -878,10 +878,10 @@ export async function action({ request }: Route.ActionArgs) {
 async function emitirNaVenda(vendaId: string, operador: string) {
   try {
     /*
-     * A NF-e sai daqui SEM frete e SEM observação — no fechamento não há como
-     * perguntar, e depois de autorizada não se corrige. Quem precisa dessas duas
-     * coisas desliga a nota na conferência e emite pela tela de Vendas, que
-     * pergunta antes. A tela avisa disso ao ligar a nota numa venda de empresa.
+     * A NF-e sai daqui SEM frete — no fechamento não se pergunta, e depois de
+     * autorizada não se corrige. Quem precisa dele desliga a nota na conferência
+     * e emite pela tela de Vendas, que pergunta antes. A tela avisa disso ao
+     * ligar a nota numa venda de empresa. A observação vem gravada na venda.
      */
     const resultado = await emitirDaVenda(vendaId, { emitidaPor: operador })
     if (!resultado.ok) {
@@ -1016,6 +1016,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
    * cliente: quem pede crédito da Nota Legal informa o CPF e vai embora.
    */
   const [cpfNaNota, setCpfNaNota] = useState("")
+  const [observacaoNota, setObservacaoNota] = useState("")
   /** Pix antecipado: quem fez o Pix na chave, declarado pelo vendedor. */
   const [pixPagador, setPixPagador] = useState("")
   const [erroFinalizacao, setErroFinalizacao] = useState<string | null>(null)
@@ -1345,6 +1346,9 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           emitirNota,
           modeloNota,
           cpfNaNota,
+          // Sem nota na conferência não há recado: o texto digitado antes de
+          // girar para o cupom não fica esquecido dentro da venda.
+          observacaoNota: emitirNota ? observacaoNota : null,
           pixPagador: pagaComAntecipado ? pixPagador : null,
         },
         { method: "post", encType: "application/json" }
@@ -1352,7 +1356,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     },
     [
       autorizacaoId, cliente, cpfNaNota, creditoDoSaldo, devolucaoDoPedido, divisao, emitirNota,
-      fetcher, forma, modeloNota, pagaComAntecipado, pixPagador,
+      fetcher, forma, modeloNota, observacaoNota, pagaComAntecipado, pixPagador,
       gravando, totais.desconto, venda.itens, vendedorCodigo,
     ]
   )
@@ -1389,6 +1393,9 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           emitirNota,
           modeloNota,
           cpfNaNota,
+          // Sem nota na conferência não há recado: o texto digitado antes de
+          // girar para o cupom não fica esquecido dentro da venda.
+          observacaoNota: emitirNota ? observacaoNota : null,
           // A parte em Pix antecipado da divisão leva quem pagou junto.
           pixPagador: pagaComAntecipado ? pixPagador : null,
           vendedorCodigo,
@@ -1405,7 +1412,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     },
     [
       autorizacaoId, cliente, cpfNaNota, creditoDoSaldo, devolucaoDoPedido, divisao, emitirNota,
-      fetcher, forma, modeloNota, pagaComAntecipado, pixPagador,
+      fetcher, forma, modeloNota, observacaoNota, pagaComAntecipado, pixPagador,
       totais.desconto, venda.itens, vendedorCodigo,
     ]
   )
@@ -2016,6 +2023,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     if (finalizando) {
       setEmitirNota(false)
       setModeloNota(null)
+      setObservacaoNota("")
       setPixPagador("")
     }
   }, [finalizando])
@@ -2697,6 +2705,8 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           emitirNota={emitirNota}
           onEmitirNotaChange={setEmitirNota}
           modeloNota={modeloNota}
+          observacaoNota={observacaoNota}
+          onObservacaoNotaChange={setObservacaoNota}
           pixPagador={pixPagador}
           onPixPagadorChange={setPixPagador}
           onModeloNotaChange={setModeloNota}

@@ -5,6 +5,7 @@ import {
   conferirAutorizacao,
   marcarAutorizacaoUsada,
 } from "~/lib/autorizacao.server"
+import { OBSERVACAO_NOTA_MAXIMO } from "~/lib/fiscal"
 import { caixaAberto } from "~/lib/caixa.server"
 import { limparDocumento, validarCpfCnpj } from "~/lib/documento"
 import { db } from "~/lib/db.server"
@@ -80,6 +81,8 @@ export type PedidoRecebido = {
   cpfNaNota: string | null
   /** "nfce" ou "nfe" escolhido na conferência; null deixa o padrão decidir. */
   modeloNota?: "nfce" | "nfe" | null
+  /** O recado que sai na NF-e. A NFC-e o ignora. */
+  observacaoNota?: string | null
   /** Pix antecipado: quem pagou, como o vendedor viu no comprovante. */
   pixPagador?: string | null
   /**
@@ -240,6 +243,10 @@ export function lerPedido(bruto: unknown): PedidoRecebido | null {
     clienteId,
     cpfNaNota,
     modeloNota: corpo.modeloNota === "nfe" || corpo.modeloNota === "nfce" ? corpo.modeloNota : null,
+    observacaoNota:
+      typeof corpo.observacaoNota === "string"
+        ? corpo.observacaoNota.trim().slice(0, OBSERVACAO_NOTA_MAXIMO) || null
+        : null,
     pixPagador:
       typeof corpo.pixPagador === "string" ? corpo.pixPagador.trim().slice(0, 120) || null : null,
     devolucao: lerDevolucao(corpo.devolucao),
@@ -1026,6 +1033,7 @@ async function gravarUmaVez(
         clienteCpfCnpj: cliente?.cpfCnpj ?? null,
         cpfNaNota: pedido.cpfNaNota,
         modeloNota: pedido.modeloNota ?? null,
+        observacaoNota: pedido.observacaoNota ?? null,
         vencimento,
         condicao,
         pixTxid: pedido.pixTxid ?? null,

@@ -26,7 +26,7 @@ import { Input } from "~/components/ui/input";
 import { Kbd } from "~/components/ui/kbd";
 import { Separator } from "~/components/ui/separator";
 import { formatarCpfCnpj, limparDocumento, mascararCpfCnpj, validarCpfCnpj } from "~/lib/documento";
-import { modeloDaVenda, type ModeloNota } from "~/lib/fiscal";
+import { modeloDaVenda, OBSERVACAO_NOTA_MAXIMO, type ModeloNota } from "~/lib/fiscal";
 import {
   arredondar,
   interpretarQuantidade,
@@ -105,6 +105,9 @@ type Props = {
   /** NFC-e ou NF-e escolhido no F7; null deixa o padrão de `modeloDaVenda`. */
   modeloNota: ModeloNota | null;
   onModeloNotaChange: (modelo: ModeloNota | null) => void;
+  /** O recado que sai na NF-e; o campo só aparece quando é ela que vai sair. */
+  observacaoNota: string;
+  onObservacaoNotaChange: (observacao: string) => void;
   /** Pix antecipado: o nome de quem fez o Pix, como está no comprovante. */
   pixPagador: string;
   onPixPagadorChange: (nome: string) => void;
@@ -208,6 +211,8 @@ export function FinalizarDialogo({
   onEmitirNotaChange,
   modeloNota,
   onModeloNotaChange,
+  observacaoNota,
+  onObservacaoNotaChange,
   pixPagador,
   onPixPagadorChange,
   devolucao,
@@ -693,8 +698,8 @@ export function FinalizarDialogo({
    * O que a conferência promete sobre a nota.
    *
    * As três situações são diferentes de verdade: a NFC-e sai sozinha e vira o
-   * papel do cliente; a NF-e espera o vendedor informar frete e observação na
-   * tela de Vendas; e a loja que ainda não emite continua no cupom não fiscal.
+   * papel do cliente; a NF-e sai com a observação daqui, e quem precisa de frete
+   * emite pela tela de Vendas; e a loja que ainda não emite continua no cupom não fiscal.
    * Prometer errado aqui é o que faz alguém procurar um documento que não veio.
    */
   /**
@@ -739,7 +744,7 @@ export function FinalizarDialogo({
         situacao: fiscal.producao ? "emitir e imprimir" : "emitir com a venda",
         aviso:
           modelo === "nfe"
-            ? [papelDaVez, "sem frete e sem observação"].filter(Boolean).join(" · ")
+            ? [papelDaVez, "sem frete"].filter(Boolean).join(" · ")
             : papelDaVez,
       };
     }
@@ -1344,6 +1349,27 @@ export function FinalizarDialogo({
           </div>
           <Kbd className="shrink-0">F7</Kbd>
         </button>
+
+        {/* Só na NF-e: na NFC-e a observação não vai para o documento. */}
+        {estado === "fiscal" && modelo === "nfe" ? (
+          <div className="mt-2 rounded-lg border border-border px-3 py-2">
+            <label
+              htmlFor="observacao-da-nota"
+              className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
+            >
+              Observação na NF-e · opcional
+            </label>
+            <Input
+              id="observacao-da-nota"
+              value={observacaoNota}
+              onChange={(evento) => onObservacaoNotaChange(evento.target.value)}
+              maxLength={OBSERVACAO_NOTA_MAXIMO}
+              placeholder="Pedido 1234, entregar até sexta…"
+              autoComplete="off"
+              className="mt-0.5 h-8 rounded-lg border-0 bg-transparent px-0 text-sm shadow-none focus-visible:ring-0"
+            />
+          </div>
+        ) : null}
         </div>
 
         <div className="px-6 pb-2 lg:col-start-2 lg:row-start-2 lg:min-h-0 lg:overflow-y-auto lg:border-l lg:border-border lg:pt-3">
