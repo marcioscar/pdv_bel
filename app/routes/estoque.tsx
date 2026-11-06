@@ -218,32 +218,7 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
         relogio={relogio}
         escuro={escuro}
         onAlternarTema={alternar}
-      >
-        <span className="flex items-center gap-1">
-          <BotaoDeFiltro
-            ativo={filtro === "semEstoque"}
-            onClick={() => alternarFiltro("semEstoque")}
-            quantidade={semEstoque}
-            rotulo="sem estoque nesta loja"
-          />
-          {faltamAqui > 0 ? (
-            <BotaoDeFiltro
-              ativo={filtro === "temEmOutra"}
-              onClick={() => alternarFiltro("temEmOutra")}
-              quantidade={faltamAqui}
-              rotulo="tem em outra"
-            />
-          ) : null}
-          {zeradosNaRede > 0 ? (
-            <BotaoDeFiltro
-              ativo={filtro === "zeradoNaRede"}
-              onClick={() => alternarFiltro("zeradoNaRede")}
-              quantidade={zeradosNaRede}
-              rotulo="zerados na rede"
-            />
-          ) : null}
-        </span>
-      </Topo>
+      />
 
       <div className="flex items-center gap-3 border-b border-border bg-muted/40 px-5 py-3">
         <ScanLine className="size-5 shrink-0 text-muted-foreground" aria-hidden />
@@ -286,6 +261,33 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
           >
             Dar entrada
           </Button>
+        ) : null}
+      </div>
+
+      {/* Numa faixa própria, e não na barra de cima: lá eles disputavam espaço com o
+          menu e a loja, e ficavam por cima dos dois em telas menores. */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-border px-5 py-2 text-xs text-muted-foreground">
+        <BotaoDeFiltro
+          ativo={filtro === "semEstoque"}
+          onClick={() => alternarFiltro("semEstoque")}
+          quantidade={semEstoque}
+          rotulo="sem estoque nesta loja"
+        />
+        {faltamAqui > 0 ? (
+          <BotaoDeFiltro
+            ativo={filtro === "temEmOutra"}
+            onClick={() => alternarFiltro("temEmOutra")}
+            quantidade={faltamAqui}
+            rotulo="tem em outra"
+          />
+        ) : null}
+        {zeradosNaRede > 0 ? (
+          <BotaoDeFiltro
+            ativo={filtro === "zeradoNaRede"}
+            onClick={() => alternarFiltro("zeradoNaRede")}
+            quantidade={zeradosNaRede}
+            rotulo="zerados na rede"
+          />
         ) : null}
       </div>
 
