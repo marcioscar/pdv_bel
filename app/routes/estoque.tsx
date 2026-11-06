@@ -21,6 +21,15 @@ import { exigirUsuario } from "~/lib/sessao.server"
 import { useRelogio, useTema } from "~/lib/tema"
 import { cn } from "~/lib/utils"
 
+/** Os indicadores do topo, que também abrem a lista do que contam. */
+type FiltroDeSaldo = "semEstoque" | "temEmOutra" | "zeradoNaRede"
+
+const ROTULO_DO_FILTRO: Record<FiltroDeSaldo, string> = {
+  semEstoque: "sem estoque nesta loja",
+  temEmOutra: "faltam aqui e têm em outra loja",
+  zeradoNaRede: "zerados em toda a rede",
+}
+
 export function meta(_: Route.MetaArgs) {
   return [{ title: "Estoque — BrasSaco" }]
 }
@@ -81,6 +90,9 @@ export async function loader({ request }: Route.LoaderArgs) {
       estoque: saldoPorLoja[eu.loja] ?? 0,
       saldoPorLoja,
       rede,
+      // Pergunta loja por loja, e não pela soma da rede: um saldo negativo numa
+      // loja podia zerar a soma e esconder a mercadoria que existe em outra.
+      temEmOutra: lojas.some((l) => l.codigo !== eu.loja && saldoPorLoja[l.codigo] > 0),
       fornecedores: fornecedoresPorProduto.get(produto.id) ?? [],
     }
   })
@@ -95,7 +107,10 @@ export async function loader({ request }: Route.LoaderArgs) {
       .map((f) => ({ id: f.id, nome: f.nomeFantasia || f.razaoSocial }))
       .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR")),
     semEstoque: produtos.filter((p) => p.estoque <= 0).length,
-    faltamAqui: produtos.filter((p) => p.estoque <= 0 && p.rede > 0).length,
+    faltamAqui: produtos.filter((p) => p.estoque <= 0 && p.temEmOutra).length,
+    // Com os dois de cima, fecha a conta: o que falta aqui ou tem em outra loja,
+    // ou não tem em nenhuma.
+    zeradosNaRede: produtos.filter((p) => p.estoque <= 0 && !p.temEmOutra).length,
   }
 }
 
@@ -111,11 +126,13 @@ export async function loader({ request }: Route.LoaderArgs) {
  * **escreve** no saldo na tela que se abre com cliente esperando convida ao acidente.
  */
 export default function Estoque({ loaderData }: Route.ComponentProps) {
-  const { eu, lojas, produtos, movimentos, fornecedores, semEstoque, faltamAqui } = loaderData
+  const { eu, lojas, produtos, movimentos, fornecedores, semEstoque, faltamAqui, zeradosNaRede } =
+    loaderData
 
   const [busca, setBusca] = useState("")
   // "" é todos. Com um escolhido, a lista é o que ele fornece — inteira.
   const [fornecedorId, setFornecedorId] = useState("")
+  const [filtro, setFiltro] = useState<FiltroDeSaldo | null>(null)
   const campo = useRef<HTMLInputElement>(null)
   const { escuro, alternar } = useTema()
   const relogio = useRelogio()
@@ -127,7 +144,18 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
     () => (fornecedorId ? produtos.filter((p) => p.fornecedores.includes(fornecedorId)) : produtos),
     [fornecedorId, produtos]
   )
-  const indice = useMemo(() => criarIndice(doFornecedor), [doFornecedor])
+  // O filtro do topo soma com o fornecedor e com a busca: "zerados da Plastizip".
+  const noFiltro = useMemo(() => {
+    if (filtro === "semEstoque") return doFornecedor.filter((p) => p.estoque <= 0)
+    if (filtro === "temEmOutra") {
+      return doFornecedor
+        .filter((p) => p.estoque <= 0 && p.temEmOutra)
+        .sort((a, b) => b.rede - a.rede)
+    }
+    if (filtro === "zeradoNaRede") return doFornecedor.filter((p) => p.estoque <= 0 && !p.temEmOutra)
+    return doFornecedor
+  }, [doFornecedor, filtro])
+  const indice = useMemo(() => criarIndice(noFiltro), [noFiltro])
   const porId = useMemo(() => new Map(produtos.map((p) => [p.id, p])), [produtos])
 
   /**
@@ -141,16 +169,23 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
         .map((p) => porId.get(p.id)!)
         .filter(Boolean)
     }
+    // Filtro aberto no topo: a lista inteira, sem o corte de 40 do padrão.
+    if (filtro) return noFiltro
     // Fornecedor escolhido e sem busca: tudo dele, em ordem de descrição.
     if (fornecedorId) return doFornecedor
     const temNoutra = produtos
-      .filter((p) => p.estoque <= 0 && p.rede > 0)
+      .filter((p) => p.estoque <= 0 && p.temEmOutra)
       .sort((a, b) => b.rede - a.rede)
     return (temNoutra.length > 0 ? temNoutra : produtos.filter((p) => p.estoque <= 0)).slice(
       0,
       40
     )
-  }, [busca, doFornecedor, fornecedorId, indice, porId, produtos])
+  }, [busca, doFornecedor, filtro, fornecedorId, indice, noFiltro, porId, produtos])
+
+  function alternarFiltro(escolhido: FiltroDeSaldo) {
+    setFiltro((atual) => (atual === escolhido ? null : escolhido))
+    campo.current?.focus()
+  }
 
   useEffect(() => {
     function aoTeclar(evento: KeyboardEvent) {
@@ -162,6 +197,7 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
       }
       if (evento.key === "Escape") {
         setBusca("")
+        setFiltro(null)
         campo.current?.focus()
       }
     }
@@ -183,15 +219,28 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
         escuro={escuro}
         onAlternarTema={alternar}
       >
-        <span>
-          <b className="font-semibold text-foreground">{semEstoque}</b> sem estoque
-          nesta loja
+        <span className="flex items-center gap-1">
+          <BotaoDeFiltro
+            ativo={filtro === "semEstoque"}
+            onClick={() => alternarFiltro("semEstoque")}
+            quantidade={semEstoque}
+            rotulo="sem estoque nesta loja"
+          />
           {faltamAqui > 0 ? (
-            <>
-              {" · "}
-              <b className="font-semibold text-foreground">{faltamAqui}</b> tem em
-              outra
-            </>
+            <BotaoDeFiltro
+              ativo={filtro === "temEmOutra"}
+              onClick={() => alternarFiltro("temEmOutra")}
+              quantidade={faltamAqui}
+              rotulo="tem em outra"
+            />
+          ) : null}
+          {zeradosNaRede > 0 ? (
+            <BotaoDeFiltro
+              ativo={filtro === "zeradoNaRede"}
+              onClick={() => alternarFiltro("zeradoNaRede")}
+              quantidade={zeradosNaRede}
+              rotulo="zerados na rede"
+            />
           ) : null}
         </span>
       </Topo>
@@ -285,9 +334,11 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
                     <p className="mt-3 text-sm text-muted-foreground">
                       {busca.trim()
                         ? `Nada encontrado para “${busca}”`
-                        : fornecedorId
-                          ? "Nenhum produto deste fornecedor"
-                          : "Nada faltando nesta loja."}
+                        : filtro
+                          ? `Nenhum produto ${ROTULO_DO_FILTRO[filtro]}`
+                          : fornecedorId
+                            ? "Nenhum produto deste fornecedor"
+                            : "Nada faltando nesta loja."}
                     </p>
                   </td>
                 </tr>
@@ -408,8 +459,14 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
       </div>
 
       <div className="border-t border-border px-5 py-2.5 text-xs text-muted-foreground">
-        Só consulta · <Kbd>Esc</Kbd> limpa a busca ·{" "}
-        {fornecedorId
+        Só consulta · <Kbd>Esc</Kbd> limpa a busca e o filtro ·{" "}
+        {filtro
+          ? `${encontrados.length} ${encontrados.length === 1 ? "produto" : "produtos"} ${ROTULO_DO_FILTRO[filtro]}${
+              fornecedorId
+                ? ` de ${fornecedores.find((f) => f.id === fornecedorId)?.nome ?? "fornecedor"}`
+                : ""
+            }`
+          : fornecedorId
           ? `${encontrados.length} ${encontrados.length === 1 ? "produto" : "produtos"} de ${
               fornecedores.find((f) => f.id === fornecedorId)?.nome ?? "fornecedor"
             } — pelas compras já lançadas`
@@ -418,5 +475,33 @@ export default function Estoque({ loaderData }: Route.ComponentProps) {
             : "sem busca, mostra o que falta aqui e tem em outra loja"}
       </div>
     </main>
+  )
+}
+
+/** O número do topo que abre a própria lista; clicar de novo volta ao padrão. */
+function BotaoDeFiltro({
+  ativo,
+  onClick,
+  quantidade,
+  rotulo,
+}: {
+  ativo: boolean
+  onClick: () => void
+  quantidade: number
+  rotulo: string
+}) {
+  return (
+    <button
+      type="button"
+      tabIndex={-1}
+      aria-pressed={ativo}
+      onClick={onClick}
+      className={cn(
+        "rounded-md border px-2 py-0.5 transition-colors hover:bg-muted",
+        ativo ? "border-primary bg-primary/10 text-foreground" : "border-border"
+      )}
+    >
+      <b className="font-semibold text-foreground">{quantidade}</b> {rotulo}
+    </button>
   )
 }
