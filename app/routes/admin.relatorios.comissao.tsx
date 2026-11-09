@@ -436,7 +436,9 @@ export default function RelatorioComissao({ loaderData }: Route.ComponentProps) 
           acompanha a mercadoria e não é venda de ninguém. Venda cancelada também não —
           o cancelamento estorna estoque e dinheiro, e a comissão vai junto. Devolução abate
           no período em que ela aconteceu, não no da venda original: abater no da venda
-          mudaria a comissão de um mês já pago.
+          mudaria a comissão de um mês já pago. O vendido é o que o cliente pagou pela
+          mercadoria: fica fora o acréscimo do boleto a prazo e o crédito que ele já tinha,
+          como o de uma troca — nela, só a diferença paga comissão.
           {semVendedor.vendas > 0 ? (
             <>
               {" "}

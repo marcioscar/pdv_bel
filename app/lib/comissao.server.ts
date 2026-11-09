@@ -18,7 +18,27 @@ import { NAO_CANCELADA, NAO_E_TRANSFERENCIA } from "~/lib/vendas.server"
  * 3. **Devolução abate.** A mercadoria voltou, então o que ela rendia deixa de
  *    ser devido — e abate no período em que a devolução ACONTECEU, não no da
  *    venda original. Abater no da venda mudaria a comissão de um mês já pago.
+ *
+ * 4. **A base é o que o cliente pagou pela mercadoria** — ver `valorComissionavel`.
  */
+
+/**
+ * Quanto de uma venda paga comissão: o total menos o acréscimo do boleto e
+ * menos o crédito que o cliente já tinha.
+ *
+ * O acréscimo é o custo do prazo, não mercadoria vendida. O crédito é dinheiro
+ * que já era do cliente — quase sempre de uma troca: na venda 289 da NRT o
+ * cliente devolveu R$ 3.360 em garrafas de 200 ml, levou R$ 3.696 em garrafas
+ * de 300 ml e pagou R$ 336. Sobre o total, a troca pagava comissão como se
+ * fosse uma venda nova de R$ 3.696 (decisão do Marcio em 09/11/2026).
+ */
+export function valorComissionavel(venda: {
+  total: number
+  acrescimo: number | null
+  creditoUsado: number
+}) {
+  return Math.max(0, venda.total - (venda.acrescimo ?? 0) - venda.creditoUsado)
+}
 
 /** 1,5% é a taxa da rede. Vale quando ninguém cadastrou nenhuma ainda. */
 export const TAXA_PADRAO = 1.5
@@ -102,9 +122,10 @@ export type LinhaComissao = {
   vendedorId: string | null
   nome: string
   vendas: number
-  vendido: number
   devolucoes: number
   devolvido: number
+  /** Sem acréscimo do boleto e sem crédito do cliente — ver `valorComissionavel`. */
+  vendido: number
   /** Vendido menos devolvido — é sobre isto que a taxa incide. */
   base: number
   comissao: number
@@ -140,7 +161,14 @@ export async function comissaoPorVendedor(
           NAO_E_TRANSFERENCIA,
         ],
       },
-      select: { vendedorId: true, vendedorNome: true, total: true, criadaEm: true },
+      select: {
+        vendedorId: true,
+        vendedorNome: true,
+        total: true,
+        acrescimo: true,
+        creditoUsado: true,
+        criadaEm: true,
+      },
     }),
     db.devolucao.findMany({
       where: { loja: { in: lojas }, criadaEm: { gte: de, lt: ate } },
@@ -196,15 +224,16 @@ export async function comissaoPorVendedor(
   const semVendedor = { vendas: 0, vendido: 0 }
 
   for (const venda of vendas) {
+    const valor = valorComissionavel(venda)
     if (!venda.vendedorId) {
       semVendedor.vendas += 1
-      semVendedor.vendido += venda.total
+      semVendedor.vendido += valor
       continue
     }
     const linha = linhaDe(venda.vendedorId, venda.vendedorNome)
     linha.vendas += 1
-    linha.vendido += venda.total
-    linha.comissao += venda.total * (taxaEm(venda.criadaEm) / 100)
+    linha.vendido += valor
+    linha.comissao += valor * (taxaEm(venda.criadaEm) / 100)
   }
 
   for (const devolucao of devolucoes) {
