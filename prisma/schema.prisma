@@ -1828,3 +1828,26 @@ model CategoriaDeDespesa {
 
   @@map("contas")
 }
+
+/// A digitação de uma AF que ainda não foi lançada.
+///
+/// Fica fora de `AutorizacaoDeFaturamento` de propósito: aquela nasce junto com a
+/// entrada no estoque, e uma AF "pela metade" lá dentro apareceria nas buscas, na
+/// trava de número repetido e na conta a pagar. Aqui é só a tela guardada — nada
+/// entra no estoque até alguém clicar em Lançar, e lançar apaga o rascunho.
+model RascunhoDeAf {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  fornecedorId   String   @db.ObjectId
+  fornecedorNome String
+  /// Vazios valem: o rascunho existe justamente para guardar o que falta.
+  numero         String   @default("")
+  loja           String   @default("")
+  /// Datas, observação, frete e linhas como estão na tela, para reabrir igual.
+  dados          Json
+  criadoPor      String
+  criadoEm       DateTime @default(now())
+  atualizadoPor  String
+  atualizadoEm   DateTime @updatedAt
+
+  @@index([atualizadoEm])
+}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Link, redirect, useFetcher, useSearchParams } from "react-router"
 import { ArrowLeft, FileText, Plus, Search } from "lucide-react"
 
@@ -8,7 +8,16 @@ import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { Campo, ESTILO_CAMPO } from "~/components/pdv/filtros"
 import { EscolhaDeProduto, type ProdutoDoCatalogo } from "~/components/pdv/escolha-de-produto"
-import { lancarAf, ultimoCustoDoFornecedor, type ItemDaAf } from "~/lib/afs.server"
+import {
+  apagarRascunhoAf,
+  lancarAf,
+  lerDadosDoRascunhoAf,
+  rascunhoAfPorId,
+  salvarRascunhoAf,
+  ultimoCustoDoFornecedor,
+  type DadosDoRascunhoAf,
+  type ItemDaAf,
+} from "~/lib/afs.server"
 import { db } from "~/lib/db.server"
 import { diaDeHoje } from "~/lib/dia"
 import { formatarCpfCnpj } from "~/lib/documento"
@@ -51,6 +60,17 @@ export async function loader({ request }: Route.LoaderArgs) {
   const url = new URL(request.url)
   const fornecedorId = url.searchParams.get("fornecedor") ?? ""
   const pedidoId = url.searchParams.get("pedido") ?? ""
+  const rascunhoId = url.searchParams.get("rascunho") ?? ""
+
+  const rascunho = rascunhoId ? await rascunhoAfPorId(rascunhoId) : null
+  // O fornecedor e o pedido do rascunho vão para a URL, como na digitação: é por
+  // ela que o loader busca os pedidos em aberto e o último custo.
+  if (rascunho && !fornecedorId) {
+    const destino = new URLSearchParams({ rascunho: rascunho.id, fornecedor: rascunho.fornecedorId })
+    const pedidoDoRascunho = (rascunho.dados as DadosDoRascunhoAf | null)?.pedidoDeCompraId
+    if (pedidoDoRascunho) destino.set("pedido", pedidoDoRascunho)
+    throw redirect(`/admin/afs/nova?${destino}`)
+  }
 
   const [fornecedores, lojas, catalogo] = await Promise.all([
     listarFornecedores(),
@@ -118,6 +138,16 @@ export async function loader({ request }: Route.LoaderArgs) {
       : null,
     ultimoCusto: Object.fromEntries(ultimoCusto),
     hoje: diaDeHoje(),
+    rascunho: rascunho
+      ? {
+          id: rascunho.id,
+          numero: rascunho.numero,
+          loja: rascunho.loja,
+          dados: rascunho.dados as DadosDoRascunhoAf,
+          atualizadoPor: rascunho.atualizadoPor,
+          atualizadoEm: rascunho.atualizadoEm,
+        }
+      : null,
   }
 }
 
@@ -143,6 +173,25 @@ export async function action({ request }: Route.ActionArgs) {
       : { intencao: "atualizarPrecos" as const, ok: false as const, erro: r.erro }
   }
 
+  // Guardar a digitação para terminar depois — nada entra no estoque.
+  if (form.get("intencao") === "salvarRascunho") {
+    const dados = lerDadosDoRascunhoAf(String(form.get("dados") ?? ""))
+    if (!dados) {
+      return { intencao: "salvarRascunho" as const, ok: false as const, erro: "Dados inválidos" }
+    }
+    const r = await salvarRascunhoAf({
+      id: String(form.get("rascunhoId") ?? "") || null,
+      fornecedorId: String(form.get("fornecedorId") ?? ""),
+      numero: String(form.get("numero") ?? ""),
+      loja: String(form.get("loja") ?? ""),
+      dados,
+      operador: eu.nome,
+    })
+    return r.ok
+      ? { intencao: "salvarRascunho" as const, ok: true as const, id: r.id, salvoEm: new Date() }
+      : { intencao: "salvarRascunho" as const, ok: false as const, erro: r.erro }
+  }
+
   let itens: ItemDaAf[] = []
   try {
     itens = JSON.parse(String(form.get("itens") ?? "[]"))
@@ -166,7 +215,12 @@ export async function action({ request }: Route.ActionArgs) {
 
   // Lançada, o lugar de quem lançou é o detalhe dela — é lá que se confere o
   // que entrou e se gera a conta a pagar, que é o passo seguinte do trabalho.
-  if (resultado.ok) throw redirect(`/admin/afs/${resultado.id}`)
+  // O rascunho cumpriu o papel: deixá-lo na lista convidaria a lançar de novo.
+  if (resultado.ok) {
+    const rascunhoId = String(form.get("rascunhoId") ?? "")
+    if (rascunhoId) await apagarRascunhoAf(rascunhoId)
+    throw redirect(`/admin/afs/${resultado.id}`)
+  }
 
   return { intencao: "lancar" as const, ok: false as const, erro: resultado.erro }
 }
@@ -200,6 +254,7 @@ export default function NovaAf({ loaderData }: Route.ComponentProps) {
     ultimoCusto,
     hoje,
     percentuais,
+    rascunho,
   } = loaderData
 
   const fetcher = useFetcher<typeof action>()
@@ -208,12 +263,23 @@ export default function NovaAf({ loaderData }: Route.ComponentProps) {
   const lancando = fetcher.state !== "idle"
   const [params, setParams] = useSearchParams()
 
-  const [numero, setNumero] = useState("")
-  const [dataEmissao, setDataEmissao] = useState(hoje)
-  const [loja, setLoja] = useState("")
-  const [observacao, setObservacao] = useState("")
-  const [freteTexto, setFreteTexto] = useState("")
-  const [linhas, setLinhas] = useState<LinhaAf[]>([LINHA_VAZIA])
+  const rascunhoFetcher = useFetcher<typeof action>()
+  const salvando = rascunhoFetcher.state !== "idle"
+  const respostaRascunho =
+    rascunhoFetcher.data?.intencao === "salvarRascunho" ? rascunhoFetcher.data : null
+
+  // Aberto de um rascunho, a tela começa onde a digitação parou.
+  const [numero, setNumero] = useState(rascunho?.numero ?? "")
+  const [dataEmissao, setDataEmissao] = useState(rascunho?.dados.dataEmissao || hoje)
+  const [loja, setLoja] = useState(rascunho?.loja ?? "")
+  const [observacao, setObservacao] = useState(rascunho?.dados.observacao ?? "")
+  const [freteTexto, setFreteTexto] = useState(rascunho?.dados.freteTexto ?? "")
+  const [linhas, setLinhas] = useState<LinhaAf[]>(
+    rascunho?.dados.linhas.length ? rascunho.dados.linhas : [LINHA_VAZIA]
+  )
+  // A primeira passada do efeito do pedido trocaria as linhas do rascunho pelas
+  // do pedido. Ela é pulada só quando o rascunho já trouxe linhas.
+  const manterLinhasDoRascunho = useRef(Boolean(rascunho?.dados.linhas.length))
 
   const catalogoPorId = useMemo(() => new Map(catalogo.map((p) => [p.id, p])), [catalogo])
   const indice = useMemo(() => criarIndice(catalogo), [catalogo])
@@ -225,6 +291,10 @@ export default function NovaAf({ loaderData }: Route.ComponentProps) {
    * tudo continua editável, porque o que a AF cobra é que manda.
    */
   useEffect(() => {
+    if (manterLinhasDoRascunho.current) {
+      manterLinhasDoRascunho.current = false
+      return
+    }
     if (!pedidoEscolhido) {
       setLinhas([LINHA_VAZIA])
       return
@@ -238,6 +308,16 @@ export default function NovaAf({ loaderData }: Route.ComponentProps) {
       }))
     setLinhas(doPedido.length > 0 ? doPedido : [LINHA_VAZIA])
   }, [pedidoEscolhido?.id])
+
+  // Salvo pela primeira vez, o rascunho vai para a URL: o próximo "Salvar"
+  // atualiza o mesmo, em vez de criar outro a cada clique.
+  const rascunhoNaUrl = params.get("rascunho") ?? ""
+  useEffect(() => {
+    if (respostaRascunho?.ok && respostaRascunho.id !== rascunhoNaUrl) {
+      mudarUrl({ rascunho: respostaRascunho.id })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [respostaRascunho])
 
   function mudarUrl(mudancas: Record<string, string>) {
     const proximos = new URLSearchParams(params)
@@ -396,6 +476,28 @@ export default function NovaAf({ loaderData }: Route.ComponentProps) {
         observacao,
         frete: freteTexto,
         itens: JSON.stringify(itens),
+        rascunhoId: rascunhoNaUrl,
+      },
+      { method: "post" }
+    )
+  }
+
+  function salvarRascunho() {
+    const dados: DadosDoRascunhoAf = {
+      pedidoDeCompraId: pedidoEscolhido?.id ?? "",
+      dataEmissao,
+      observacao,
+      freteTexto,
+      linhas,
+    }
+    rascunhoFetcher.submit(
+      {
+        intencao: "salvarRascunho",
+        rascunhoId: rascunhoNaUrl,
+        fornecedorId,
+        numero,
+        loja,
+        dados: JSON.stringify(dados),
       },
       { method: "post" }
     )
@@ -418,6 +520,17 @@ export default function NovaAf({ loaderData }: Route.ComponentProps) {
           A mercadoria entra no estoque com o custo digitado, como se fosse a nota
         </span>
       </div>
+
+      {rascunho ? (
+        <p className="mt-3 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs">
+          <b>Rascunho</b> salvo por {rascunho.atualizadoPor} em{" "}
+          {new Date(rascunho.atualizadoEm).toLocaleString("pt-BR", {
+            dateStyle: "short",
+            timeStyle: "short",
+          })}
+          . Nada entrou no estoque ainda — só ao clicar em Lançar entrada.
+        </p>
+      ) : null}
 
       <div className="mt-4 flex flex-wrap items-end gap-3 rounded-xl border border-border p-3">
         <Campo rotulo="Fornecedor">
@@ -787,9 +900,32 @@ export default function NovaAf({ loaderData }: Route.ComponentProps) {
               />
             </Campo>
 
+            <span className="ml-auto text-xs">
+              {respostaRascunho?.ok ? (
+                <span className="text-muted-foreground">
+                  Rascunho salvo às{" "}
+                  {new Date(respostaRascunho.salvoEm).toLocaleTimeString("pt-BR", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                </span>
+              ) : respostaRascunho ? (
+                <span className="text-destructive">{respostaRascunho.erro}</span>
+              ) : null}
+            </span>
+
             <Button
               type="button"
-              className="ml-auto"
+              variant="outline"
+              disabled={salvando || lancando}
+              onClick={salvarRascunho}
+              title="Guarda o que já foi digitado para terminar depois, sem dar entrada no estoque"
+            >
+              {salvando ? "Salvando…" : "Salvar rascunho"}
+            </Button>
+
+            <Button
+              type="button"
               disabled={lancando || faltaAlgo}
               onClick={lancar}
               title={
@@ -802,7 +938,7 @@ export default function NovaAf({ loaderData }: Route.ComponentProps) {
             </Button>
           </div>
 
-          {fetcher.data && !fetcher.data.ok ? (
+          {fetcher.data && !fetcher.data.ok && fetcher.data.intencao === "lancar" ? (
             <p className="mt-2 text-sm text-destructive">{fetcher.data.erro}</p>
           ) : null}
         </>

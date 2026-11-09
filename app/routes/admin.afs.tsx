@@ -1,5 +1,5 @@
-import { Link, useNavigate, useNavigation, useSearchParams } from "react-router"
-import { FileText, Plus, Search } from "lucide-react"
+import { Form, Link, useNavigate, useNavigation, useSearchParams } from "react-router"
+import { FilePen, FileText, Plus, Search, Trash2 } from "lucide-react"
 
 import type { Route } from "./+types/admin.afs"
 import { Badge } from "~/components/ui/badge"
@@ -7,7 +7,7 @@ import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { Atalho, Campo, ESTILO_CAMPO, Pagina } from "~/components/pdv/filtros"
 import { PERIODO_TODO, type FiltroAfs } from "~/lib/afs"
-import { consultarAfs, lerFiltroAfs } from "~/lib/afs.server"
+import { apagarRascunhoAf, consultarAfs, lerFiltroAfs, listarRascunhosAf } from "~/lib/afs.server"
 import { diaAtras, diaDeHoje } from "~/lib/dia"
 import { listarLojas } from "~/lib/lojas.server"
 import { moeda } from "~/lib/moeda"
@@ -31,13 +31,27 @@ export async function loader({ request }: Route.LoaderArgs) {
   await exigirGerente(request, "lancarAf")
 
   const filtro = lerFiltroAfs(new URL(request.url))
-  const [consulta, lojas] = await Promise.all([consultarAfs(filtro), listarLojas()])
+  const [consulta, lojas, rascunhos] = await Promise.all([
+    consultarAfs(filtro),
+    listarLojas(),
+    listarRascunhosAf(),
+  ])
 
-  return { filtro, lojas, ...consulta }
+  return { filtro, lojas, ...consulta, rascunhos }
+}
+
+/** Descarta um rascunho. Nada a desfazer no estoque: rascunho nunca deu entrada. */
+export async function action({ request }: Route.ActionArgs) {
+  await exigirGerente(request, "lancarAf")
+  const form = await request.formData()
+  if (form.get("intencao") === "apagarRascunho") {
+    await apagarRascunhoAf(String(form.get("id") ?? ""))
+  }
+  return null
 }
 
 export default function AdminAfs({ loaderData }: Route.ComponentProps) {
-  const { filtro, lojas, afs, total, valor, foraDoPeriodo, paginas } = loaderData
+  const { filtro, lojas, afs, total, valor, foraDoPeriodo, paginas, rascunhos } = loaderData
 
   const [params, setParams] = useSearchParams()
   const navegar = useNavigate()
@@ -68,6 +82,63 @@ export default function AdminAfs({ loaderData }: Route.ComponentProps) {
           Lançar AF
         </Button>
       </div>
+
+      {/* Em cima da busca: rascunho é trabalho pela metade, e a mercadoria dele
+          ainda não está no estoque — é a primeira coisa a ver ao abrir a tela. */}
+      {rascunhos.length > 0 ? (
+        <section className="mt-4 rounded-xl border border-border p-3">
+          <h2 className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <FilePen className="size-3.5" aria-hidden />
+            Rascunhos — ainda não entraram no estoque
+          </h2>
+          <ul className="mt-2 divide-y divide-border">
+            {rascunhos.map((r) => (
+              <li key={r.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 text-sm">
+                <Link
+                  to={`/admin/afs/nova?rascunho=${r.id}`}
+                  className="min-w-0 flex-1 truncate font-medium hover:underline"
+                >
+                  {r.fornecedorNome}
+                  <span className="ml-2 font-mono text-xs text-muted-foreground">
+                    {r.numero ? `AF nº ${r.numero}` : "sem número"}
+                    {r.loja ? ` · ${r.loja}` : ""}
+                  </span>
+                </Link>
+                <span className="text-xs text-muted-foreground">
+                  {r.atualizadoPor} ·{" "}
+                  {new Date(r.atualizadoEm).toLocaleString("pt-BR", {
+                    dateStyle: "short",
+                    timeStyle: "short",
+                  })}
+                </span>
+                <Button
+                  render={<Link to={`/admin/afs/nova?rascunho=${r.id}`} />}
+                  nativeButton={false}
+                  size="sm"
+                  variant="outline"
+                  className="rounded-lg"
+                >
+                  Continuar
+                </Button>
+                <Form method="post">
+                  <input type="hidden" name="intencao" value="apagarRascunho" />
+                  <input type="hidden" name="id" value={r.id} />
+                  <Button
+                    type="submit"
+                    size="icon-sm"
+                    variant="ghost"
+                    aria-label="Descartar rascunho"
+                    title="Descartar rascunho"
+                    className="text-muted-foreground"
+                  >
+                    <Trash2 className="size-4" aria-hidden />
+                  </Button>
+                </Form>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       <div className="mt-4 flex flex-wrap items-end gap-3 rounded-xl border border-border p-3">
         <Campo rotulo="Fornecedor">

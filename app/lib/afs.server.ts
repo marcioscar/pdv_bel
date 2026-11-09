@@ -291,3 +291,110 @@ export async function lancarAf(
 
   return { ok: true, id: af.id, numero: af.numero, pedidoFechado }
 }
+
+/**
+ * O que a tela de lançamento guarda no rascunho, exatamente como está nela —
+ * textos e não números, para reabrir com o que foi digitado, inclusive o que
+ * ainda não é um valor válido.
+ */
+export type DadosDoRascunhoAf = {
+  pedidoDeCompraId: string
+  dataEmissao: string
+  observacao: string
+  freteTexto: string
+  linhas: {
+    produtoId: string
+    quantidadeTexto: string
+    custoTexto: string
+    markupTexto?: string
+    precoTexto?: string
+    fixo?: "markup" | "preco" | null
+    manter?: boolean
+  }[]
+}
+
+/** Lê o que a tela mandou, descartando o que não tem a forma esperada. */
+export function lerDadosDoRascunhoAf(bruto: string): DadosDoRascunhoAf | null {
+  let lido: unknown
+  try {
+    lido = JSON.parse(bruto)
+  } catch {
+    return null
+  }
+  if (typeof lido !== "object" || lido === null) return null
+  const d = lido as Record<string, unknown>
+  const texto = (v: unknown, max = 500) => (typeof v === "string" ? v.slice(0, max) : "")
+  const linhas = Array.isArray(d.linhas) ? d.linhas.slice(0, 500) : []
+
+  return {
+    pedidoDeCompraId: texto(d.pedidoDeCompraId, 24),
+    dataEmissao: texto(d.dataEmissao, 10),
+    observacao: texto(d.observacao),
+    freteTexto: texto(d.freteTexto, 20),
+    linhas: linhas
+      .filter((l): l is Record<string, unknown> => typeof l === "object" && l !== null)
+      .map((l) => ({
+        produtoId: texto(l.produtoId, 24),
+        quantidadeTexto: texto(l.quantidadeTexto, 20),
+        custoTexto: texto(l.custoTexto, 20),
+        markupTexto: typeof l.markupTexto === "string" ? l.markupTexto.slice(0, 20) : undefined,
+        precoTexto: typeof l.precoTexto === "string" ? l.precoTexto.slice(0, 20) : undefined,
+        fixo: l.fixo === "markup" || l.fixo === "preco" ? l.fixo : null,
+        manter: l.manter === true,
+      })),
+  }
+}
+
+/**
+ * Grava a digitação sem lançar nada. Com `id`, atualiza o mesmo rascunho — é o
+ * "Salvar" de novo, depois de digitar mais um pedaço.
+ */
+export async function salvarRascunhoAf(entrada: {
+  id: string | null
+  fornecedorId: string
+  numero: string
+  loja: string
+  dados: DadosDoRascunhoAf
+  operador: string
+}): Promise<{ ok: true; id: string } | { ok: false; erro: string }> {
+  if (!OBJECT_ID.test(entrada.fornecedorId)) return { ok: false, erro: "Escolha o fornecedor da AF" }
+  const fornecedor = await db.fornecedor.findUnique({ where: { id: entrada.fornecedorId } })
+  if (!fornecedor) return { ok: false, erro: "Fornecedor não encontrado" }
+
+  const campos = {
+    fornecedorId: fornecedor.id,
+    fornecedorNome: fornecedor.nomeFantasia || fornecedor.razaoSocial,
+    numero: entrada.numero.trim().slice(0, 40),
+    loja: entrada.loja.slice(0, 10),
+    dados: entrada.dados,
+    atualizadoPor: entrada.operador,
+  }
+
+  if (entrada.id) {
+    if (!OBJECT_ID.test(entrada.id)) return { ok: false, erro: "Rascunho inválido" }
+    const existe = await db.rascunhoDeAf.findUnique({ where: { id: entrada.id }, select: { id: true } })
+    // Apagado por outra pessoa (ou já lançado) enquanto a tela estava aberta: o
+    // que está na tela vira um rascunho novo, em vez de se perder.
+    if (existe) {
+      await db.rascunhoDeAf.update({ where: { id: entrada.id }, data: campos })
+      return { ok: true, id: entrada.id }
+    }
+  }
+
+  const criado = await db.rascunhoDeAf.create({ data: { ...campos, criadoPor: entrada.operador } })
+  return { ok: true, id: criado.id }
+}
+
+export function rascunhoAfPorId(id: string) {
+  if (!OBJECT_ID.test(id)) return null
+  return db.rascunhoDeAf.findUnique({ where: { id } })
+}
+
+export function listarRascunhosAf() {
+  return db.rascunhoDeAf.findMany({ orderBy: { atualizadoEm: "desc" }, take: 50 })
+}
+
+export async function apagarRascunhoAf(id: string) {
+  if (!OBJECT_ID.test(id)) return
+  await db.rascunhoDeAf.deleteMany({ where: { id } })
+}
