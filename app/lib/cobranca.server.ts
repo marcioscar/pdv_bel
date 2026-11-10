@@ -42,6 +42,18 @@ function limpo(valor: string | null | undefined) {
 }
 
 /**
+ * Corta o texto no tamanho máximo que a API aceita.
+ *
+ * O Inter recusa a cobrança inteira quando um campo passa do limite (ex.:
+ * "O tamanho deve estar entre 0 e 30 (…pagador.complemento)"), e o cadastro do
+ * cliente não tem esses limites — então corta aqui, na saída.
+ */
+function corte(valor: string | null | undefined, max: number) {
+  const t = valor?.trim()
+  return t ? t.slice(0, max) : undefined
+}
+
+/**
  * Emite o "bolepix": um boleto com QR Code Pix embutido.
  *
  * A emissão é **assíncrona** — a resposta traz só o `codigoSolicitacao`. O código
@@ -80,29 +92,29 @@ export function emitirCobranca(entrada: {
       dataVencimento: vencimento.toISOString().slice(0, 10),
       numDiasAgenda: entrada.diasAgenda ?? DIAS_ATE_CANCELAR_BOLETO,
       pagador: {
-        nome: pagador.nome,
+        nome: corte(pagador.nome, 100),
         cpfCnpj: pagador.cpfCnpj,
         tipoPessoa: pagador.tipoPessoa,
-        endereco: pagador.endereco,
-        bairro: pagador.bairro,
-        cidade: pagador.cidade,
+        endereco: corte(pagador.endereco, 100),
+        bairro: corte(pagador.bairro, 60),
+        cidade: corte(pagador.cidade, 60),
         uf: pagador.uf,
         cep: limpo(pagador.cep),
-        numero: pagador.numero ?? undefined,
-        complemento: pagador.complemento ?? undefined,
-        email: pagador.email ?? undefined,
+        numero: corte(pagador.numero, 10),
+        complemento: corte(pagador.complemento, 30),
+        email: corte(pagador.email, 50),
         ddd: limpo(pagador.ddd),
         telefone: limpo(pagador.telefone),
       },
       ...(entrada.beneficiarioFinal
         ? {
             beneficiarioFinal: {
-              nome: entrada.beneficiarioFinal.nome,
+              nome: corte(entrada.beneficiarioFinal.nome, 100),
               cpfCnpj: entrada.beneficiarioFinal.cpfCnpj,
               tipoPessoa: entrada.beneficiarioFinal.tipoPessoa,
-              endereco: entrada.beneficiarioFinal.endereco,
-              bairro: entrada.beneficiarioFinal.bairro,
-              cidade: entrada.beneficiarioFinal.cidade,
+              endereco: corte(entrada.beneficiarioFinal.endereco, 100),
+              bairro: corte(entrada.beneficiarioFinal.bairro, 60),
+              cidade: corte(entrada.beneficiarioFinal.cidade, 60),
               uf: entrada.beneficiarioFinal.uf,
               cep: limpo(entrada.beneficiarioFinal.cep),
             },
