@@ -5,7 +5,6 @@ import { ClipboardList, FileText, GitCompare, Printer, Search, ShoppingBag, Truc
 import type { Route } from "./+types/admin.pedidos-de-compra"
 import { Atalho, Campo, ESTILO_CAMPO, Pagina } from "~/components/pdv/filtros"
 import { Numero } from "~/components/pdv/numero"
-import { ReceberPedido } from "~/components/pdv/pedido-compra"
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
@@ -24,7 +23,6 @@ import {
   lerFiltroPedidos,
   type PedidoDaConsulta,
 } from "~/lib/pedidos-compra.server"
-import { listarLojas } from "~/lib/lojas.server"
 import { pedidosComNotaDisponivel } from "~/lib/conciliacao.server"
 import { ACOES_DE_GERENTE, ehGerente, podeVerPedidosDeCompra } from "~/lib/permissoes"
 import { exigirGerente, exigirUsuario } from "~/lib/sessao.server"
@@ -46,14 +44,13 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
 
   const filtro = lerFiltroPedidos(new URL(request.url))
-  const [consulta, lojas] = await Promise.all([consultarPedidos(filtro), listarLojas()])
+  const consulta = await consultarPedidos(filtro)
   const comNota = await pedidosComNotaDisponivel(consulta.pedidos)
 
   return {
     filtro,
     // Quem não é gerente só consulta: a action continua exigindo gerente.
     somenteLeitura: !ehGerente(eu.papel),
-    lojas: lojas.map((l) => l.codigo),
     pedidosComNota: Object.fromEntries(comNota),
     ...consulta,
   }
@@ -64,19 +61,13 @@ export async function action({ request }: Route.ActionArgs) {
   const form = await request.formData()
 
   const resultado = await aplicarSituacao(form, eu.nome)
-  const loja = String(form.get("loja") ?? "")
-  const passo = String(form.get("passo") ?? "")
-
   return resultado.ok
-    ? {
-        ok: true as const,
-        mensagem: passo === "receber" ? `Estoque de ${loja} atualizado` : "Atualizado",
-      }
+    ? { ok: true as const, mensagem: "Atualizado" }
     : data({ ok: false as const, erro: resultado.erro }, { status: 400 })
 }
 
 export default function AdminPedidosDeCompra({ loaderData }: Route.ComponentProps) {
-  const { filtro, somenteLeitura, lojas, pedidos, pedidosComNota, total, foraDoPeriodo, paginas, resumo } = loaderData
+  const { filtro, somenteLeitura, pedidos, pedidosComNota, total, foraDoPeriodo, paginas, resumo } = loaderData
 
   const [params, setParams] = useSearchParams()
   const navegacao = useNavigation()
@@ -105,9 +96,6 @@ export default function AdminPedidosDeCompra({ loaderData }: Route.ComponentProp
 
   function mudarSituacao(id: string, passo: "enviar" | "cancelar") {
     fetcher.submit({ intencao: "situacao", id, passo }, { method: "post" })
-  }
-  function receberPedido(id: string, loja: string) {
-    fetcher.submit({ intencao: "situacao", id, passo: "receber", loja }, { method: "post" })
   }
   function anotarEntrega(id: string, entrega: string) {
     fetcher.submit({ intencao: "situacao", id, passo: "entrega", entrega }, { method: "post" })
@@ -287,11 +275,9 @@ export default function AdminPedidosDeCompra({ loaderData }: Route.ComponentProp
                 somenteLeitura={somenteLeitura}
                 key={p.id}
                 pedido={p}
-                lojas={lojas}
                 gravando={gravando}
                 cnpjDaNota={pedidosComNota[p.id] ?? null}
                 onMudarSituacao={mudarSituacao}
-                onReceber={receberPedido}
                 onEntrega={anotarEntrega}
               />
             ))}
@@ -322,21 +308,17 @@ export default function AdminPedidosDeCompra({ loaderData }: Route.ComponentProp
 
 function LinhaPedido({
   pedido: p,
-  lojas,
   gravando,
   somenteLeitura,
   cnpjDaNota,
   onMudarSituacao,
-  onReceber,
   onEntrega,
 }: {
   pedido: PedidoDaConsulta
-  lojas: string[]
   gravando: boolean
   somenteLeitura: boolean
   cnpjDaNota: string | null
   onMudarSituacao: (id: string, passo: "enviar" | "cancelar") => void
-  onReceber: (id: string, loja: string) => void
   onEntrega: (id: string, dia: string) => void
 }) {
   return (
@@ -422,17 +404,15 @@ function LinhaPedido({
             </Button>
           </>
         ) : null}
-        {p.situacao === "enviado" ? (
-          cnpjDaNota ? (
-            <span
-              className="text-xs text-muted-foreground"
-              title="Já tem nota do fornecedor sincronizada — dê entrada pela nota, com quantidade e custo reais"
-            >
-              dar entrada pela NF →
-            </span>
-          ) : (
-            <ReceberPedido lojas={lojas} gravando={gravando} onReceber={(loja) => onReceber(p.id, loja)} />
-          )
+        {/* Não há "Recebido" aqui: o estoque só entra pela NF de entrada ou
+            pela AF, e qualquer uma das duas fecha o pedido quando tudo chegou. */}
+        {p.situacao === "enviado" && cnpjDaNota ? (
+          <span
+            className="text-xs text-muted-foreground"
+            title="Já tem nota do fornecedor sincronizada — dê entrada pela nota, com quantidade e custo reais"
+          >
+            dar entrada pela NF →
+          </span>
         ) : null}
           </>
         )}

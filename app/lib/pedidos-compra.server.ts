@@ -535,54 +535,6 @@ export async function marcarEnviado(id: string, operador: string): Promise<Resul
   return { ok: true }
 }
 
-/**
- * Recebe o pedido: muda a situação e dá entrada no estoque, na mesma transação.
- *
- * A compra é da rede, mas a mercadoria chega fisicamente numa loja — é lá que o
- * caminhão do fornecedor para. Sem uma loja, o pedido recebido mudaria de
- * situação sem o saldo em lugar nenhum mudar junto, e a mercadoria que acabou de
- * chegar continuaria não existindo para o sistema. Depois de receber, quem
- * quiser levar para as outras lojas usa a transferência, como sempre.
- *
- * O tipo do movimento é "entrada", o mesmo de uma entrada manual — só que este
- * carrega o `pedidoDeCompraId`, e é isso que a ficha do produto usa para
- * navegar até o pedido em vez de mostrar um número solto.
- */
-export async function marcarRecebido(
-  id: string,
-  loja: string,
-  operador: string
-): Promise<ResultadoSituacao> {
-  const pedido = await pedidoPorId(id)
-  if (!pedido) return { ok: false, erro: "Pedido não encontrado" }
-  if (pedido.situacao !== "enviado") {
-    return { ok: false, erro: "Só um pedido enviado pode ser marcado como recebido" }
-  }
-  if (!loja) return { ok: false, erro: "Escolha a loja que recebeu a mercadoria" }
-
-  await db.$transaction(async (tx) => {
-    await tx.pedidoDeCompra.update({
-      where: { id },
-      data: { situacao: "recebido", recebidoEm: new Date(), recebidoPor: operador },
-    })
-
-    await tx.movimentoEstoque.createMany({
-      data: pedido.itens.map((item) => ({
-        produtoId: item.produtoId,
-        loja,
-        tipo: "entrada",
-        quantidade: item.quantidade,
-        operador,
-        pedidoDeCompraId: pedido.id,
-        pedidoDeCompraNumero: pedido.numero,
-        observacao: `Pedido de compra #${pedido.numero} — ${pedido.fornecedorNome}`,
-      })),
-    })
-  })
-
-  return { ok: true }
-}
-
 export async function cancelarPedido(id: string, operador: string): Promise<ResultadoSituacao> {
   const pedido = await pedidoPorId(id)
   if (!pedido) return { ok: false, erro: "Pedido não encontrado" }
@@ -598,7 +550,7 @@ export async function cancelarPedido(id: string, operador: string): Promise<Resu
 }
 
 /**
- * Lê `passo`/`id`/`loja` de um FormData e despacha para a transição certa.
+ * Lê `passo`/`id` de um FormData e despacha para a transição certa.
  *
  * Duas telas mudam a situação de um pedido — Compras e a consulta — e as duas
  * fazem exatamente o mesmo POST. Uma dispatcher só aqui é o que impede as duas
@@ -614,8 +566,9 @@ export async function aplicarSituacao(
   switch (passo) {
     case "enviar":
       return marcarEnviado(id, operador)
-    case "receber":
-      return marcarRecebido(id, String(form.get("loja") ?? ""), operador)
+    // Não existe mais "receber" pelo pedido: estoque só entra pela NF de
+    // entrada ou pela AF, que é quem traz quantidade e custo reais e fecha o
+    // pedido sozinha quando tudo chegou.
     case "cancelar":
       return cancelarPedido(id, operador)
     case "entrega":

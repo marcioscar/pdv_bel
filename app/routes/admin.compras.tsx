@@ -1,12 +1,11 @@
 import { useMemo, useState } from "react"
 import { data, Link, useFetcher } from "react-router"
-import { CheckCircle2, GitCompare, Printer, Send, ShoppingBag, ShoppingCart, X } from "lucide-react"
+import { CheckCircle2, FileText, GitCompare, Printer, Send, ShoppingBag, ShoppingCart, X } from "lucide-react"
 
 import type { Route } from "./+types/admin.compras"
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
-import { ReceberPedido } from "~/components/pdv/pedido-compra"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { cn } from "~/lib/utils"
 import { exigirGerente } from "~/lib/sessao.server"
@@ -125,14 +124,8 @@ export async function action({ request }: Route.ActionArgs) {
 
   if (intencao === "situacao") {
     const resultado = await aplicarSituacao(form, eu.nome)
-    const loja = String(form.get("loja") ?? "")
-    const passo = String(form.get("passo") ?? "")
-
     return resultado.ok
-      ? {
-          ok: true as const,
-          mensagem: passo === "receber" ? `Estoque de ${loja} atualizado` : "Atualizado",
-        }
+      ? { ok: true as const, mensagem: "Atualizado" }
       : data({ ok: false as const, erro: resultado.erro }, { status: 400 })
   }
 
@@ -211,9 +204,6 @@ export default function AdminCompras({ loaderData }: Route.ComponentProps) {
     pedidoFetcher.submit({ intencao: "situacao", id, passo }, { method: "post" })
   }
 
-  function receberPedido(id: string, loja: string) {
-    pedidoFetcher.submit({ intencao: "situacao", id, passo: "receber", loja }, { method: "post" })
-  }
 
   if (!origem) return <SemPolitica />
 
@@ -316,10 +306,8 @@ export default function AdminCompras({ loaderData }: Route.ComponentProps) {
 
       <PedidosRecentes
         pedidos={pedidos}
-        lojas={lojas}
         pedidosComNota={pedidosComNota}
         onMudarSituacao={mudarSituacao}
-        onReceber={receberPedido}
         gravando={gerando}
       />
 
@@ -697,17 +685,13 @@ function Cartaozinho({
 
 function PedidosRecentes({
   pedidos,
-  lojas,
   pedidosComNota,
   onMudarSituacao,
-  onReceber,
   gravando,
 }: {
   pedidos: Awaited<ReturnType<typeof listarPedidos>>
-  lojas: string[]
   pedidosComNota: Record<string, string>
   onMudarSituacao: (id: string, passo: "enviar" | "cancelar") => void
-  onReceber: (id: string, loja: string) => void
   gravando: boolean
 }) {
   if (pedidos.length === 0) return null
@@ -789,21 +773,25 @@ function PedidosRecentes({
                   Ver NF
                 </Link>
               ) : null}
-              {p.situacao === "enviado" ? (
-                p.id in pedidosComNota ? (
-                  <span
-                    className="text-xs text-muted-foreground"
-                    title="Já tem nota do fornecedor sincronizada — dê entrada pela nota, com quantidade e custo reais"
-                  >
-                    dar entrada pela NF →
-                  </span>
-                ) : (
-                  <ReceberPedido
-                    lojas={lojas}
-                    gravando={gravando}
-                    onReceber={(loja) => onReceber(p.id, loja)}
-                  />
-                )
+              {/* Não há "Recebido" aqui: o estoque só entra pela NF de entrada
+                  ou pela AF, e qualquer uma das duas fecha o pedido. */}
+              {p.situacao === "enviado" && p.id in pedidosComNota ? (
+                <span
+                  className="text-xs text-muted-foreground"
+                  title="Já tem nota do fornecedor sincronizada — dê entrada pela nota, com quantidade e custo reais"
+                >
+                  dar entrada pela NF →
+                </span>
+              ) : null}
+              {p.situacao === "enviado" || p.situacao === "parcial" ? (
+                <Link
+                  to={`/admin/afs/nova?fornecedor=${p.fornecedorId}&pedido=${p.id}`}
+                  className="inline-flex h-8 items-center gap-1 rounded-lg px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+                  title="Chegou sem nota fiscal? Lance a AF que veio com a carga"
+                >
+                  <FileText className="size-3.5" aria-hidden />
+                  Lançar AF
+                </Link>
               ) : null}
               {p.situacao === "recebido" ? (
                 <CheckCircle2 className="size-4 text-muted-foreground" aria-hidden />

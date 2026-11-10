@@ -158,8 +158,8 @@ export type ResultadoReceberComNota =
 
 /**
  * Dá entrada no estoque com a quantidade e o custo REAIS da nota, em vez do
- * esperado — a versão de `marcarRecebido` (`pedidos-compra.server.ts`) para
- * quando existe a NF-e de verdade para comparar.
+ * esperado. Junto com a AF, é um dos dois únicos caminhos por onde mercadoria
+ * de compra entra no estoque — o pedido não dá entrada sozinho.
  *
  * Quase toda nota nasce de um pedido de compra, e é esse o caminho normal: com
  * pedido dá para comparar o que veio com o que foi combinado. Mas nem toda —
