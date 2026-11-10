@@ -184,7 +184,9 @@ export default function AdminFicha({ loaderData }: Route.ComponentProps) {
           ) : null}
         </>
       ) : (
-        <Ficha produto={produto} ficha={ficha!} precos={precos} />
+        // key: trocar de produto zera os filtros — um tipo escolhido no outro
+        // produto pode nem existir neste, e a lista viria vazia sem explicação.
+        <Ficha key={produto.codigo} produto={produto} ficha={ficha!} precos={precos} />
       )}
     </div>
   )
@@ -200,17 +202,36 @@ function Ficha({
   precos: Route.ComponentProps["loaderData"]["precos"]
 }) {
   const [loja, setLoja] = useState<string>("todas")
+  const [tipo, setTipo] = useState<string>("todos")
 
   const linhas = useMemo(
     () =>
       // Do mais recente para o mais antigo: a pergunta quase sempre é sobre o
       // que aconteceu ontem. O saldo de cada linha já foi acumulado no servidor,
       // em ordem cronológica, então inverter aqui não o desalinha.
-      [...ficha.linhas].reverse().filter((l) => loja === "todas" || l.loja === loja),
-    [ficha.linhas, loja]
+      [...ficha.linhas]
+        .reverse()
+        .filter((l) => loja === "todas" || l.loja === loja)
+        .filter((l) => tipo === "todos" || l.tipo === tipo),
+    [ficha.linhas, loja, tipo]
   )
 
   const lojasComMovimento = ficha.saldos.map((s) => s.loja)
+  // Só os tipos que este produto de fato teve: um botão que filtra para uma
+  // lista vazia é só ruído.
+  const tiposComMovimento = [...new Set(ficha.linhas.map((l) => l.tipo))]
+
+  // O total do que está na tela — é para isso que se filtra: "quanto vendeu",
+  // "quanto entrou de compra", sem somar linha a linha.
+  const totais = useMemo(() => {
+    let entrou = 0
+    let saiu = 0
+    for (const l of linhas) {
+      if (l.quantidade > 0) entrou += l.quantidade
+      else saiu -= l.quantidade
+    }
+    return { entrou, saiu, liquido: entrou - saiu }
+  }, [linhas])
 
   return (
     <>
@@ -252,6 +273,22 @@ function Ficha({
               {lojasComMovimento.map((l) => (
                 <Filtro key={l} atual={loja} valor={l} onEscolher={setLoja}>
                   {l}
+                </Filtro>
+              ))}
+            </div>
+          ) : null}
+
+          {tiposComMovimento.length > 1 ? (
+            <div className="mt-2 flex flex-wrap items-center gap-1">
+              <span className="mr-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                O que foi
+              </span>
+              <Filtro atual={tipo} valor="todos" onEscolher={setTipo} className="font-sans">
+                Todos
+              </Filtro>
+              {tiposComMovimento.map((t) => (
+                <Filtro key={t} atual={tipo} valor={t} onEscolher={setTipo} className="font-sans">
+                  {rotuloDoTipo(t)}
                 </Filtro>
               ))}
             </div>
@@ -353,6 +390,30 @@ function Ficha({
                   </tr>
                 ))}
               </tbody>
+              {linhas.length > 0 ? (
+                <tfoot>
+                  <tr className="text-sm font-semibold">
+                    <td colSpan={3} className="py-2.5 text-xs text-muted-foreground">
+                      Total {tipo === "todos" ? "" : `de ${rotuloDoTipo(tipo).toLowerCase()}`}
+                      {loja === "todas" ? "" : ` em ${loja}`}
+                    </td>
+                    <td className="px-2 py-2.5 text-right font-mono tabular-nums">
+                      {totais.entrou ? formatarQuantidade(totais.entrou) : ""}
+                    </td>
+                    <td className="px-2 py-2.5 text-right font-mono text-destructive tabular-nums">
+                      {totais.saiu ? formatarQuantidade(totais.saiu) : ""}
+                    </td>
+                    <td
+                      className="px-2 py-2.5 text-right font-mono tabular-nums"
+                      title="Entrou menos saiu, no que está filtrado"
+                    >
+                      {totais.liquido > 0 ? "+" : ""}
+                      {formatarQuantidade(totais.liquido)}
+                    </td>
+                    <td className="px-2 py-2.5 text-xs text-muted-foreground">líquido</td>
+                  </tr>
+                </tfoot>
+              ) : null}
             </table>
           </div>
 
@@ -419,11 +480,13 @@ function Filtro({
   atual,
   valor,
   onEscolher,
+  className,
   children,
 }: {
   atual: string
   valor: string
   onEscolher: (v: string) => void
+  className?: string
   children: React.ReactNode
 }) {
   return (
@@ -432,7 +495,7 @@ function Filtro({
       size="sm"
       variant={atual === valor ? "default" : "outline"}
       onClick={() => onEscolher(valor)}
-      className="rounded-lg font-mono"
+      className={cn("rounded-lg font-mono", className)}
     >
       {children}
     </Button>
