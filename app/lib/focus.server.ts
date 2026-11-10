@@ -213,10 +213,15 @@ async function chamar(
    * com a rejeição da SEFAZ por extenso.
    */
   if (!resposta.ok && resposta.status !== 202) {
+    /*
+     * A mensagem e a lista de erros juntas. Em erro de schema a `mensagem` é só
+     * "Erro na validação do Schema XML, verifique o detalhamento dos erros" — o
+     * detalhamento (qual campo, qual limite) vem em `erros`, e mostrar só a
+     * primeira deixava quem emite sem saber o que corrigir.
+     */
+    const lista = dados.erros?.map((e) => [e.campo, e.mensagem].filter(Boolean).join(": ")) ?? []
     const detalhe =
-      dados.mensagem ||
-      dados.erros?.map((e) => [e.campo, e.mensagem].filter(Boolean).join(": ")).join(" · ") ||
-      texto.slice(0, 200)
+      [dados.mensagem, ...lista].filter(Boolean).join(" · ") || texto.slice(0, 200)
 
     throw new ErroFocus(
       detalhe || `Focus NFe respondeu ${resposta.status}`,

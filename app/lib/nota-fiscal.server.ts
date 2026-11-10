@@ -23,6 +23,19 @@ import {
 } from "~/lib/fiscal"
 
 /**
+ * Corta no limite do schema da NF-e: nome, logradouro, número, complemento,
+ * bairro, município e e-mail do destinatário aceitam no máximo 60 caracteres.
+ *
+ * Passar disso não é rejeição da SEFAZ com motivo claro — é "Erro na validação
+ * do Schema XML" na Focus, e a nota inteira fica parada. O cadastro não tem
+ * esse limite (a razão social da Receita passa de 60 com frequência), então
+ * corta aqui, na saída, sem mexer no cadastro.
+ */
+function ate60<T extends string | null | undefined>(valor: T): T {
+  return (typeof valor === "string" ? valor.trim().slice(0, 60) : valor) as T
+}
+
+/**
  * A emissão da nota a partir de uma venda já fechada.
  *
  * Depois da venda, e não durante: a venda existe, o dinheiro entrou e o estoque
@@ -351,7 +364,7 @@ export async function emitirDaVenda(
           ...(documentoCliente.length === 11
             ? {
                 cpf_destinatario: documentoCliente,
-                ...(cliente ? { nome_destinatario: cliente.nome } : {}),
+                ...(cliente ? { nome_destinatario: ate60(cliente.nome) } : {}),
               }
             : {}),
           // Empresa também pode levar o cupom fiscal, quando quem fecha escolhe
@@ -359,14 +372,14 @@ export async function emitirDaVenda(
           ...(documentoCliente.length === 14
             ? {
                 cnpj_destinatario: documentoCliente,
-                ...(cliente ? { nome_destinatario: cliente.nome } : {}),
+                ...(cliente ? { nome_destinatario: ate60(cliente.nome) } : {}),
               }
             : {}),
           formas_pagamento: formasDePagamentoDaNota(venda),
         }
       : {
           ...comum,
-          nome_destinatario: cliente!.nome,
+          nome_destinatario: ate60(cliente!.nome),
           ...(documentoCliente.length === 14
             ? { cnpj_destinatario: documentoCliente }
             : { cpf_destinatario: documentoCliente }),
@@ -379,16 +392,16 @@ export async function emitirDaVenda(
           ...(cliente!.inscricaoEstadual && cliente!.inscricaoEstadual !== "ISENTO"
             ? { inscricao_estadual_destinatario: cliente!.inscricaoEstadual }
             : {}),
-          logradouro_destinatario: cliente!.endereco,
-          numero_destinatario: cliente!.numero || "S/N",
-          complemento_destinatario: cliente!.complemento || undefined,
-          bairro_destinatario: cliente!.bairro,
-          municipio_destinatario: cliente!.cidade,
+          logradouro_destinatario: ate60(cliente!.endereco),
+          numero_destinatario: ate60(cliente!.numero || "S/N"),
+          complemento_destinatario: ate60(cliente!.complemento || undefined),
+          bairro_destinatario: ate60(cliente!.bairro),
+          municipio_destinatario: ate60(cliente!.cidade),
           uf_destinatario: cliente!.uf,
           cep_destinatario: cliente!.cep,
           telefone_destinatario:
             cliente!.ddd && cliente!.telefone ? `${cliente!.ddd}${cliente!.telefone}` : undefined,
-          email_destinatario: cliente!.email || undefined,
+          email_destinatario: ate60(cliente!.email || undefined),
           consumidor_final: consumidorFinal(cliente!.inscricaoEstadual),
         }
 
@@ -757,16 +770,16 @@ export async function emitirDaDevolucao(
 
   const destinatario = contraSiMesma
     ? {
-        nome_destinatario: loja.razaoSocial ?? loja.nome,
+        nome_destinatario: ate60(loja.razaoSocial ?? loja.nome),
         cnpj_destinatario: loja.cnpj,
         indicador_inscricao_estadual_destinatario: indicadorDeIe(loja.inscricaoEstadual),
         ...(loja.inscricaoEstadual
           ? { inscricao_estadual_destinatario: loja.inscricaoEstadual }
           : {}),
-        logradouro_destinatario: loja.endereco ?? "",
+        logradouro_destinatario: ate60(loja.endereco ?? ""),
         numero_destinatario: "S/N",
-        bairro_destinatario: loja.bairro ?? "",
-        municipio_destinatario: loja.cidade ?? "",
+        bairro_destinatario: ate60(loja.bairro ?? ""),
+        municipio_destinatario: ate60(loja.cidade ?? ""),
         uf_destinatario: loja.uf ?? "DF",
         cep_destinatario: loja.cep ?? "",
         // Entre contribuintes — e aqui a loja é os dois lados — não é consumo final.
@@ -775,7 +788,7 @@ export async function emitirDaDevolucao(
     : (() => {
         const documento = (cliente!.cpfCnpj ?? "").replace(/\D/g, "")
         return {
-          nome_destinatario: cliente!.nome,
+          nome_destinatario: ate60(cliente!.nome),
           ...(documento.length === 14
             ? { cnpj_destinatario: documento }
             : { cpf_destinatario: documento }),
@@ -783,11 +796,11 @@ export async function emitirDaDevolucao(
           ...(cliente!.inscricaoEstadual && cliente!.inscricaoEstadual !== "ISENTO"
             ? { inscricao_estadual_destinatario: cliente!.inscricaoEstadual }
             : {}),
-          logradouro_destinatario: cliente!.endereco,
-          numero_destinatario: cliente!.numero || "S/N",
-          complemento_destinatario: cliente!.complemento || undefined,
-          bairro_destinatario: cliente!.bairro,
-          municipio_destinatario: cliente!.cidade,
+          logradouro_destinatario: ate60(cliente!.endereco),
+          numero_destinatario: ate60(cliente!.numero || "S/N"),
+          complemento_destinatario: ate60(cliente!.complemento || undefined),
+          bairro_destinatario: ate60(cliente!.bairro),
+          municipio_destinatario: ate60(cliente!.cidade),
           uf_destinatario: cliente!.uf,
           cep_destinatario: cliente!.cep,
           consumidor_final: consumidorFinal(cliente!.inscricaoEstadual),
