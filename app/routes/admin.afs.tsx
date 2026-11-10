@@ -197,8 +197,8 @@ export default function AdminAfs({ loaderData }: Route.ComponentProps) {
         </Campo>
 
         <div className="flex gap-1.5">
-          <Atalho rotulo="30 dias" onClick={() => mudarFiltro({ de: diaAtras(30), ate: diaDeHoje() })} />
-          <Atalho rotulo="90 dias" onClick={() => mudarFiltro({ de: diaAtras(90), ate: diaDeHoje() })} />
+          <Atalho rotulo="30 dias" onClick={() => mudarFiltro({ de: diaAtras(29), ate: diaDeHoje() })} />
+          <Atalho rotulo="90 dias" onClick={() => mudarFiltro({ de: diaAtras(89), ate: diaDeHoje() })} />
           <Atalho
             rotulo="Limpar"
             onClick={() => mudarFiltro({ fornecedor: "", numero: "", loja: "", de: "", ate: "" })}

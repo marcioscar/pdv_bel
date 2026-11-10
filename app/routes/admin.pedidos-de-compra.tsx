@@ -5,6 +5,7 @@ import { ClipboardList, FileText, GitCompare, Printer, Search, ShoppingBag, Truc
 import type { Route } from "./+types/admin.pedidos-de-compra"
 import { Atalho, Campo, ESTILO_CAMPO, Pagina } from "~/components/pdv/filtros"
 import { Numero } from "~/components/pdv/numero"
+import { ConfirmarClique } from "~/components/pdv/confirmar-clique"
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
@@ -392,16 +393,12 @@ function LinhaPedido({
             >
               Enviado
             </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="xs"
+            <ConfirmarClique
+              rotulo="Cancelar"
+              confirmacao="Cancelar o pedido?"
               disabled={gravando}
-              onClick={() => onMudarSituacao(p.id, "cancelar")}
-              className="text-destructive"
-            >
-              Cancelar
-            </Button>
+              onConfirmar={() => onMudarSituacao(p.id, "cancelar")}
+            />
           </>
         ) : null}
         {/* Não há "Recebido" aqui: o estoque só entra pela NF de entrada ou

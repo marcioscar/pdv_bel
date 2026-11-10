@@ -17,7 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "~/components/ui/dropdown-menu"
 import { Kbd } from "~/components/ui/kbd"
-import { ehGerente, menusDoTopo, secoesDoPapel } from "~/lib/permissoes"
+import { ehGerente, menusDoTopo, secaoDoMenu, secoesDoPapel } from "~/lib/permissoes"
 import { cn } from "~/lib/utils"
 
 type Props = {
@@ -195,9 +195,14 @@ const MenusDoTopo = memo(function MenusDoTopo({
   usuarioId?: string
   pathname: string
 }) {
-  // Prefixo, não igualdade: /vendas/123/cupom continua sendo Vendas.
+  // Dentro da administração vale a seção do menu (a tela ou a tela-mãe de uma
+  // interna). Fora dela, prefixo e não igualdade: /vendas/123/cupom continua
+  // sendo Vendas. O Painel (/admin) é só ele mesmo — por prefixo ele casaria
+  // com a administração inteira, e o "Adm" ficava marcado junto com o menu
+  // certo em toda tela.
+  const atual = secaoDoMenu(pathname)?.para ?? pathname
   const estaEm = (para: string) =>
-    pathname === para || (para !== "/" && pathname.startsWith(`${para}/`))
+    atual === para || (para !== "/" && para !== "/admin" && atual.startsWith(`${para}/`))
   const menus = menusDoTopo(papel, usuarioId)
 
   return (

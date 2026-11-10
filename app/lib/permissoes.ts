@@ -178,7 +178,9 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
     secoes: [
       {
         para: "/admin/compras",
-        rotulo: "Compras",
+        // Não "Compras": dentro do grupo Compras o nome repetido não dizia qual
+        // das quatro telas era esta.
+        rotulo: "O que comprar",
         descricao: "O que repor: ponto de pedido e quanto comprar, da rede toda",
         somenteGerente: true,
       },
@@ -191,7 +193,7 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
       {
         para: "/admin/notas-de-entrada",
         rotulo: "Notas de entrada",
-        descricao: "Buscar o XML de uma nota do fornecedor na SEFAZ, pela chave de acesso",
+        descricao: "As notas dos fornecedores: buscar na SEFAZ, conferir com o pedido e dar entrada no estoque",
         somenteGerente: true,
       },
       {
@@ -254,12 +256,6 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         para: "/admin/contas-a-pagar",
         rotulo: "Contas a pagar",
         descricao: "Títulos das notas de entrada e AFs por vencimento: a pagar, vencidos e pagos",
-        somenteGerente: true,
-      },
-      {
-        para: "/admin/contador",
-        rotulo: "Envio ao contador",
-        descricao: "Os XMLs das notas do mês, por loja, em ZIP para a contadora",
         somenteGerente: true,
       },
       {
@@ -328,6 +324,17 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         descricao: "De quem se compra, e desde quando",
         somenteGerente: true,
       },
+    ],
+  },
+  {
+    /*
+     * O que se configura uma vez e se mexe raramente — separado de Cadastros,
+     * que é cliente e fornecedor, coisa do dia a dia. O envio ao contador mora
+     * aqui pelo mesmo motivo: é a rotina fiscal do mês, não dinheiro a receber.
+     */
+    id: "configuracoes",
+    rotulo: "Configurações",
+    secoes: [
       {
         para: "/admin/usuarios",
         rotulo: "Usuários",
@@ -344,6 +351,12 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         para: "/admin/fiscal",
         rotulo: "Fiscal",
         descricao: "O que a nota precisa saber de cada loja: IE, regime, CFOP e CSOSN",
+        somenteGerente: true,
+      },
+      {
+        para: "/admin/contador",
+        rotulo: "Envio ao contador",
+        descricao: "Os XMLs das notas do mês, por loja, em ZIP para a contadora",
         somenteGerente: true,
       },
     ],
@@ -389,7 +402,7 @@ export function gruposAdminDoPapel(papel: string, usuarioId?: string) {
 export const MENUS_DO_TOPO = [
   { id: "estoque", rotulo: "Estoque", secoes: ["/estoque", "/transferencias"], grupos: ["produtos", "compras"] },
   { id: "financeiro", rotulo: "Financeiro", secoes: ["/vendas", "/fechamento"], grupos: ["vendas", "financeiro"] },
-  { id: "adm", rotulo: "Adm", secoes: ["/admin"], grupos: ["relatorios", "cadastros"] },
+  { id: "adm", rotulo: "Adm", secoes: ["/admin"], grupos: ["relatorios", "cadastros", "configuracoes"] },
 ] as const
 
 /**
@@ -421,13 +434,38 @@ export function menusDoTopo(papel: string, usuarioId?: string) {
   })).filter((menu) => menu.secoes.length > 0 || menu.grupos.length > 0)
 }
 
+/**
+ * Telas internas cujo endereço não começa pelo da seção a que pertencem.
+ * As outras (`/admin/afs/nova`, `/admin/caixas/:id`) se resolvem pelo prefixo.
+ */
+const SECAO_DA_TELA_INTERNA: Record<string, string> = {
+  "/admin/pedido-novo": "/admin/pedidos-de-compra",
+}
+
+/**
+ * A seção do menu a que um caminho pertence — a própria tela ou a tela-mãe de
+ * uma tela interna. É o que o menu MARCA; quem cobra permissão continua sendo
+ * `secaoAdminDoCaminho`, exata, porque marcar a mais é só cosmético e liberar
+ * a mais não é.
+ *
+ * O prefixo exige a barra: `/admin/notas-de-entrada` não é filha de
+ * `/admin/notas`. Vence a seção de endereço mais longo.
+ */
+export function secaoDoMenu(pathname: string): SecaoAdmin | null {
+  const limpo = pathname.replace(/\/+$/, "")
+  const alvo = SECAO_DA_TELA_INTERNA[limpo] ?? limpo
+  return (
+    SECOES_ADMIN.filter((secao) => alvo === secao.para || alvo.startsWith(`${secao.para}/`)).sort(
+      (a, b) => b.para.length - a.para.length
+    )[0] ?? null
+  )
+}
+
 /** O grupo em que uma seção mora — é o que a sidebar abre ao entrar na tela. */
 export function grupoDaSecao(pathname: string) {
-  const limpo = pathname.replace(/\/+$/, "")
-  return (
-    GRUPOS_ADMIN.find((grupo) => grupo.secoes.some((secao) => secao.para === limpo))
-      ?.id ?? null
-  )
+  const secao = secaoDoMenu(pathname)
+  if (!secao) return null
+  return GRUPOS_ADMIN.find((grupo) => grupo.secoes.includes(secao))?.id ?? null
 }
 
 /** A seção correspondente a um caminho. null na raiz de /admin e no desconhecido. */

@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react"
 import { Link, Outlet, useLocation } from "react-router"
 import {
+  ChartColumn,
   ChevronRight,
   Menu,
   Package,
   Receipt,
+  Settings,
   ShoppingCart,
   Users,
   Wallet,
@@ -21,6 +23,7 @@ import {
   grupoDaSecao,
   gruposAdminDoPapel,
   secaoAdminDoCaminho,
+  secaoDoMenu,
 } from "~/lib/permissoes"
 import { exigirUsuario } from "~/lib/sessao.server"
 import { useRelogio, useTema } from "~/lib/tema"
@@ -32,7 +35,9 @@ const ICONES: Record<string, LucideIcon> = {
   compras: ShoppingCart,
   vendas: Receipt,
   financeiro: Wallet,
+  relatorios: ChartColumn,
   cadastros: Users,
+  configuracoes: Settings,
 }
 
 /**
@@ -62,6 +67,9 @@ export default function Admin({ loaderData }: Route.ComponentProps) {
   useAtalhosDeSecao(eu.papel)
 
   const grupos = gruposAdminDoPapel(eu.papel, eu.id)
+  // A seção marcada no menu: a própria tela ou a tela-mãe de uma interna
+  // (Novo pedido marca Pedidos de compra, o detalhe da nota marca Notas).
+  const secaoMarcada = secaoDoMenu(pathname)?.para ?? null
 
   /**
    * Abre o grupo da tela em que se está, e deixa os outros como o usuário os
@@ -115,7 +123,7 @@ export default function Admin({ loaderData }: Route.ComponentProps) {
           Menu
         </Button>
         <span className="truncate text-sm font-semibold">
-          {secaoAdminDoCaminho(pathname)?.rotulo ?? "Administração"}
+          {secaoDoMenu(pathname)?.rotulo ?? "Administração"}
         </span>
       </div>
 
@@ -146,7 +154,7 @@ export default function Admin({ loaderData }: Route.ComponentProps) {
           {grupos.map((grupo) => {
             const Icone = ICONES[grupo.id] ?? Package
             const aberto = abertos.includes(grupo.id)
-            const contemAtiva = grupo.secoes.some((secao) => secao.para === pathname)
+            const contemAtiva = grupo.secoes.some((secao) => secao.para === secaoMarcada)
 
             return (
               <div key={grupo.id}>
@@ -183,7 +191,7 @@ export default function Admin({ loaderData }: Route.ComponentProps) {
                 {aberto ? (
                   <div className="mt-0.5 flex flex-col gap-0.5 pl-3">
                     {grupo.secoes.map((secao) => {
-                      const ativa = pathname === secao.para
+                      const ativa = secaoMarcada === secao.para
                       return (
                         <Link
                           key={secao.para}
@@ -210,7 +218,7 @@ export default function Admin({ loaderData }: Route.ComponentProps) {
           <p className="mt-auto hidden px-3 text-[11px] leading-relaxed text-muted-foreground lg:block">
             O caixa e as vendas ficam na barra de cima, com{" "}
             <span className="font-mono">Ctrl F1</span> a{" "}
-            <span className="font-mono">Ctrl F3</span>.
+            <span className="font-mono">Ctrl F5</span>.
           </p>
         </nav>
 

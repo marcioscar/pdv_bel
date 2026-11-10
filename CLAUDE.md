@@ -32,7 +32,7 @@ shadcn is configured in [components.json](components.json) with the **`base-luma
 
 Tailwind v4 is configured entirely in CSS — there is no `tailwind.config.*`. [app/app.css](app/app.css) imports `shadcn/tailwind.css` and defines the theme tokens in `@theme` / `@theme inline` blocks; dark mode uses the `.dark` class variant (`@custom-variant dark`). Icons come from `lucide-react`.
 
-Note: `app/app.css` sets `--font-sans` to Roboto Variable (via `@fontsource-variable/roboto`) while `app/root.tsx` still preconnects and loads Inter from Google Fonts — leftover from the template.
+The UI font is Roboto Variable, bundled via `@fontsource-variable/roboto` (`--font-sans` in `app/app.css`). No font is loaded from Google Fonts.
 
 ## React Router skill
 

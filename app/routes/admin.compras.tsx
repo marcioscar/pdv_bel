@@ -5,6 +5,7 @@ import { CheckCircle2, FileText, GitCompare, Printer, Send, ShoppingBag, Shoppin
 import type { Route } from "./+types/admin.compras"
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
+import { ConfirmarClique } from "~/components/pdv/confirmar-clique"
 import { Input } from "~/components/ui/input"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { cn } from "~/lib/utils"
@@ -24,7 +25,7 @@ import {
 import { listarLojas } from "~/lib/lojas.server"
 
 export function meta(_: Route.MetaArgs) {
-  return [{ title: "Compras — BrasSaco" }]
+  return [{ title: "O que comprar — BrasSaco" }]
 }
 
 /**
@@ -213,7 +214,7 @@ export default function AdminCompras({ loaderData }: Route.ComponentProps) {
     <div className="p-4 pb-24 sm:p-6">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <ShoppingCart className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-        <h1 className="text-base font-semibold">Compras</h1>
+        <h1 className="text-base font-semibold">O que comprar</h1>
         <span className="text-xs text-muted-foreground">
           {aComprar.length} {aComprar.length === 1 ? "produto" : "produtos"} para repor
         </span>
@@ -750,16 +751,12 @@ function PedidosRecentes({
                     <Send className="size-3.5" />
                     Enviado
                   </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="xs"
+                  <ConfirmarClique
+                    rotulo="Cancelar"
+                    confirmacao="Cancelar o pedido?"
                     disabled={gravando}
-                    onClick={() => onMudarSituacao(p.id, "cancelar")}
-                    className="text-destructive"
-                  >
-                    Cancelar
-                  </Button>
+                    onConfirmar={() => onMudarSituacao(p.id, "cancelar")}
+                  />
                 </>
               ) : null}
               {/* A entrada acontece na nota, não aqui: é ela que chega com a
@@ -822,7 +819,7 @@ function SemPolitica() {
     <div className="p-4 sm:p-6">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <ShoppingCart className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-        <h1 className="text-base font-semibold">Compras</h1>
+        <h1 className="text-base font-semibold">O que comprar</h1>
       </div>
       <div className="mt-6 rounded-xl border border-dashed border-border px-6 py-16 text-center">
         <ShoppingCart className="mx-auto size-10 text-muted-foreground/40" aria-hidden />

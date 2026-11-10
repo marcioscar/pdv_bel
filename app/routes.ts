@@ -138,5 +138,4 @@ export default [
   }),
   // Pix do caixa: só a chave aleatória do PDV aponta para cá.
   route("webhooks/inter/pix/:conta", "routes/webhook.pix.tsx"),
-  route("welcome", "routes/home.tsx"),
 ] satisfies RouteConfig

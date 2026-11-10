@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react"
-import { Link, useSearchParams } from "react-router"
+import { Link, useSearchParams, type ShouldRevalidateFunctionArgs } from "react-router"
 import { ScrollText, Search } from "lucide-react"
 
 import type { Route } from "./+types/admin.ficha"
@@ -65,6 +65,22 @@ export async function loader({ request }: Route.LoaderArgs) {
     // Sem produto escolhido, a tela vira a lista de quem mexeu em preço na rede.
     precosDaRede: produto ? [] : await ultimasAlteracoesDePreco(),
   }
+}
+
+/**
+ * Os filtros da ficha (loja, tipo, período) moram no endereço, mas filtram no
+ * navegador: a ficha inteira do produto já veio. Sem isto, cada clique num
+ * filtro buscaria o catálogo e a ficha de novo só para mostrar as mesmas linhas.
+ */
+export function shouldRevalidate({
+  currentUrl,
+  nextUrl,
+  formMethod,
+  defaultShouldRevalidate,
+}: ShouldRevalidateFunctionArgs) {
+  if (formMethod && formMethod !== "GET") return defaultShouldRevalidate
+  if (currentUrl.pathname !== nextUrl.pathname) return defaultShouldRevalidate
+  return currentUrl.searchParams.get("produto") !== nextUrl.searchParams.get("produto")
 }
 
 export default function AdminFicha({ loaderData }: Route.ComponentProps) {
@@ -186,9 +202,7 @@ export default function AdminFicha({ loaderData }: Route.ComponentProps) {
           ) : null}
         </>
       ) : (
-        // key: trocar de produto zera os filtros — um tipo escolhido no outro
-        // produto pode nem existir neste, e a lista viria vazia sem explicação.
-        <Ficha key={produto.codigo} produto={produto} ficha={ficha!} precos={precos} />
+        <Ficha produto={produto} ficha={ficha!} precos={precos} />
       )}
     </div>
   )
@@ -203,12 +217,47 @@ function Ficha({
   ficha: NonNullable<Route.ComponentProps["loaderData"]["ficha"]>
   precos: Route.ComponentProps["loaderData"]["precos"]
 }) {
-  const [loja, setLoja] = useState<string>("todas")
-  const [tipo, setTipo] = useState<string>("todos")
+  /*
+   * Os filtros vivem no endereço, não em estado da tela: recarregar mantém o
+   * que se estava olhando, e o link colado para outra pessoa abre igual. É
+   * também o que faz o link do Estoque negativo (`&loja=QI`) já chegar na loja.
+   * Escolher outro produto troca os parâmetros todos, então os filtros zeram.
+   */
+  const [params, setParams] = useSearchParams()
+  const DIA = /^\d{4}-\d{2}-\d{2}$/
+  const lojasComMovimento = ficha.saldos.map((s) => s.loja)
+  // Só os tipos que este produto de fato teve: um botão que filtra para uma
+  // lista vazia é só ruído.
+  const tiposComMovimento = [...new Set(ficha.linhas.map((l) => l.tipo))]
+
+  // Valor do endereço que este produto não tem (link antigo, digitado à mão)
+  // vale como "sem filtro" — melhor que uma lista vazia sem botão marcado.
+  const lojaDoEndereco = params.get("loja") ?? ""
+  const tipoDoEndereco = params.get("tipo") ?? ""
+  const loja = lojasComMovimento.includes(lojaDoEndereco) ? lojaDoEndereco : "todas"
+  const tipo = tiposComMovimento.includes(tipoDoEndereco) ? tipoDoEndereco : "todos"
   // Período vazio = sem limite naquela ponta. O dia é o do navegador (horário
   // da loja), não o UTC gravado: uma venda das 22h é do dia em que aconteceu.
-  const [de, setDe] = useState("")
-  const [ate, setAte] = useState("")
+  const de = DIA.test(params.get("de") ?? "") ? params.get("de")! : ""
+  const ate = DIA.test(params.get("ate") ?? "") ? params.get("ate")! : ""
+
+  function filtrar(mudanca: Record<string, string>) {
+    setParams(
+      (atuais) => {
+        const novos = new URLSearchParams(atuais)
+        for (const [chave, valor] of Object.entries(mudanca)) {
+          if (!valor || valor === "todas" || valor === "todos") novos.delete(chave)
+          else novos.set(chave, valor)
+        }
+        return novos
+      },
+      // Filtro não é navegação: não empilha no "voltar" nem rola a tela.
+      { replace: true, preventScrollReset: true }
+    )
+  }
+  const setLoja = (v: string) => filtrar({ loja: v })
+  const setTipo = (v: string) => filtrar({ tipo: v })
+  const periodo = (d: string, a: string) => filtrar({ de: d, ate: a })
 
   const linhas = useMemo(
     () =>
@@ -226,11 +275,6 @@ function Ficha({
         }),
     [ficha.linhas, loja, tipo, de, ate]
   )
-
-  const lojasComMovimento = ficha.saldos.map((s) => s.loja)
-  // Só os tipos que este produto de fato teve: um botão que filtra para uma
-  // lista vazia é só ruído.
-  const tiposComMovimento = [...new Set(ficha.linhas.map((l) => l.tipo))]
 
   // O total do que está na tela — é para isso que se filtra: "quanto vendeu",
   // "quanto entrou de compra", sem somar linha a linha.
@@ -311,7 +355,7 @@ function Ficha({
                 type="date"
                 value={de}
                 max={ate || undefined}
-                onChange={(e) => setDe(e.target.value)}
+                onChange={(e) => filtrar({ de: e.target.value })}
                 className={ESTILO_CAMPO}
               />
             </Campo>
@@ -320,16 +364,16 @@ function Ficha({
                 type="date"
                 value={ate}
                 min={de || undefined}
-                onChange={(e) => setAte(e.target.value)}
+                onChange={(e) => filtrar({ ate: e.target.value })}
                 className={ESTILO_CAMPO}
               />
             </Campo>
             <div className="flex flex-wrap gap-1.5">
-              <Atalho rotulo="Hoje" onClick={() => (setDe(diaDeHoje()), setAte(diaDeHoje()))} />
-              <Atalho rotulo="7 dias" onClick={() => (setDe(diaAtras(7)), setAte(diaDeHoje()))} />
-              <Atalho rotulo="30 dias" onClick={() => (setDe(diaAtras(30)), setAte(diaDeHoje()))} />
+              <Atalho rotulo="Hoje" onClick={() => periodo(diaDeHoje(), diaDeHoje())} />
+              <Atalho rotulo="7 dias" onClick={() => periodo(diaAtras(6), diaDeHoje())} />
+              <Atalho rotulo="30 dias" onClick={() => periodo(diaAtras(29), diaDeHoje())} />
               {de || ate ? (
-                <Atalho rotulo="Todo o período" onClick={() => (setDe(""), setAte(""))} />
+                <Atalho rotulo="Todo o período" onClick={() => periodo("", "")} />
               ) : null}
             </div>
           </div>
