@@ -3,10 +3,12 @@ import { Link, useSearchParams } from "react-router"
 import { ScrollText, Search } from "lucide-react"
 
 import type { Route } from "./+types/admin.ficha"
+import { Atalho, Campo, ESTILO_CAMPO } from "~/components/pdv/filtros"
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { db } from "~/lib/db.server"
+import { diaAtras, diaDeHoje, diaEmTexto, emDia } from "~/lib/dia"
 import { fichaDoProduto } from "~/lib/estoque.server"
 import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { ajudaDoTipo, rotuloDoTipo } from "~/lib/movimentos"
@@ -203,6 +205,10 @@ function Ficha({
 }) {
   const [loja, setLoja] = useState<string>("todas")
   const [tipo, setTipo] = useState<string>("todos")
+  // Período vazio = sem limite naquela ponta. O dia é o do navegador (horário
+  // da loja), não o UTC gravado: uma venda das 22h é do dia em que aconteceu.
+  const [de, setDe] = useState("")
+  const [ate, setAte] = useState("")
 
   const linhas = useMemo(
     () =>
@@ -212,8 +218,13 @@ function Ficha({
       [...ficha.linhas]
         .reverse()
         .filter((l) => loja === "todas" || l.loja === loja)
-        .filter((l) => tipo === "todos" || l.tipo === tipo),
-    [ficha.linhas, loja, tipo]
+        .filter((l) => tipo === "todos" || l.tipo === tipo)
+        .filter((l) => {
+          if (!de && !ate) return true
+          const dia = emDia(new Date(l.criadoEm))
+          return (!de || dia >= de) && (!ate || dia <= ate)
+        }),
+    [ficha.linhas, loja, tipo, de, ate]
   )
 
   const lojasComMovimento = ficha.saldos.map((s) => s.loja)
@@ -293,6 +304,35 @@ function Ficha({
               ))}
             </div>
           ) : null}
+
+          <div className="mt-3 flex flex-wrap items-end gap-2">
+            <Campo rotulo="De">
+              <input
+                type="date"
+                value={de}
+                max={ate || undefined}
+                onChange={(e) => setDe(e.target.value)}
+                className={ESTILO_CAMPO}
+              />
+            </Campo>
+            <Campo rotulo="Até">
+              <input
+                type="date"
+                value={ate}
+                min={de || undefined}
+                onChange={(e) => setAte(e.target.value)}
+                className={ESTILO_CAMPO}
+              />
+            </Campo>
+            <div className="flex flex-wrap gap-1.5">
+              <Atalho rotulo="Hoje" onClick={() => (setDe(diaDeHoje()), setAte(diaDeHoje()))} />
+              <Atalho rotulo="7 dias" onClick={() => (setDe(diaAtras(7)), setAte(diaDeHoje()))} />
+              <Atalho rotulo="30 dias" onClick={() => (setDe(diaAtras(30)), setAte(diaDeHoje()))} />
+              {de || ate ? (
+                <Atalho rotulo="Todo o período" onClick={() => (setDe(""), setAte(""))} />
+              ) : null}
+            </div>
+          </div>
 
           <div className="mt-4 overflow-x-auto">
             <table className="w-full min-w-[46rem] text-sm">
@@ -396,6 +436,9 @@ function Ficha({
                     <td colSpan={3} className="py-2.5 text-xs text-muted-foreground">
                       Total {tipo === "todos" ? "" : `de ${rotuloDoTipo(tipo).toLowerCase()}`}
                       {loja === "todas" ? "" : ` em ${loja}`}
+                      {de || ate
+                        ? ` · ${de ? diaEmTexto(de) : "início"} a ${ate ? diaEmTexto(ate) : "hoje"}`
+                        : ""}
                     </td>
                     <td className="px-2 py-2.5 text-right font-mono tabular-nums">
                       {totais.entrou ? formatarQuantidade(totais.entrou) : ""}
