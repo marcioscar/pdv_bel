@@ -486,7 +486,7 @@ function Pagamento({ venda }: { venda: VendaConsultada }) {
     return <span className="text-xs text-muted-foreground">—</span>
   }
 
-  return <SituacaoCobrancas cobrancas={venda.cobrancas} />
+  return <SituacaoCobrancas cobrancas={venda.cobrancas} forma={venda.forma} />
 }
 
 function Detalhe({

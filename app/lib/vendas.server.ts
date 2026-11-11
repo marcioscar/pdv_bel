@@ -1464,6 +1464,10 @@ export async function consultarVendas(filtro: FiltroVendas) {
       situacao: true,
       valor: true,
       vencimento: true,
+      // O Pix da entrega mora aqui com `tipo: "pix"`; sem estes dois a tela
+      // não distingue um do boleto nem sabe a hora em que foi pago.
+      tipo: true,
+      recebidoEm: true,
     },
   })
   const porVenda = new Map<string, typeof cobrancas>()

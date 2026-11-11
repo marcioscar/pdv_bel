@@ -1007,7 +1007,7 @@ export default function Vendas({ loaderData }: Route.ComponentProps) {
                           ) : !formaGeraCobranca(venda.forma) ? (
                             <span className="text-xs text-muted-foreground">—</span>
                           ) : (
-                            <SituacaoCobrancas cobrancas={venda.cobrancas} />
+                            <SituacaoCobrancas cobrancas={venda.cobrancas} forma={venda.forma} />
                           )}
                         </td>
                         <td className="px-5 py-2.5">

@@ -56,11 +56,30 @@ export function ItensDaVenda({
  */
 export function SituacaoCobrancas({
   cobrancas,
+  forma,
 }: {
-  cobrancas: { parcela: number; parcelas: number; situacao: string }[]
+  cobrancas: {
+    parcela: number
+    parcelas: number
+    situacao: string
+    tipo?: string | null
+    recebidoEm?: Date | string | null
+  }[]
+  /** A forma da venda: só para dizer "sem Pix" em vez de "sem boleto". */
+  forma?: string
 }) {
   if (cobrancas.length === 0) {
-    return <span className="text-xs text-destructive">sem boleto</span>
+    return (
+      <span className="text-xs text-destructive">
+        {forma === "entrega" ? "sem Pix" : "sem boleto"}
+      </span>
+    )
+  }
+
+  // Pix da entrega: uma cobrança só, e a pergunta do vendedor é "o cliente já
+  // pagou?" — que o código cru do Inter ("A_RECEBER") não responde de relance.
+  if (cobrancas.length === 1 && cobrancas[0].tipo === "pix") {
+    return <SituacaoDoPix cobranca={cobrancas[0]} />
   }
 
   const recebidas = cobrancas.filter((c) => c.situacao === "RECEBIDO").length
@@ -84,6 +103,59 @@ export function SituacaoCobrancas({
       {cobrancas.length > 1 ? (
         <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
           {recebidas}/{cobrancas.length} pagas
+        </span>
+      ) : null}
+    </span>
+  )
+}
+
+const ROTULO_DO_PIX: Record<string, string> = {
+  A_RECEBER: "Pix a receber",
+  ATRASADO: "Pix atrasado",
+  RECEBIDO: "Pix pago",
+  EM_PROCESSAMENTO: "Emitindo Pix",
+  CANCELADO: "Pix cancelado",
+  EXPIRADO: "Pix expirado",
+}
+
+/**
+ * O Pix da entrega em palavras, e com a hora em que o cliente pagou.
+ *
+ * Verde pago, âmbar esperando, vermelho o que deu errado — as mesmas cores do
+ * aviso do topo, para quem vê as duas coisas entender que falam do mesmo Pix.
+ * A hora só existe nos Pix vistos pagos depois que o sistema passou a guardá-la;
+ * nos de antes aparece só "Pix pago".
+ */
+function SituacaoDoPix({
+  cobranca,
+}: {
+  cobranca: { situacao: string; recebidoEm?: Date | string | null }
+}) {
+  const pago = cobranca.situacao === "RECEBIDO"
+  const ruim = ["ATRASADO", "CANCELADO", "EXPIRADO"].includes(cobranca.situacao)
+
+  return (
+    <span className="flex flex-col items-start gap-0.5">
+      <Badge
+        variant="outline"
+        className={
+          pago
+            ? "border-emerald-400 bg-emerald-100 text-[10px] text-emerald-950 dark:border-emerald-500/50 dark:bg-emerald-500/20 dark:text-emerald-200"
+            : ruim
+              ? "border-destructive/50 bg-destructive/10 text-[10px] text-destructive"
+              : "border-amber-400 bg-amber-100 text-[10px] text-amber-950 dark:border-amber-500/50 dark:bg-amber-500/20 dark:text-amber-200"
+        }
+      >
+        {ROTULO_DO_PIX[cobranca.situacao] ?? cobranca.situacao}
+      </Badge>
+      {pago && cobranca.recebidoEm ? (
+        <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
+          {new Date(cobranca.recebidoEm).toLocaleString("pt-BR", {
+            day: "2-digit",
+            month: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+          })}
         </span>
       ) : null}
     </span>
