@@ -1,8 +1,16 @@
 import { useEffect } from "react"
 import { Link, useFetcher, useLocation } from "react-router"
-import { Clock, KeyRound, PackageX, ShieldAlert, ShieldCheck, Truck } from "lucide-react"
+import { Clock, KeyRound, PackageX, QrCode, ShieldAlert, ShieldCheck, Truck } from "lucide-react"
 
-import { Button } from "~/components/ui/button"
+import { Button, buttonVariants } from "~/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "~/components/ui/dropdown-menu"
+import { moeda } from "~/lib/moeda"
 import { ehGerente } from "~/lib/permissoes"
 import { cn } from "~/lib/utils"
 
@@ -35,7 +43,11 @@ export function AvisosDoTopo({ papel }: { papel: string }) {
     cargas: number
     faltas: number
     certificados: { rotulo: string; diasParaVencer: number }[]
+    pixRecebidos: { id: string; vendaNumero: number; valor: number; loja: string; cliente: string | null }[]
   }>()
+  // Separado do que carrega os números: o ciente é uma escrita, e misturar as
+  // duas no mesmo fetcher faria a consulta de 20 s esperar a escrita acabar.
+  const cienteFetcher = useFetcher()
   const { pathname } = useLocation()
 
   /**
@@ -63,6 +75,14 @@ export function AvisosDoTopo({ papel }: { papel: string }) {
   const cargas = fetcher.data?.cargas ?? 0
   const faltas = fetcher.data?.faltas ?? 0
   const certificados = fetcher.data?.certificados ?? []
+  const pixRecebidos = fetcher.data?.pixRecebidos ?? []
+
+  function darCiente(ids: string[]) {
+    cienteFetcher.submit(
+      ids.map((id) => ["id", id] as [string, string]),
+      { method: "post", action: "/avisos/contagem" }
+    )
+  }
 
   // O gerente também vende: se ele tem pedido próprio respondido, os dois avisos
   // aparecem, e cada um leva para a sua tela.
@@ -84,6 +104,51 @@ export function AvisosDoTopo({ papel }: { papel: string }) {
           <ShieldAlert className="size-4" aria-hidden />
           {aDecidir} {aDecidir === 1 ? "a liberar" : "a liberar"}
         </Button>
+      ) : null}
+
+      {/* Verde: é notícia boa, e a única ação é guardar o comprovante ou liberar
+          a entrega. Fica até alguém dar ciente — um aviso que some sozinho passa
+          batido justamente quando o balcão está cheio. */}
+      {pixRecebidos.length > 0 ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            tabIndex={-1}
+            openOnHover={false}
+            className={cn(
+              buttonVariants({ variant: "outline", size: "sm" }),
+              "rounded-lg font-semibold",
+              "border-emerald-400 bg-emerald-100 text-emerald-950 hover:bg-emerald-200",
+              "dark:border-emerald-500/50 dark:bg-emerald-500/20 dark:text-emerald-200 dark:hover:bg-emerald-500/30"
+            )}
+            title="Pix de entrega que o cliente já pagou"
+          >
+            <QrCode className="size-4" aria-hidden />
+            {pixRecebidos.length} {pixRecebidos.length === 1 ? "Pix recebido" : "Pix recebidos"}
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-72">
+            {pixRecebidos.map((p) => (
+              <DropdownMenuItem key={p.id} onClick={() => darCiente([p.id])}>
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="font-semibold">
+                    Venda #{p.vendaNumero} · {moeda(p.valor)}
+                  </span>
+                  <span className="truncate text-xs text-muted-foreground">
+                    {p.cliente ?? "Sem cliente"} · {p.loja}
+                  </span>
+                </span>
+                <span className="text-xs text-muted-foreground">Ciente</span>
+              </DropdownMenuItem>
+            ))}
+            {pixRecebidos.length > 1 ? (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => darCiente(pixRecebidos.map((p) => p.id))}>
+                  Ciente de todos
+                </DropdownMenuItem>
+              </>
+            ) : null}
+          </DropdownMenuContent>
+        </DropdownMenu>
       ) : null}
 
       {respondidas > 0 ? (

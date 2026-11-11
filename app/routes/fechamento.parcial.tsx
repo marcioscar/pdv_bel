@@ -98,7 +98,8 @@ export async function loader({ request }: Route.LoaderArgs) {
           ${linha("Pix", resumo.vendasPix)}
           ${linha("Débito", resumo.vendasDebito)}
           ${linha("Crédito", resumo.vendasCredito)}
-          ${linha("A prazo / entrega", resumo.vendasPrazo)}
+          ${linha("A prazo (boleto)", resumo.vendasPrazo)}
+          ${linha("Pix a receber", resumo.vendasPixEntrega)}
           ${resumo.vendasLink > 0 ? linha("Link de pagamento", resumo.vendasLink) : ""}
           ${resumo.creditoDoCliente > 0 ? linha("Crédito do cliente", resumo.creditoDoCliente) : ""}
           <tr class="soma">

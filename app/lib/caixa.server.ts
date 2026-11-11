@@ -124,9 +124,12 @@ export async function resumoDoDia(loja: string, dia: string) {
     vendasPix: arredondar(por("pix") + por("antecipado")),
     vendasDebito: por("debito"),
     vendasCredito: por("credito"),
-    // O Pix na entrega é a receber como o boleto, e também não passa pela
-    // gaveta: entra na mesma linha, em vez de um campo novo no fechamento.
-    vendasPrazo: arredondar(por("prazo") + por("entrega")),
+    // A prazo é o boleto. O Pix na entrega também é a receber e também não
+    // passa pela gaveta, mas tem linha própria: o caixa precisa saber quanto
+    // do que vendeu depende de boleto e quanto depende de um QR que está na
+    // mão do entregador.
+    vendasPrazo: por("prazo"),
+    vendasPixEntrega: por("entrega"),
     vendasLink: por("link"),
     totalVendido: arredondar(vendas.reduce((a, v) => a + v.total, 0)),
     quantidadeVendas: vendas.length,
@@ -369,6 +372,7 @@ export async function fecharCaixa(entrada: {
         vendasDebito: resumo.vendasDebito,
         vendasCredito: resumo.vendasCredito,
         vendasPrazo: resumo.vendasPrazo,
+        vendasPixEntrega: resumo.vendasPixEntrega,
         totalVendido: resumo.totalVendido,
         quantidadeVendas: resumo.quantidadeVendas,
         canceladas: resumo.canceladas,

@@ -1,6 +1,7 @@
 import type { Route } from "./+types/avisos.contagem"
 import { contagemDeAutorizacoes } from "~/lib/autorizacao.server"
 import { certificadoDaConta } from "~/lib/inter.server"
+import { darCienteDePix, pixRecebidosSemCiente } from "~/lib/pix-entrega.server"
 import { listarLojas } from "~/lib/lojas.server"
 import { ehGerente } from "~/lib/permissoes"
 import { certificadoSefazDaLoja } from "~/lib/sefaz.server"
@@ -21,7 +22,7 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   const gerente = ehGerente(eu.papel)
 
-  const [autorizacoes, cargas, faltas, certificados] = await Promise.all([
+  const [autorizacoes, cargas, faltas, certificados, pixRecebidos] = await Promise.all([
     contagemDeAutorizacoes(eu),
     // Só a loja em que ele está operando: carga que chega em NRT não é problema
     // de quem está no balcão de QI, mesmo que ele tenha acesso às duas.
@@ -33,6 +34,10 @@ export async function loader({ request }: Route.LoaderArgs) {
     // Certificado vencido para de funcionar num dia qualquer, calado — o
     // operador de caixa não pode renovar nada, só o gerente.
     gerente ? certificadosARenovar() : Promise.resolve([]),
+    // Pix da entrega que o cliente pagou. Quem está no balcão vê o da própria
+    // loja (é ele quem tem o entregador e o cliente na linha); o gerente vê os
+    // das lojas que alcança.
+    pixRecebidosSemCiente(lojasDoAviso(eu, gerente)),
   ])
 
   return {
@@ -44,7 +49,21 @@ export async function loader({ request }: Route.LoaderArgs) {
     cargas,
     faltas,
     certificados,
+    pixRecebidos,
   }
+}
+
+function lojasDoAviso(eu: { loja: string; lojasPermitidas: string[] }, gerente: boolean) {
+  return gerente ? eu.lojasPermitidas : [eu.loja]
+}
+
+/** "Ciente" de um ou mais Pix recebidos — tira do aviso do topo. */
+export async function action({ request }: Route.ActionArgs) {
+  const eu = await exigirUsuario(request)
+  const form = await request.formData()
+  const ids = form.getAll("id").map(String)
+  await darCienteDePix(ids, lojasDoAviso(eu, ehGerente(eu.papel)))
+  return { ok: true as const }
 }
 
 /**

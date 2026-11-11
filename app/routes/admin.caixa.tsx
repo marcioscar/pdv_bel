@@ -169,7 +169,12 @@ export default function AdminCaixa({ loaderData }: Route.ComponentProps) {
             <Linha rotulo="Pix" valor={f.vendasPix} />
             <Linha rotulo="Débito" valor={f.vendasDebito} />
             <Linha rotulo="Crédito" valor={f.vendasCredito} />
-            <Linha rotulo="A prazo / entrega" valor={f.vendasPrazo} />
+            <Linha rotulo="A prazo (boleto)" valor={f.vendasPrazo} />
+            {/* Fechamento de antes da separação não tem o campo: o Pix na
+                entrega daquele dia está somado em "A prazo". */}
+            {f.vendasPixEntrega != null ? (
+              <Linha rotulo="Pix a receber" valor={f.vendasPixEntrega} />
+            ) : null}
             {f.creditoDoCliente > 0 ? (
               <Linha rotulo="Crédito do cliente" valor={f.creditoDoCliente} />
             ) : null}

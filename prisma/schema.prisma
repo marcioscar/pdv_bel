@@ -368,6 +368,12 @@ model Cobranca {
   baixaForma        String?
   baixaValor        Float?
 
+  /// Quando o sistema viu o Pix da entrega pago (só `tipo: "pix"`). É o que o
+  /// aviso do topo conta; o boleto não usa.
+  recebidoEm        DateTime?
+  /// Quando alguém deu ciente do aviso. Sem ele o aviso fica no topo.
+  vistoEm           DateTime?
+
   @@unique([vendaId, parcela])
   @@index([vendaNumero])
   @@index([loja])
@@ -1215,6 +1221,10 @@ model FechamentoCaixa {
   vendasDebito  Float @default(0)
   vendasCredito Float @default(0)
   vendasPrazo   Float @default(0)
+  /// Pix na entrega: a receber como o boleto, mas separado dele. Opcional
+  /// porque os fechamentos de antes não têm o campo — neles o Pix na entrega
+  /// está somado em `vendasPrazo`, e não há como separá-lo depois.
+  vendasPixEntrega Float?
   /// Vendas pagas por link. Como Pix e cartão, não passa pela gaveta — mas
   /// entra no papel, senão as parcelas não somam o total vendido e quem
   /// confere fica procurando a diferença.

@@ -139,7 +139,13 @@ export async function atualizarPixDaEntrega(c: Cobranca): Promise<string> {
   const pix = await consultarPixComVencimento(c.codigoSolicitacao, c.conta)
   const situacao = situacaoDoPix(pix, c.vencimento)
   if (situacao !== c.situacao) {
-    await db.cobranca.update({ where: { id: c.id }, data: { situacao } })
+    await db.cobranca.update({
+      where: { id: c.id },
+      // `recebidoEm` é o que alimenta o aviso do topo: marca o instante em que
+      // o sistema viu o pagamento, uma vez só (a próxima conferência já encontra
+      // RECEBIDO e não passa por aqui de novo).
+      data: { situacao, ...(situacao === "RECEBIDO" ? { recebidoEm: new Date() } : {}) },
+    })
     console.info(`[pix entrega ${c.codigoSolicitacao}] venda #${c.vendaNumero} ${c.loja}: ${c.situacao} -> ${situacao}`)
   }
   return situacao
@@ -205,4 +211,63 @@ export async function conferirPixDasEntregas() {
     }
   }
   return abertas.length
+}
+
+export type PixRecebido = {
+  id: string
+  vendaNumero: number
+  valor: number
+  loja: string
+  cliente: string | null
+}
+
+/**
+ * Os Pix de entrega que o cliente já pagou e ninguém deu ciente — o que o aviso
+ * do topo mostra.
+ *
+ * Só conta os que o sistema viu pagar DEPOIS de existir o aviso (`recebidoEm`
+ * preenchido): os pagos de antes não têm o campo, e listá-los despejaria no
+ * topo, de uma vez, todo o histórico recebido.
+ *
+ * `gte` de uma data, e não `not: null`: no Mongo o campo ausente não é nulo
+ * para o Prisma, e é justamente o ausente que precisa ficar de fora.
+ */
+export async function pixRecebidosSemCiente(lojas: string[]): Promise<PixRecebido[]> {
+  const cobrancas = await db.cobranca.findMany({
+    where: {
+      tipo: "pix",
+      situacao: "RECEBIDO",
+      loja: { in: lojas },
+      recebidoEm: { gte: new Date(0) },
+      OR: [{ vistoEm: null }, { vistoEm: { isSet: false } }],
+    },
+    orderBy: { recebidoEm: "asc" },
+    take: 20,
+  })
+  if (cobrancas.length === 0) return []
+
+  const vendas = await db.venda.findMany({
+    where: { id: { in: cobrancas.map((c) => c.vendaId) } },
+    select: { id: true, clienteNome: true },
+  })
+  const clientes = new Map(vendas.map((v) => [v.id, v.clienteNome]))
+
+  return cobrancas.map((c) => ({
+    id: c.id,
+    vendaNumero: c.vendaNumero,
+    valor: c.valor,
+    loja: c.loja,
+    cliente: clientes.get(c.vendaId) ?? null,
+  }))
+}
+
+/** O "ciente": tira o Pix do aviso. Só dos Pix das lojas que quem pede alcança. */
+export async function darCienteDePix(ids: string[], lojas: string[]) {
+  const validos = ids.filter((id) => /^[0-9a-fA-F]{24}$/.test(id))
+  if (validos.length === 0) return 0
+  const r = await db.cobranca.updateMany({
+    where: { id: { in: validos }, tipo: "pix", loja: { in: lojas } },
+    data: { vistoEm: new Date() },
+  })
+  return r.count
 }
