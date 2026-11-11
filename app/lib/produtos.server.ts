@@ -28,6 +28,11 @@ export type ProdutoEntrada = {
   cfop: string | null
   csosn: string | null
   cest: string | null
+  /**
+   * Custo digitado no cadastro. `undefined` = o formulário não trouxe o campo
+   * (entrada de nota cria produto sem ele) e o que está gravado fica como está.
+   */
+  custo?: number | null
 }
 
 /**
@@ -72,6 +77,9 @@ export function lerProduto(form: FormData): ProdutoEntrada | { erro: string } {
   const csosn = texto(form.get("csosn")).replace(/\D/g, "")
   const cest = texto(form.get("cest")).replace(/\D/g, "")
 
+  const custoBruto = texto(form.get("custo"))
+  const custo = custoBruto ? interpretarValor(custoBruto) : null
+
   const precoComboBruto = texto(form.get("precoCombo"))
   const quantidadeComboBruta = texto(form.get("quantidadeCombo"))
   const precoCombo = precoComboBruto ? interpretarValor(precoComboBruto) : null
@@ -83,6 +91,7 @@ export function lerProduto(form: FormData): ProdutoEntrada | { erro: string } {
   if (!unidade) return { erro: "Informe a unidade (PC, UN, CX…)" }
   if (unidade.length > 6) return { erro: "Unidade longa demais" }
   if (preco === null || preco < 0) return { erro: "Preço inválido" }
+  if (custoBruto && (custo === null || custo < 0)) return { erro: "Custo inválido" }
   // Vazio é aceito (o campo é opcional), mas preenchido pela metade não: um NCM
   // de 6 dígitos rejeita a NF-e inteira na SEFAZ, e o erro só apareceria na
   // emissão — longe daqui, com o cliente esperando.
@@ -149,13 +158,16 @@ export function lerProduto(form: FormData): ProdutoEntrada | { erro: string } {
     cfop: cfop || null,
     csosn: csosn || null,
     cest: cest || null,
+    ...(form.has("custo") ? { custo } : {}),
   }
 }
 
 export async function criarProduto(entrada: ProdutoEntrada): Promise<ResultadoProduto> {
   // `codigo` não é único no catálogo: 55 códigos já se repetem hoje, e o caixa
   // resolve mostrando a lista quando o código é ambíguo. Não barramos aqui.
-  const produto = await db.produto.create({ data: entrada })
+  const produto = await db.produto.create({
+    data: { ...entrada, ...(entrada.custo ? { custoEm: new Date() } : {}) },
+  })
   return { ok: true, produto }
 }
 
@@ -170,7 +182,14 @@ export async function atualizarProduto(
   const existente = await db.produto.findUnique({ where: { id } })
   if (!existente) return { ok: false, erro: "Produto não encontrado" }
 
-  const produto = await db.produto.update({ where: { id }, data: entrada })
+  // O custo só ganha data nova quando muda: a data é o que decide, entre as
+  // fontes, qual é o "último custo" (ver `ultimoCustoPorProduto`). Digitado
+  // aqui, vale a partir de agora — e passa por cima de nota mais antiga.
+  const custoMudou = entrada.custo !== undefined && entrada.custo !== existente.custo
+  const produto = await db.produto.update({
+    where: { id },
+    data: { ...entrada, ...(custoMudou ? { custoEm: new Date() } : {}) },
+  })
 
   /**
    * O registro entra DEPOIS da alteração e fora de transação, de propósito.

@@ -16,7 +16,9 @@ import {
   ComprasDoProduto,
   type ProdutoDoHistorico,
 } from "~/components/pdv/compras-do-produto"
-import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
+import { ultimoCustoPorProduto } from "~/lib/compras.server"
+import { markupPorPreco, precoPorMarkup, textoDeMarkup, textoDePreco } from "~/lib/markup"
+import { interpretarValor, moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
 import { buscarProdutos, criarIndice } from "~/lib/pdv"
 import {
   alternarProduto,
@@ -51,6 +53,9 @@ export async function loader({ request }: Route.LoaderArgs) {
       select: { id: true, razaoSocial: true, nomeFantasia: true, ativo: true },
     }),
   ])
+  // O último custo conhecido (nota, AF, histórico ou o digitado aqui) — o que
+  // o cadastro mostra e sobre o que o markup é calculado.
+  const custos = await ultimoCustoPorProduto(cadastro.map((p) => p.id))
   const nomeDoFornecedor = new Map(
     fornecedores.map((f) => [f.id, f.nomeFantasia || f.razaoSocial])
   )
@@ -68,6 +73,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     produtos: cadastro.map((produto) => ({
       ...produto,
       estoque: saldos.get(produto.id) ?? 0,
+      custoAtual: custos.get(produto.id) ?? null,
       codigoRepetido: repetidos.has(produto.codigo),
       grupoNome: produto.grupoId ? (nomeDoGrupo.get(produto.grupoId) ?? null) : null,
       fornecedorNome: produto.fornecedorId
@@ -118,6 +124,8 @@ type EmEdicao = {
   descricao: string
   unidade: string
   preco: string
+  custo: string
+  markup: string
   grupoId: string
   fornecedorId: string
   precoCombo: string
@@ -131,7 +139,7 @@ type EmEdicao = {
 }
 
 const NOVO: EmEdicao = {
-  id: null, codigo: "", descricao: "", unidade: "", preco: "", grupoId: "", fornecedorId: "",
+  id: null, codigo: "", descricao: "", unidade: "", preco: "", custo: "", markup: "", grupoId: "", fornecedorId: "",
   precoCombo: "", quantidadeCombo: "", vendeFracionado: false, ncm: "",
   origemFiscal: "", cfop: "", csosn: "", cest: "",
 }
@@ -209,6 +217,48 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
     return () => window.removeEventListener("keydown", aoTeclar)
   }, [edicao])
 
+  // Custo, markup e preço andam juntos: preço = custo × (1 + markup).
+  function mudarCusto(texto: string) {
+    if (!edicao) return
+    const custo = interpretarValor(texto)
+    const markup = interpretarValor(edicao.markup)
+    // Com markup definido, o custo novo leva o preço junto (a margem se mantém).
+    setEdicao({
+      ...edicao,
+      custo: texto,
+      preco:
+        custo != null && custo > 0 && markup != null
+          ? textoDePreco(precoPorMarkup(custo, markup))
+          : edicao.preco,
+    })
+  }
+  function mudarMarkup(texto: string) {
+    if (!edicao) return
+    const custo = interpretarValor(edicao.custo)
+    const markup = interpretarValor(texto)
+    setEdicao({
+      ...edicao,
+      markup: texto,
+      preco:
+        custo != null && custo > 0 && markup != null
+          ? textoDePreco(precoPorMarkup(custo, markup))
+          : edicao.preco,
+    })
+  }
+  function mudarPreco(texto: string) {
+    if (!edicao) return
+    const custo = interpretarValor(edicao.custo)
+    const preco = interpretarValor(texto)
+    setEdicao({
+      ...edicao,
+      preco: texto,
+      markup:
+        custo != null && custo > 0 && preco != null && preco > 0
+          ? textoDeMarkup(markupPorPreco(custo, preco))
+          : edicao.markup,
+    })
+  }
+
   function salvar() {
     if (!edicao || gravando) return
     fetcher.submit(
@@ -218,6 +268,7 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
         descricao: edicao.descricao,
         unidade: edicao.unidade,
         preco: edicao.preco,
+        custo: edicao.custo,
         grupoId: edicao.grupoId,
         fornecedorId: edicao.fornecedorId,
         precoCombo: edicao.precoCombo,
@@ -357,9 +408,21 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
             className="col-span-2"
           />
           <CampoEdicao
+            rotulo="Custo"
+            valor={edicao.custo}
+            onChange={mudarCusto}
+            className="col-span-1"
+          />
+          <CampoEdicao
+            rotulo="Markup %"
+            valor={edicao.markup}
+            onChange={mudarMarkup}
+            className="col-span-1"
+          />
+          <CampoEdicao
             rotulo="Preço"
             valor={edicao.preco}
-            onChange={(v) => setEdicao({ ...edicao, preco: v })}
+            onChange={mudarPreco}
             className="col-span-1"
           />
           {/* Os dois do combo lado a lado: separados, ninguém liga um ao outro,
@@ -465,6 +528,9 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
               <th scope="col" className="w-16 px-2 py-2.5 text-left font-semibold">
                 Un
               </th>
+              <th scope="col" className="w-24 px-2 py-2.5 text-right font-semibold">
+                Custo
+              </th>
               <th scope="col" className="w-28 px-2 py-2.5 text-right font-semibold">
                 Preço
               </th>
@@ -477,7 +543,7 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
           <tbody>
             {encontrados.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-5 py-16 text-center">
+                <td colSpan={7} className="px-5 py-16 text-center">
                   <PackageSearch
                     className="mx-auto size-10 text-muted-foreground/40"
                     aria-hidden
@@ -553,6 +619,14 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
                       </div>
                     ) : null}
                   </td>
+                  <td className="px-2 py-2 text-right font-mono text-xs tabular-nums text-muted-foreground">
+                    {produto.custoAtual != null ? moeda(produto.custoAtual) : "—"}
+                    {produto.custoAtual != null && produto.custoAtual > 0 && produto.preco > 0 ? (
+                      <div className="text-[10px]">
+                        {textoDeMarkup(markupPorPreco(produto.custoAtual, produto.preco))}%
+                      </div>
+                    ) : null}
+                  </td>
                   <td className="px-2 py-2 text-right font-mono font-medium tabular-nums">
                     {moeda(produto.preco)}
                     {/* Junto do preço, e não em coluna própria: é uma exceção
@@ -587,6 +661,11 @@ export default function AdminProdutos({ loaderData }: Route.ComponentProps) {
                           fornecedorId: produto.fornecedorId ?? "",
                           // Vírgula, como se digita — interpretarValor aceita as duas.
                           preco: produto.preco.toFixed(2).replace(".", ","),
+                          custo: produto.custoAtual != null ? textoDePreco(produto.custoAtual) : "",
+                          markup:
+                            produto.custoAtual != null && produto.custoAtual > 0 && produto.preco > 0
+                              ? textoDeMarkup(markupPorPreco(produto.custoAtual, produto.preco))
+                              : "",
                           precoCombo:
                             produto.precoCombo != null
                               ? produto.precoCombo.toFixed(2).replace(".", ",")
