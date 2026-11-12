@@ -13,7 +13,8 @@ import {
 } from "~/lib/caixa.server"
 import { diaAtras, diaEmTexto } from "~/lib/dia"
 import { moeda } from "~/lib/moeda"
-import { exigirGerente } from "~/lib/sessao.server"
+import { ehGerente } from "~/lib/permissoes"
+import { exigirGerente, exigirUsuario } from "~/lib/sessao.server"
 import { cn } from "~/lib/utils"
 
 export function meta(_: Route.MetaArgs) {
@@ -33,15 +34,18 @@ const DIAS_VIGIADOS = 30
  * problema que um que erra R$ 200 uma vez, e o total sozinho esconde os dois.
  */
 export async function loader({ request }: Route.LoaderArgs) {
-  const eu = await exigirGerente(request, "reabrirCaixa")
+  const eu = await exigirUsuario(request)
+  // O gerente vê as lojas dele; o vendedor, só a loja em que está agora.
+  const podeReabrir = ehGerente(eu.papel)
+  const lojas = podeReabrir ? eu.lojasPermitidas : [eu.loja]
 
   const [fechamentos, semFechar, reabertos] = await Promise.all([
-    listarFechamentos(eu.lojasPermitidas),
-    diasSemFechamento(eu.lojasPermitidas, diaAtras(DIAS_VIGIADOS)),
-    reabertosPendentes(eu.lojasPermitidas),
+    listarFechamentos(lojas),
+    diasSemFechamento(lojas, diaAtras(DIAS_VIGIADOS)),
+    reabertosPendentes(lojas),
   ])
 
-  return { fechamentos, semFechar, reabertos }
+  return { fechamentos, semFechar, reabertos, podeReabrir }
 }
 
 export async function action({ request }: Route.ActionArgs) {
@@ -66,7 +70,7 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function AdminCaixas({ loaderData, actionData }: Route.ComponentProps) {
-  const { fechamentos, semFechar, reabertos } = loaderData
+  const { fechamentos, semFechar, reabertos, podeReabrir } = loaderData
   const navegacao = useNavigation()
 
   const comDiferenca = fechamentos.filter((f) => diferencaRelevante(f.diferenca))
@@ -313,6 +317,7 @@ export default function AdminCaixas({ loaderData, actionData }: Route.ComponentP
                           >
                             Conferir
                           </Button>
+                          {podeReabrir ? (
                           <Form method="post">
                             <input type="hidden" name="loja" value={f.loja} />
                             <input type="hidden" name="dia" value={f.dia} />
@@ -327,6 +332,7 @@ export default function AdminCaixas({ loaderData, actionData }: Route.ComponentP
                               <Unlock className="size-3.5" aria-hidden /> reabrir
                             </Button>
                           </Form>
+                          ) : null}
                         </span>
                       </td>
                     </tr>

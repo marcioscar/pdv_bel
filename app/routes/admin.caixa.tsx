@@ -11,7 +11,8 @@ import { diaEmTexto } from "~/lib/dia"
 import { imprimirDocumento } from "~/lib/impressao"
 import { moeda } from "~/lib/moeda"
 import { rotuloDoPagamento, temDinheiro } from "~/lib/pdv"
-import { exigirGerente } from "~/lib/sessao.server"
+import { ehGerente } from "~/lib/permissoes"
+import { exigirUsuario } from "~/lib/sessao.server"
 import { cn } from "~/lib/utils"
 
 export function meta({ loaderData }: Route.MetaArgs) {
@@ -33,11 +34,13 @@ export function meta({ loaderData }: Route.MetaArgs) {
  * elas que a resposta costuma estar.
  */
 export async function loader({ params, request }: Route.LoaderArgs) {
-  const eu = await exigirGerente(request, "reabrirCaixa")
+  const eu = await exigirUsuario(request)
 
   const detalhe = await fechamentoDetalhado(params.fechamentoId)
   if (!detalhe) throw new Response("Fechamento não encontrado", { status: 404 })
-  if (!eu.lojasPermitidas.includes(detalhe.fechamento.loja)) {
+  // Gerente: as lojas dele. Vendedor: só a loja em que está.
+  const lojasDele = ehGerente(eu.papel) ? eu.lojasPermitidas : [eu.loja]
+  if (!lojasDele.includes(detalhe.fechamento.loja)) {
     throw new Response(`Caixa da loja ${detalhe.fechamento.loja}`, { status: 403 })
   }
 

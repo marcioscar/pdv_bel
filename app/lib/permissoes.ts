@@ -244,7 +244,9 @@ export const GRUPOS_ADMIN: GrupoAdmin[] = [
         para: "/admin/caixas",
         rotulo: "Fechamentos de caixa",
         descricao: "Diferenças por loja e os dias que ninguém fechou",
-        somenteGerente: true,
+        // O vendedor vê os da loja em que está, só para consultar; reabrir
+        // continua do gerente (a guarda está na action da tela).
+        somenteGerente: false,
       },
       {
         para: "/admin/contas-a-receber",
