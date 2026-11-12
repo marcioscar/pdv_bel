@@ -1221,6 +1221,9 @@ model FechamentoCaixa {
   vendasDebito  Float @default(0)
   vendasCredito Float @default(0)
   vendasPrazo   Float @default(0)
+  /// Pix antecipado, em linha própria. Opcional: nos fechamentos antigos ele
+  /// está somado em `vendasPix`, e ausente é como se sabe disso.
+  vendasPixAntecipado Float?
   /// Pix na entrega: a receber como o boleto, mas separado dele. Opcional
   /// porque os fechamentos de antes não têm o campo — neles o Pix na entrega
   /// está somado em `vendasPrazo`, e não há como separá-lo depois.

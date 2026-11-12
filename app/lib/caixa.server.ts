@@ -120,8 +120,10 @@ export async function resumoDoDia(loja: string, dia: string) {
     creditoEmDinheiro: 0,
     creditoDoCliente: arredondar(vendas.reduce((a, v) => a + (v.creditoUsado ?? 0), 0)),
     esperado: arredondar(abertura + vendasDinheiro - sangrias + suprimentos - devolucoes),
-    // O Pix antecipado também caiu na conta, e não na gaveta: mesma linha do Pix.
-    vendasPix: arredondar(por("pix") + por("antecipado")),
+    // O Pix antecipado também caiu na conta, e não na gaveta, mas tem linha
+    // própria: o escritório confere esse contra o extrato, um a um.
+    vendasPix: por("pix"),
+    vendasPixAntecipado: por("antecipado"),
     vendasDebito: por("debito"),
     vendasCredito: por("credito"),
     // A prazo é o boleto. O Pix na entrega também é a receber e também não
@@ -373,6 +375,7 @@ export async function fecharCaixa(entrada: {
         vendasCredito: resumo.vendasCredito,
         vendasPrazo: resumo.vendasPrazo,
         vendasPixEntrega: resumo.vendasPixEntrega,
+        vendasPixAntecipado: resumo.vendasPixAntecipado,
         totalVendido: resumo.totalVendido,
         quantidadeVendas: resumo.quantidadeVendas,
         canceladas: resumo.canceladas,

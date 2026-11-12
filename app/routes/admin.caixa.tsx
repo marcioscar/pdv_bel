@@ -166,7 +166,11 @@ export default function AdminCaixa({ loaderData }: Route.ComponentProps) {
           </h2>
           <dl className="mt-3 rounded-xl border border-border p-4 text-sm">
             <Linha rotulo="Dinheiro" valor={f.vendasDinheiro} />
+            {/* Fechamento antigo não tem o campo: o antecipado está somado no Pix. */}
             <Linha rotulo="Pix" valor={f.vendasPix} />
+            {f.vendasPixAntecipado != null ? (
+              <Linha rotulo="Pix antecipado" valor={f.vendasPixAntecipado} />
+            ) : null}
             <Linha rotulo="Débito" valor={f.vendasDebito} />
             <Linha rotulo="Crédito" valor={f.vendasCredito} />
             <Linha rotulo="A prazo (boleto)" valor={f.vendasPrazo} />

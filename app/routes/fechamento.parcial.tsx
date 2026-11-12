@@ -96,6 +96,7 @@ export async function loader({ request }: Route.LoaderArgs) {
         <table class="conta">
           ${linha("Dinheiro", resumo.vendasDinheiro)}
           ${linha("Pix", resumo.vendasPix)}
+          ${linha("Pix antecipado", resumo.vendasPixAntecipado)}
           ${linha("Débito", resumo.vendasDebito)}
           ${linha("Crédito", resumo.vendasCredito)}
           ${linha("A prazo (boleto)", resumo.vendasPrazo)}

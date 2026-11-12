@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useState } from "react"
-import { data, Form, useNavigation } from "react-router"
+import { data, Form, useNavigation, useSearchParams } from "react-router"
 import { Loader2, PackageCheck, Plus, Printer, Search, Send, Truck, X } from "lucide-react"
 
 import type { Route } from "./+types/transferencias"
+import { Atalho, Campo, ESTILO_CAMPO } from "~/components/pdv/filtros"
 import { Topo } from "~/components/pdv/topo"
 import { CabecalhoDaTransferencia } from "~/components/pdv/transferencia-celulas"
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { db } from "~/lib/db.server"
+import { diaAtras, diaDeHoje } from "~/lib/dia"
 import { saldosPorProduto } from "~/lib/estoque.server"
 import { listarLojas } from "~/lib/lojas.server"
 import {
@@ -56,11 +58,19 @@ export function meta(_: Route.MetaArgs) {
 export async function loader({ request }: Route.LoaderArgs) {
   const eu = await exigirUsuario(request)
 
-  const [cadastro, saldos, lojas, transferencias] = await Promise.all([
+  // Período do histórico, no endereço. Só o histórico: o que está em trânsito
+  // ou com pendência aparece sempre, por mais antigo que seja.
+  const url = new URL(request.url)
+  const DIA = /^\d{4}-\d{2}-\d{2}$/
+  const de = DIA.test(url.searchParams.get("de") ?? "") ? url.searchParams.get("de")! : ""
+  const ate = DIA.test(url.searchParams.get("ate") ?? "") ? url.searchParams.get("ate")! : ""
+
+  const [cadastro, saldos, lojas, transferencias, doPeriodo] = await Promise.all([
     db.produto.findMany({ where: SOMENTE_ATIVOS, orderBy: { descricao: "asc" } }),
     saldosPorProduto(eu.loja),
     listarLojas(),
     listarTransferencias(eu.lojasPermitidas),
+    de || ate ? listarTransferencias(eu.lojasPermitidas, 500, { de, ate }) : null,
   ])
 
   /**
@@ -83,6 +93,9 @@ export async function loader({ request }: Route.LoaderArgs) {
     produtos,
     lojas: lojas.filter((l) => eu.lojasPermitidas.includes(l.codigo)),
     transferencias,
+    historico: doPeriodo ?? transferencias,
+    de,
+    ate,
   }
 }
 
@@ -161,10 +174,25 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Transferencias({ loaderData, actionData }: Route.ComponentProps) {
-  const { eu, produtos, lojas, transferencias } = loaderData
+  const { eu, produtos, lojas, transferencias, historico, de, ate } = loaderData
+  const [, setParams] = useSearchParams()
   const { escuro, alternar } = useTema()
   const relogio = useRelogio()
   useAtalhosDeSecao(eu.papel)
+
+  function filtrar(mudanca: Record<string, string>) {
+    setParams(
+      (atuais) => {
+        const novos = new URLSearchParams(atuais)
+        for (const [chave, valor] of Object.entries(mudanca)) {
+          if (valor) novos.set(chave, valor)
+          else novos.delete(chave)
+        }
+        return novos
+      },
+      { replace: true, preventScrollReset: true }
+    )
+  }
 
   const chegando = transferencias.filter(
     (t) => t.situacao === "em_transito" && t.destino === eu.loja
@@ -172,7 +200,7 @@ export default function Transferencias({ loaderData, actionData }: Route.Compone
   const saindo = transferencias.filter(
     (t) => t.situacao === "em_transito" && t.origem === eu.loja
   )
-  const encerradas = transferencias.filter(
+  const encerradas = historico.filter(
     (t) => t.situacao !== "em_transito" && !faltaEmAberto(t) && !sobraEmAberto(t)
   )
 
@@ -280,8 +308,41 @@ export default function Transferencias({ loaderData, actionData }: Route.Compone
         </Secao>
       ) : null}
 
-      {encerradas.length > 0 ? (
+      {encerradas.length > 0 || de || ate ? (
         <Secao titulo="Histórico">
+          <div className="flex flex-wrap items-end gap-2">
+            <Campo rotulo="De">
+              <input
+                type="date"
+                value={de}
+                max={ate || undefined}
+                onChange={(e) => filtrar({ de: e.target.value })}
+                className={ESTILO_CAMPO}
+              />
+            </Campo>
+            <Campo rotulo="Até">
+              <input
+                type="date"
+                value={ate}
+                min={de || undefined}
+                onChange={(e) => filtrar({ ate: e.target.value })}
+                className={ESTILO_CAMPO}
+              />
+            </Campo>
+            <div className="flex flex-wrap gap-1.5">
+              <Atalho rotulo="Hoje" onClick={() => filtrar({ de: diaDeHoje(), ate: diaDeHoje() })} />
+              <Atalho rotulo="7 dias" onClick={() => filtrar({ de: diaAtras(6), ate: diaDeHoje() })} />
+              <Atalho rotulo="30 dias" onClick={() => filtrar({ de: diaAtras(29), ate: diaDeHoje() })} />
+              {de || ate ? (
+                <Atalho rotulo="Todo o período" onClick={() => filtrar({ de: "", ate: "" })} />
+              ) : null}
+            </div>
+          </div>
+          {encerradas.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">
+              Nenhuma transferência encerrada neste período.
+            </p>
+          ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[40rem] text-sm">
               <thead>
@@ -341,6 +402,7 @@ export default function Transferencias({ loaderData, actionData }: Route.Compone
               </tbody>
             </table>
           </div>
+          )}
         </Secao>
       ) : null}
       </div>

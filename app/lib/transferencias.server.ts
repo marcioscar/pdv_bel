@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client"
 
 import { db } from "~/lib/db.server"
+import { depoisDoDia, inicioDoDia } from "~/lib/dia"
 import { registrarAvisosDeNegativo } from "~/lib/estoque-negativo.server"
 import {
   arredondarQuantidade,
@@ -636,13 +637,26 @@ export async function perdasNoTransporte(lojasPermitidas: string[], desde?: Date
 
 export type TransferenciaListada = Awaited<ReturnType<typeof listarTransferencias>>[number]
 
-export function listarTransferencias(lojasPermitidas: string[], limite = 60) {
+export function listarTransferencias(
+  lojasPermitidas: string[],
+  limite = 60,
+  /** Período de criação, em dias "AAAA-MM-DD"; vazio em uma ponta = sem limite. */
+  periodo: { de?: string; ate?: string } = {}
+) {
   return db.transferencia.findMany({
     where: {
       OR: [
         { origem: { in: lojasPermitidas } },
         { destino: { in: lojasPermitidas } },
       ],
+      ...(periodo.de || periodo.ate
+        ? {
+            criadaEm: {
+              ...(periodo.de ? { gte: inicioDoDia(periodo.de) } : {}),
+              ...(periodo.ate ? { lt: depoisDoDia(periodo.ate) } : {}),
+            },
+          }
+        : {}),
     },
     // Em trânsito primeiro seria o ideal, mas o Mongo não ordena por lista de
     // valores: a tela separa em seções, que é mais claro de qualquer forma.

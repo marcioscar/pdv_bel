@@ -118,6 +118,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
         <table class="conta">
           ${linha("Dinheiro", fechamento.vendasDinheiro)}
           ${linha("Pix", fechamento.vendasPix)}
+          ${fechamento.vendasPixAntecipado != null ? linha("Pix antecipado", fechamento.vendasPixAntecipado) : ""}
           ${linha("Débito", fechamento.vendasDebito)}
           ${linha("Crédito", fechamento.vendasCredito)}
           ${linha("A prazo (boleto)", fechamento.vendasPrazo)}

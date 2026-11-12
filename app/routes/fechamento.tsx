@@ -476,6 +476,7 @@ export default function Fechamento({ loaderData, actionData }: Route.ComponentPr
             <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
               <Cartao rotulo="Dinheiro" valor={resumo.vendasDinheiro} />
               <Cartao rotulo="Pix" valor={resumo.vendasPix} />
+              <Cartao rotulo="Pix antecipado" valor={resumo.vendasPixAntecipado} />
               <Cartao rotulo="Débito" valor={resumo.vendasDebito} />
               <Cartao rotulo="Crédito" valor={resumo.vendasCredito} />
               <Cartao rotulo="A prazo (boleto)" valor={resumo.vendasPrazo} />
