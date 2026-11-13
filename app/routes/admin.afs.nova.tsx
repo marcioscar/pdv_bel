@@ -23,7 +23,14 @@ import { diaDeHoje } from "~/lib/dia"
 import { formatarCpfCnpj } from "~/lib/documento"
 import { listarFornecedores } from "~/lib/fornecedores.server"
 import { listarLojas } from "~/lib/lojas.server"
-import { interpretarValor, moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
+import {
+  avisoDeQuantidade,
+  interpretarQuantidade,
+  interpretarValor,
+  moeda,
+  quantidadeAceita,
+  quantidade as formatarQuantidade,
+} from "~/lib/moeda"
 import { ratearPorValor } from "~/lib/custo-nfe"
 import { criarIndice } from "~/lib/pdv"
 import {
@@ -79,7 +86,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       where: SOMENTE_ATIVOS,
       orderBy: { descricao: "asc" },
       // Preço junto: a AF propõe o preço de venda novo ao lado do de hoje.
-      select: { id: true, codigo: true, descricao: true, unidade: true, preco: true },
+      select: { id: true, codigo: true, descricao: true, unidade: true, preco: true, vendeFracionado: true },
     }),
   ])
 
@@ -370,13 +377,13 @@ export default function NovaAf({ loaderData }: Route.ComponentProps) {
   const freteInvalido = freteTexto.trim() !== "" && interpretarValor(freteTexto) == null
   const rateios = ratearPorValor(
     linhas.map((l) =>
-      l.produtoId ? (interpretarValor(l.quantidadeTexto) ?? 0) * (interpretarValor(l.custoTexto) ?? 0) : 0
+      l.produtoId ? (interpretarQuantidade(l.quantidadeTexto) ?? 0) * (interpretarValor(l.custoTexto) ?? 0) : 0
     ),
     frete
   )
 
   const linhasComTotal = linhas.map((l, i) => {
-    const quantidade = interpretarValor(l.quantidadeTexto) ?? 0
+    const quantidade = interpretarQuantidade(l.quantidadeTexto) ?? 0
     const custoDoPapel = interpretarValor(l.custoTexto) ?? 0
     const custoComFrete = quantidade > 0 ? custoDoPapel + rateios[i] / quantidade : custoDoPapel
     // Daqui para baixo, "custo" é o que entra no estoque.
@@ -458,6 +465,7 @@ export default function NovaAf({ loaderData }: Route.ComponentProps) {
     !dataEmissao ||
     preenchidas.length === 0 ||
     preenchidas.some((l) => !(l.custoDoPapel > 0)) ||
+    preenchidas.some((l) => !quantidadeAceita(l.quantidade, catalogoPorId.get(l.produtoId)?.vendeFracionado)) ||
     freteInvalido
 
   function lancar() {
@@ -640,8 +648,30 @@ export default function NovaAf({ loaderData }: Route.ComponentProps) {
                       <td className="px-2 py-1.5">
                         <Input
                           value={linha.quantidadeTexto}
-                          onChange={(e) => atualizar(i, "quantidadeTexto", e.target.value.replace(/\D/g, ""))}
-                          className="h-7 w-full text-right font-mono text-xs"
+                          inputMode={produto?.vendeFracionado ? "decimal" : "numeric"}
+                          // Fracionado aceita vírgula (1,5 / 0,375); os demais, só dígitos.
+                          onChange={(e) =>
+                            atualizar(
+                              i,
+                              "quantidadeTexto",
+                              produto?.vendeFracionado
+                                ? e.target.value.replace(/[^\d,.]/g, "")
+                                : e.target.value.replace(/\D/g, "")
+                            )
+                          }
+                          title={
+                            linha.produtoId && linha.quantidade > 0 &&
+                            !quantidadeAceita(linha.quantidade, produto?.vendeFracionado)
+                              ? avisoDeQuantidade(produto?.vendeFracionado)
+                              : undefined
+                          }
+                          className={cn(
+                            "h-7 w-full text-right font-mono text-xs",
+                            linha.produtoId && linha.quantidade > 0 &&
+                              !quantidadeAceita(linha.quantidade, produto?.vendeFracionado)
+                              ? "border-destructive/50"
+                              : ""
+                          )}
                         />
                       </td>
                       <td className="px-2 py-1.5">
@@ -930,7 +960,7 @@ export default function NovaAf({ loaderData }: Route.ComponentProps) {
               onClick={lancar}
               title={
                 faltaAlgo
-                  ? "Faltam fornecedor, número, data, loja ou um item com quantidade e custo"
+                  ? "Faltam fornecedor, número, data, loja ou um item com quantidade válida e custo"
                   : undefined
               }
             >

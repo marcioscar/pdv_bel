@@ -33,7 +33,7 @@ export function quantidade(valor: number) {
  *
  * A exceção são os produtos marcados `vendeFracionado` no cadastro, que saem
  * com até três casas (3,5 / 1,375) na venda, na devolução, na transferência e
- * no inventário. Compra continua inteira para todos.
+ * no inventário — e na AF, que dá entrada do que chega sem nota.
  *
  * Uma regra só, usada pela tela para avisar e pelo servidor para recusar.
  */

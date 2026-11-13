@@ -4,7 +4,7 @@ import { AFS_POR_PAGINA, type FiltroAfs } from "~/lib/afs"
 import { db } from "~/lib/db.server"
 import { PRIMEIRO_DIA, ULTIMO_DIA, depoisDoDia, inicioDoDia, meioDiaDe } from "~/lib/dia"
 import { ratearPorValor } from "~/lib/custo-nfe"
-import { arredondar, QUANTIDADE_INTEIRA } from "~/lib/moeda"
+import { arredondar, avisoDeQuantidade, quantidadeAceita } from "~/lib/moeda"
 import { pedidoFechaCom } from "~/lib/pedidos-compra.server"
 
 /**
@@ -184,9 +184,6 @@ export async function lancarAf(
 
   const itens = entrada.itens.filter((item) => item.quantidade > 0)
   if (itens.length === 0) return { ok: false, erro: "Nenhum item com quantidade para lançar" }
-  if (itens.some((item) => !Number.isInteger(item.quantidade))) {
-    return { ok: false, erro: QUANTIDADE_INTEIRA }
-  }
   if (itens.some((item) => !(item.custoUnitario > 0))) {
     return { ok: false, erro: "Todo item precisa do custo unitário que a AF cobrou" }
   }
@@ -197,11 +194,21 @@ export async function lancarAf(
 
   const produtos = await db.produto.findMany({
     where: { id: { in: itens.map((i) => i.produtoId) } },
-    select: { id: true, codigo: true, descricao: true, unidade: true },
+    select: { id: true, codigo: true, descricao: true, unidade: true, vendeFracionado: true },
   })
   const porId = new Map(produtos.map((p) => [p.id, p]))
   if (itens.some((item) => !porId.has(item.produtoId))) {
     return { ok: false, erro: "Produto não encontrado no catálogo" }
+  }
+  // Peça inteira, ou até três casas no produto marcado fracionado.
+  for (const item of itens) {
+    const produto = porId.get(item.produtoId)!
+    if (!quantidadeAceita(item.quantidade, produto.vendeFracionado)) {
+      return {
+        ok: false,
+        erro: `${produto.descricao}: ${avisoDeQuantidade(produto.vendeFracionado).toLowerCase()}`,
+      }
+    }
   }
 
   const pedido = entrada.pedidoDeCompraId
