@@ -212,6 +212,7 @@ export async function aguardarEmissao(
 import QRCode from "qrcode"
 
 import { db } from "~/lib/db.server"
+import { arredondar } from "~/lib/moeda"
 import { ErroInter } from "~/lib/inter.server"
 import { contaDaLoja } from "~/lib/lojas.server"
 import { condicaoPorId, FORMA_PIX_ENTREGA, parcelasDaCondicao, type Parcela } from "~/lib/pdv"
@@ -300,6 +301,8 @@ type VendaParaCobrar = {
   numero: number
   loja: string
   total: number
+  /** O que a devolução (ou o crédito do cliente) já abateu: não se cobra de novo. */
+  creditoUsado: number
   criadaEm: Date
   vencimento: Date | null
   condicao: string | null
@@ -313,12 +316,21 @@ type VendaParaCobrar = {
  * seguinte não pode empurrar o vencimento que o cliente combinou.
  */
 function planoDaVenda(venda: VendaParaCobrar): Parcela[] {
+  /*
+   * O boleto cobra o que ficou a pagar, não o total: na troca, a devolução
+   * abatida já pagou parte da venda (`creditoUsado`). Cobrar o total fazia o
+   * cliente pagar duas vezes o que devolveu — foi o que aconteceu na venda #507
+   * da SDS. Mesma conta do cupom e do Pix na entrega.
+   */
+  const aPagar = arredondar(venda.total - (venda.creditoUsado ?? 0))
+  // Tudo abatido: não há o que cobrar, e boleto de R$ 0 o Inter recusa.
+  if (!(aPagar > 0)) return []
   const condicao = condicaoPorId(venda.condicao ?? "")
-  if (condicao) return parcelasDaCondicao(condicao, venda.total, venda.criadaEm)
+  if (condicao) return parcelasDaCondicao(condicao, aPagar, venda.criadaEm)
 
   // Vendas gravadas antes das condições fixas só têm o vencimento avulso.
   if (!venda.vencimento) throw new Error("Venda sem condição nem vencimento")
-  return [{ parcela: 1, valor: venda.total, vencimento: venda.vencimento }]
+  return [{ parcela: 1, valor: aPagar, vencimento: venda.vencimento }]
 }
 
 /**
