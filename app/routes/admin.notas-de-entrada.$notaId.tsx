@@ -88,7 +88,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
           orderBy: { descricao: "asc" },
           // O preço vem junto para a sugestão poder mostrar, ao lado dela, o
           // que o produto custa hoje — sugestão sozinha não diz o que fazer.
-          select: { id: true, codigo: true, descricao: true, unidade: true, preco: true },
+          select: { id: true, codigo: true, descricao: true, unidade: true, preco: true, vendeFracionado: true },
         }),
         pedidoEscolhido ? recebidoPorProduto(pedidoEscolhido.id) : new Map<string, number>(),
       ])

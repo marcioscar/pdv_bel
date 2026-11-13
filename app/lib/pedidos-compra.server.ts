@@ -1,7 +1,7 @@
 import type { Prisma } from "@prisma/client"
 
 import { db } from "~/lib/db.server"
-import { arredondar, QUANTIDADE_INTEIRA, quantidadeInteira } from "~/lib/moeda"
+import { arredondar, avisoDeQuantidade, quantidadeAceita } from "~/lib/moeda"
 import { saldosPorProdutoELoja } from "~/lib/estoque.server"
 import { saldosEmTransito } from "~/lib/transferencias.server"
 import { diasDeCobertura, quantoComprar, urgencia, type Urgencia } from "~/lib/compras"
@@ -79,10 +79,10 @@ export async function criarPedido(entrada: {
   for (const pedido of entrada.itens) {
     const produto = porId.get(pedido.produtoId)
     if (!produto) return { ok: false, erro: "Produto não encontrado no catálogo" }
-    if (!quantidadeInteira(pedido.quantidade)) {
+    if (!quantidadeAceita(pedido.quantidade, produto.vendeFracionado)) {
       return {
         ok: false,
-        erro: `${produto.descricao}: ${QUANTIDADE_INTEIRA.toLowerCase()}`,
+        erro: `${produto.descricao}: ${avisoDeQuantidade(produto.vendeFracionado).toLowerCase()}`,
       }
     }
 
@@ -157,6 +157,8 @@ export type ItemDoFornecedor = {
   codigo: string
   descricao: string
   unidade: string
+  /** Aceita pedir 1,5 — o produto é vendido fracionado. */
+  vendeFracionado: boolean
   custoUnitario: number
   ultimaCompra: Date
   /** O que já foi comprado deste fornecedor — mede relevância, não urgência. */
@@ -275,6 +277,7 @@ export async function catalogoDoFornecedor(fornecedorId: string): Promise<ItemDo
       codigo: produto.codigo,
       descricao: produto.descricao,
       unidade: produto.unidade,
+      vendeFracionado: produto.vendeFracionado,
       custoUnitario: f.ultimoCusto,
       ultimaCompra: f.ultimaCompra,
       quantidadeTotal: f.quantidadeTotal,

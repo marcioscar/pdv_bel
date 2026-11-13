@@ -12,7 +12,14 @@ import {
   type ProdutoDoHistorico,
 } from "~/components/pdv/compras-do-produto"
 import { db } from "~/lib/db.server"
-import { interpretarValor, moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
+import {
+  arredondarQuantidade,
+  interpretarQuantidade,
+  interpretarValor,
+  moeda,
+  quantidadeAceita,
+  quantidade as formatarQuantidade,
+} from "~/lib/moeda"
 import { criarIndice } from "~/lib/pdv"
 import { EscolhaDeProduto, type ProdutoDoCatalogo } from "~/components/pdv/escolha-de-produto"
 import { cn } from "~/lib/utils"
@@ -77,7 +84,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     db.produto.findMany({
       where: SOMENTE_ATIVOS,
       orderBy: { descricao: "asc" },
-      select: { id: true, codigo: true, descricao: true, unidade: true },
+      select: { id: true, codigo: true, descricao: true, unidade: true, vendeFracionado: true },
     }),
   ])
   // O último custo de qualquer fornecedor: a referência para o produto novo
@@ -130,6 +137,13 @@ export async function action({ request }: Route.ActionArgs) {
   }
 
   return { ok: true as const, numero: resultado.numero, id: resultado.id }
+}
+
+/** Inteiro, ou até três casas no produto fracionado. */
+function lerQuantidade(texto: string, fracionado: boolean) {
+  const valor = Number(texto)
+  if (!Number.isFinite(valor) || valor < 0) return 0
+  return fracionado ? arredondarQuantidade(valor) : Math.trunc(valor)
 }
 
 const CORES: Record<Urgencia, string> = {
@@ -313,9 +327,10 @@ function MontarPedido({
   }
 
   const selecionadosLista = itens.filter((i) => selecionados[i.produtoId])
+  const fracionadoDoCatalogo = new Map(catalogo.map((p) => [p.id, Boolean(p.vendeFracionado)]))
   const outrosValidos = outros.map((o) => ({
     produtoId: o.produtoId,
-    quantidade: Math.trunc(Number(o.quantidadeTexto)) || 0,
+    quantidade: interpretarQuantidade(o.quantidadeTexto) ?? 0,
     custoUnitario: interpretarValor(o.custoTexto) ?? 0,
   }))
   const totalItens = selecionadosLista.length + outrosValidos.length
@@ -324,7 +339,9 @@ function MontarPedido({
     outrosValidos.reduce((soma, o) => soma + o.quantidade * o.custoUnitario, 0)
   const comQuantidadeInvalida =
     selecionadosLista.some((i) => !(quantidadeDe(i) > 0)) ||
-    outrosValidos.some((o) => !(o.quantidade > 0) || !(o.custoUnitario > 0))
+    outrosValidos.some(
+      (o) => !quantidadeAceita(o.quantidade, fracionadoDoCatalogo.get(o.produtoId)) || !(o.custoUnitario > 0)
+    )
 
   function alternar(produtoId: string) {
     setSelecionados((s) => ({ ...s, [produtoId]: !s[produtoId] }))
@@ -614,9 +631,13 @@ function Tabela({
                     <input
                       type="number"
                       min={0}
-                      step={1}
+                      step={item.vendeFracionado ? "any" : 1}
                       value={qtd}
-                      onChange={(e) => onQuantidade(item.produtoId, Math.trunc(Number(e.target.value)) || 0)}
+                      onChange={(e) => {
+                        // "1," no meio da digitação: o navegador ainda não tem número.
+                        if (e.target.validity.badInput) return
+                        onQuantidade(item.produtoId, lerQuantidade(e.target.value, item.vendeFracionado))
+                      }}
                       className="h-7 w-20 rounded border border-border bg-background px-1.5 text-right text-sm tabular-nums"
                     />
                   </td>
@@ -707,9 +728,12 @@ function ItemCartao({
             <input
               type="number"
               min={0}
-              step={1}
+              step={item.vendeFracionado ? "any" : 1}
               value={quantidade}
-              onChange={(e) => onQuantidade(Math.trunc(Number(e.target.value)) || 0)}
+              onChange={(e) => {
+                if (e.target.validity.badInput) return
+                onQuantidade(lerQuantidade(e.target.value, item.vendeFracionado))
+              }}
               className="h-9 w-20 rounded border border-border bg-background px-2 text-sm tabular-nums"
             />
             <span className="text-xs text-muted-foreground">{item.unidade}</span>
@@ -1000,7 +1024,8 @@ function OutrosProdutos({
           <tbody className="divide-y divide-border">
             {outros.map((o, i) => {
               const produto = porId.get(o.produtoId)
-              const quantidade = Math.trunc(Number(o.quantidadeTexto)) || 0
+              const quantidade = interpretarQuantidade(o.quantidadeTexto) ?? 0
+              const quantidadeOk = quantidadeAceita(quantidade, produto?.vendeFracionado)
               const custo = interpretarValor(o.custoTexto) ?? 0
               return (
                 <tr key={o.produtoId}>
@@ -1013,12 +1038,12 @@ function OutrosProdutos({
                     <input
                       type="number"
                       min={0}
-                      step={1}
+                      step={produto?.vendeFracionado ? "any" : 1}
                       value={o.quantidadeTexto}
                       onChange={(e) => mudar(i, "quantidadeTexto", e.target.value)}
                       className={cn(
                         "h-7 w-20 rounded border border-border bg-background px-1.5 text-right text-sm tabular-nums",
-                        !(quantidade > 0) && "border-destructive/50"
+                        !quantidadeOk && "border-destructive/50"
                       )}
                     />
                   </td>
@@ -1034,7 +1059,7 @@ function OutrosProdutos({
                     />
                   </td>
                   <td className="py-2 pr-3 text-right text-muted-foreground">
-                    {quantidade > 0 && custo > 0 ? moeda(quantidade * custo) : "—"}
+                    {quantidadeOk && custo > 0 ? moeda(quantidade * custo) : "—"}
                   </td>
                   <td>
                     <Button

@@ -11,7 +11,12 @@ import {
   type ProdutoDoCatalogo,
 } from "~/components/pdv/escolha-de-produto"
 import type { ItemDaNotaParaConciliar, ItemReconciliado } from "~/lib/conciliacao.server"
-import { interpretarValor, moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
+import {
+  interpretarQuantidade,
+  interpretarValor,
+  moeda,
+  quantidade as formatarQuantidade,
+} from "~/lib/moeda"
 import { conferirPrecoVenda } from "~/lib/precificacao"
 import {
   centavos,
@@ -187,7 +192,7 @@ export function EntradaDeNota({
   const linhasEfetivas = useMemo(
     () =>
       itensDaNota.map((item, i) => {
-        const valor = interpretarValor(quantidades[i] ?? "")
+        const valor = interpretarQuantidade(quantidades[i] ?? "")
         const quantidade = valor != null && valor > 0 ? valor : item.quantidade
         const produtoId = produtoDaLinhaLancada.get(i) ?? pareamento[i] ?? ""
         return {
@@ -245,7 +250,7 @@ export function EntradaDeNota({
 
   function quantidadeAReceber(produtoId: string) {
     const texto = quantidadeRecebida[produtoId]
-    if (texto !== undefined && texto !== "") return interpretarValor(texto) ?? 0
+    if (texto !== undefined && texto !== "") return interpretarQuantidade(texto) ?? 0
     return pendentesPorProduto.get(produtoId)?.quantidade ?? 0
   }
 
@@ -530,7 +535,13 @@ export function EntradaDeNota({
                     setPareamento((atual) => ({ ...atual, [i]: produtoId }))
                   }
                   onMudarQuantidade={(texto) =>
-                    setQuantidades((atual) => ({ ...atual, [i]: texto.replace(/\D/g, "") }))
+                    setQuantidades((atual) => ({
+                      ...atual,
+                      // Produto fracionado aceita vírgula (1,5); os demais, só dígitos.
+                      [i]: catalogoPorId.get(linhasEfetivas[i].produtoId)?.vendeFracionado
+                        ? texto.replace(/[^\d,.]/g, "")
+                        : texto.replace(/\D/g, ""),
+                    }))
                   }
                   onAbrirCadastro={() => setCadastrando(cadastrando === i ? null : i)}
                   onCadastrar={(dados) =>
@@ -888,7 +899,7 @@ function LinhaItemDaNota({
           value={quantidadeTexto}
           onChange={(e) => onMudarQuantidade(e.target.value)}
           disabled={Boolean(jaLancado)}
-          inputMode="numeric"
+          inputMode={catalogoPorId.get(produtoIdEscolhido)?.vendeFracionado ? "decimal" : "numeric"}
           className="ml-auto h-9 w-24 text-right font-mono text-sm"
         />
       </td>

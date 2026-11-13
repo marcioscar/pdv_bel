@@ -7,7 +7,14 @@ import { ESTILO_CAMPO } from "~/components/pdv/filtros"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { ratearPorValor } from "~/lib/custo-nfe"
-import { arredondar, interpretarValor, moeda } from "~/lib/moeda"
+import {
+  arredondar,
+  avisoDeQuantidade,
+  interpretarQuantidade,
+  interpretarValor,
+  moeda,
+  quantidadeAceita,
+} from "~/lib/moeda"
 import { criarIndice } from "~/lib/pdv"
 import { cn } from "~/lib/utils"
 
@@ -95,12 +102,12 @@ export function LancamentoManualDaNota({
 
   const lidas = linhas.map((linha) => {
     const produto = linha.produtoId ? (porId.get(linha.produtoId) ?? null) : null
-    const quantidade = Number(linha.quantidade)
+    const quantidade = interpretarQuantidade(linha.quantidade) ?? 0
     const custo = interpretarValor(linha.custo)
     const erro = !produto
       ? null
-      : !Number.isInteger(quantidade) || quantidade <= 0
-        ? "quantidade inteira"
+      : !quantidadeAceita(quantidade, produto.vendeFracionado)
+        ? avisoDeQuantidade(produto.vendeFracionado).toLowerCase()
         : custo === null || custo < 0
           ? "informe o custo"
           : null
@@ -234,8 +241,15 @@ export function LancamentoManualDaNota({
                 <td className="px-3 py-2 text-right">
                   <Input
                     value={linha.quantidade}
-                    onChange={(e) => alterar(linha.chave, { quantidade: e.target.value.replace(/\D/g, "") })}
-                    inputMode="numeric"
+                    onChange={(e) =>
+                      alterar(linha.chave, {
+                        // Produto fracionado aceita vírgula (1,5); os demais, só dígitos.
+                        quantidade: produto?.vendeFracionado
+                          ? e.target.value.replace(/[^\d,.]/g, "")
+                          : e.target.value.replace(/\D/g, ""),
+                      })
+                    }
+                    inputMode={produto?.vendeFracionado ? "decimal" : "numeric"}
                     autoComplete="off"
                     aria-label="Quantidade"
                     className="ml-auto h-8 w-20 rounded-lg text-right font-mono tabular-nums"

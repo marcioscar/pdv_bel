@@ -1,5 +1,5 @@
 import { db } from "~/lib/db.server"
-import { QUANTIDADE_INTEIRA } from "~/lib/moeda"
+import { avisoDeQuantidade, quantidadeAceita } from "~/lib/moeda"
 import { calcularCustoReal, type ItemComCustoReal } from "~/lib/custo-nfe"
 import { pedidoFechaCom } from "~/lib/pedidos-compra.server"
 import { resumoDoProcNFe } from "~/lib/sefaz.server"
@@ -206,15 +206,22 @@ export async function receberComNota(
   // fechar o pedido (isso é `completo`, mais abaixo, que só olha o pedido).
   const produtosValidos = await db.produto.findMany({
     where: { id: { in: itens.map((i) => i.produtoId) } },
-    select: { id: true },
+    select: { id: true, descricao: true, vendeFracionado: true },
   })
-  const idsValidos = new Set(produtosValidos.map((p) => p.id))
-  const invalido = itens.find((i) => i.quantidade > 0 && !idsValidos.has(i.produtoId))
+  const validosPorId = new Map(produtosValidos.map((p) => [p.id, p]))
+  const invalido = itens.find((i) => i.quantidade > 0 && !validosPorId.has(i.produtoId))
   if (invalido) return { ok: false, erro: "Produto não encontrado no catálogo" }
   // A nota pode vir em fração (a unidade do fornecedor não é a nossa); o que
-  // entra no estoque é peça contada, e quem converte decide o inteiro.
-  if (itens.some((i) => i.quantidade > 0 && !Number.isInteger(i.quantidade))) {
-    return { ok: false, erro: `${QUANTIDADE_INTEIRA} — confira a conversão da unidade da nota` }
+  // entra no estoque é peça contada, e quem converte decide o inteiro. A
+  // exceção é o produto marcado fracionado, que entra com até três casas.
+  for (const i of itens) {
+    const produto = validosPorId.get(i.produtoId)
+    if (i.quantidade > 0 && produto && !quantidadeAceita(i.quantidade, produto.vendeFracionado)) {
+      return {
+        ok: false,
+        erro: `${produto.descricao}: ${avisoDeQuantidade(produto.vendeFracionado).toLowerCase()} — confira a conversão da unidade da nota`,
+      }
+    }
   }
   // Do XML o custo vem sempre; digitado à mão (nota de resumo), pode faltar —
   // e entrada sem custo é o que faz o custo médio parar de fechar.
