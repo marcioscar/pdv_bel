@@ -594,7 +594,10 @@ export const CONDICOES_PAGAMENTO = [
   { id: "3x", rotulo: "3× — 21, 28 e 35 dias", dias: [21, 28, 35], acrescimo: 4, ativa: true },
   { id: "3x28", rotulo: "3× — 28, 35 e 42 dias", dias: [28, 35, 42], acrescimo: 4, ativa: true },
   { id: "2x30", rotulo: "2× — 30 e 60 dias", dias: [30, 60], acrescimo: 4, ativa: true },
-  { id: "5x", rotulo: "5× — 21, 28, 35, 42 e 49 dias", dias: [21, 28, 35, 42, 49], acrescimo: 4, ativa: true },
+  { id: "4x28", rotulo: "4× — 28, 35, 42 e 49 dias", dias: [28, 35, 42, 49], acrescimo: 4, ativa: true },
+  // Publicada por engano com o 21; fica inativa, e não apagada, para alguma
+  // venda que já a tenha usado continuar achando as parcelas.
+  { id: "5x", rotulo: "5× — 21, 28, 35, 42 e 49 dias", dias: [21, 28, 35, 42, 49], acrescimo: 4, ativa: false },
   { id: "7", rotulo: "7 dias", dias: [7], acrescimo: 0, ativa: false },
 ] as const
 
