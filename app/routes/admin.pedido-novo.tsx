@@ -20,7 +20,7 @@ import {
   quantidadeAceita,
   quantidade as formatarQuantidade,
 } from "~/lib/moeda"
-import { criarIndice } from "~/lib/pdv"
+import { buscarProdutos, criarIndice } from "~/lib/pdv"
 import { EscolhaDeProduto, type ProdutoDoCatalogo } from "~/components/pdv/escolha-de-produto"
 import { cn } from "~/lib/utils"
 import { exigirGerente } from "~/lib/sessao.server"
@@ -314,13 +314,13 @@ function MontarPedido({
   const fetcher = useFetcher<typeof action>()
   const gerando = fetcher.state !== "idle"
 
+  // A mesma busca do caixa, mas na ordem da tela: quem precisa comprar primeiro.
+  const indice = useMemo(() => criarIndice(itens), [itens])
   const encontrados = useMemo(() => {
-    const termo = normalizar(busca)
-    if (!termo) return itens
-    return itens.filter(
-      (i) => normalizar(i.descricao).includes(termo) || i.codigo.includes(termo)
-    )
-  }, [busca, itens])
+    if (!busca.trim()) return itens
+    const achados = new Set(buscarProdutos(indice, busca, itens.length))
+    return itens.filter((i) => achados.has(i))
+  }, [busca, indice, itens])
 
   function quantidadeDe(item: ItemDoFornecedor) {
     return quantidades[item.produtoId] ?? item.sugestao
