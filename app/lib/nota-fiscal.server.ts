@@ -447,6 +447,13 @@ export async function emitirDaVenda(
     void enviarNfeAoAutorizar(nota.id)
     return { ok: true, notaId: nota.id, modelo, status: dados.status }
   } catch (erro) {
+    const desfecho = await desfechoDepoisDaFalha(loja.codigo, modelo, ref, erro)
+    if (desfecho) {
+      await db.notaFiscalEmitida.update({ where: { id: nota.id }, data: desfecho })
+      void enviarNfeAoAutorizar(nota.id)
+      return { ok: true, notaId: nota.id, modelo, status: desfecho.status }
+    }
+
     const mensagem =
       erro instanceof ErroFocus ? erro.message : "Falha ao falar com a Focus NFe"
 
@@ -456,6 +463,39 @@ export async function emitirDaVenda(
     })
 
     return { ok: false, erro: mensagem }
+  }
+}
+
+/**
+ * O envio falhou — mas a nota pode ter saído mesmo assim.
+ *
+ * Acontece quando a resposta da Focus demora mais que o nosso limite: a SEFAZ
+ * autoriza, nós gravamos "falha", e todo reenvio volta com "A nota fiscal já foi
+ * autorizada". A NFC-e ficava valendo na SEFAZ e recusada aqui. Por isso, na
+ * queda de conexão, no 5xx e no "já foi/já está", quem responde é a consulta.
+ *
+ * Devolve null quando a nota não existe lá, foi mesmo recusada, ou a consulta
+ * também falhou: aí vale o erro original.
+ */
+async function desfechoDepoisDaFalha(
+  loja: string,
+  modelo: ModeloNota,
+  ref: string,
+  erro: unknown
+) {
+  const duvidosa =
+    !(erro instanceof ErroFocus) ||
+    erro.status >= 500 ||
+    /já (foi|está|existe)|processa/i.test(erro.message)
+  if (!duvidosa) return null
+
+  try {
+    const dados = daResposta(await consultarNota(loja, modelo, ref))
+    return dados.status === "autorizado" || dados.status === "processando_autorizacao"
+      ? dados
+      : null
+  } catch {
+    return null
   }
 }
 
@@ -538,6 +578,14 @@ export async function desfazerNotaDaVenda(
   vendaId: string,
   justificativa: string
 ): Promise<{ ok: true; cancelada: boolean } | { ok: false; erro: string; podeManterNota: boolean }> {
+  // Nota que aqui consta como recusada pode ter sido autorizada depois de uma
+  // queda de conexão; sem perguntar, a venda seria desfeita com a nota valendo.
+  const recusadas = await db.notaFiscalEmitida.findMany({
+    where: { vendaId, status: "erro_autorizacao" },
+    select: { id: true },
+  })
+  await Promise.all(recusadas.map((n) => atualizarStatusDaNota(n.id)))
+
   const nota = await db.notaFiscalEmitida.findFirst({
     where: { vendaId, status: { in: ["autorizado", "processando_autorizacao"] } },
     orderBy: { criadaEm: "desc" },
@@ -891,6 +939,12 @@ export async function emitirDaDevolucao(
     await db.notaFiscalEmitida.update({ where: { id: nota.id }, data: dados })
     return { ok: true, notaId: nota.id, status: dados.status }
   } catch (erro) {
+    const desfecho = await desfechoDepoisDaFalha(loja.codigo, "nfe", ref, erro)
+    if (desfecho) {
+      await db.notaFiscalEmitida.update({ where: { id: nota.id }, data: desfecho })
+      return { ok: true, notaId: nota.id, status: desfecho.status }
+    }
+
     const mensagem = erro instanceof ErroFocus ? erro.message : "Falha ao falar com a Focus NFe"
     await db.notaFiscalEmitida.update({
       where: { id: nota.id },
