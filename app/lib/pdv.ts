@@ -251,8 +251,13 @@ export type Comando =
   | { tipo: "codigo"; codigo: string; quantidade: number }
   | { tipo: "texto"; termo: string; quantidade: number }
 
-/** "3*141", "3x141", "2 X papel" — quantidade, separador, alvo. */
-const MULTIPLICADOR = /^(\d+(?:[.,]\d+)?)\s*[*xX]\s*(.+)$/
+/**
+ * "3*141", "2 * papel" — quantidade, separador, alvo.
+ *
+ * Só o asterisco multiplica. O "x" é medida: "25x32" procura o saco 25x32, e
+ * quando valia como vezes lançava 25 unidades do produto de código 32.
+ */
+const MULTIPLICADOR = /^(\d+(?:[.,]\d+)?)\s*\*\s*(.+)$/
 const SOMENTE_DIGITOS = /^\d+$/
 
 export function interpretarComando(entrada: string): Comando {
@@ -288,7 +293,7 @@ export function interpretarComando(entrada: string): Comando {
  * outras colunas e sem as de preço — obrigá-las a trazer o catálogo inteiro só
  * para caber num tipo seria carregar dado que aquelas telas não usam.
  */
-export type EntradaIndice<T = ProdutoCatalogo> = { produto: T; chave: string }
+export type EntradaIndice<T = ProdutoCatalogo> = { produto: T; chave: string; colada: string }
 
 type Buscavel = { codigo: string; descricao: string; unidade: string }
 
@@ -300,14 +305,37 @@ function normalizar(texto: string) {
 }
 
 /**
+ * O mesmo produto se escreve de muitos jeitos — "25x32x0 006" no cadastro,
+ * "25 X 32 x 0,006" no teclado. Os dois lados viram a mesma coisa: "×" é "x",
+ * a medida não tem espaço em volta do "x", e a vírgula ou o ponto do decimal
+ * viram espaço, como está na maior parte do catálogo.
+ */
+function paraBusca(texto: string) {
+  return normalizar(texto)
+    .replace(/×/g, "x")
+    .replace(/(\d)\s*[.,]\s*(?=\d)/g, "$1 ")
+    .replace(/(\d)\s*x\s*(?=\d)/g, "$1x")
+    .trim()
+}
+
+/** Sem nada entre letras e números: "n10" acha "N 10", "sbn25x32" acha "Sbn 25x32". */
+function colado(texto: string) {
+  return texto.replace(/[^a-z0-9]/g, "")
+}
+
+/** Só termo que mistura letra e número: colar números soltos inventaria medidas. */
+const LETRA_E_NUMERO = /^(?=.*[a-z])(?=.*\d)/
+
+/**
  * O catálogo inteiro vem no loader, então a busca roda no cliente e responde
  * sem latência a cada tecla. Normalizar uma vez evita refazer isso por keystroke.
  */
 export function criarIndice<T extends Buscavel>(catalogo: T[]): EntradaIndice<T>[] {
-  return catalogo.map((produto) => ({
-    produto,
-    chave: normalizar(`${produto.codigo} ${produto.descricao} ${produto.unidade}`),
-  }))
+  return catalogo.map((produto) => {
+    const chave = paraBusca(`${produto.codigo} ${produto.descricao} ${produto.unidade}`)
+    // Só a descrição: colar o código nela juntaria números que não se tocam.
+    return { produto, chave, colada: colado(paraBusca(produto.descricao)) }
+  })
 }
 
 export function buscarProdutos<T extends Buscavel>(
@@ -315,13 +343,18 @@ export function buscarProdutos<T extends Buscavel>(
   termo: string,
   limite = 7
 ): T[] {
-  const termos = normalizar(termo).split(/\s+/).filter(Boolean)
+  const termos = paraBusca(termo).split(/\s+/).filter(Boolean)
   if (termos.length === 0) return []
 
   const encontrados: { produto: T; peso: number }[] = []
 
   for (const entrada of indice) {
-    if (!termos.every((t) => entrada.chave.includes(t))) continue
+    const casa = termos.every(
+      (t) =>
+        entrada.chave.includes(t) ||
+        (LETRA_E_NUMERO.test(t) && colado(t).length >= 3 && entrada.colada.includes(colado(t)))
+    )
+    if (!casa) continue
     // Quem começa com o termo digitado aparece primeiro.
     encontrados.push({
       produto: entrada.produto,
