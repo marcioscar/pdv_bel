@@ -44,7 +44,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       <td class="valor${opcoes?.negativo ? " menos" : ""}">${opcoes?.negativo ? "− " : ""}${moeda(Math.abs(valor))}</td>
     </tr>`
 
+  // Cancelado não entra na conta, e por isso também não entra na folha.
   const lancamentos = movimentos
+    .filter((m) => !m.canceladoEm)
     .map(
       (m) => `<tr>
         <td class="hora">${new Date(m.criadoEm).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}</td>
