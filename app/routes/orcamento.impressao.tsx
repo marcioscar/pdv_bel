@@ -2,9 +2,55 @@ import type { Route } from "./+types/orcamento.impressao"
 import { db } from "~/lib/db.server"
 import { escapar } from "~/lib/html"
 import { formatarCpfCnpj } from "~/lib/documento"
-import { moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
+import { ratearPorValor } from "~/lib/custo-nfe"
+import { arredondar, moeda, quantidade as formatarQuantidade } from "~/lib/moeda"
+import {
+  condicaoCabeNoTotal,
+  condicaoPorId,
+  parcelasDaCondicao,
+  totalDaCondicao,
+  type CondicaoPagamento,
+} from "~/lib/pdv"
 import { exigirUsuario } from "~/lib/sessao.server"
 import { precificar, type ItemRecebido } from "~/lib/vendas.server"
+
+/**
+ * Embute o acréscimo do prazo no preço dos produtos.
+ *
+ * O total é o `totalDaCondicao` — o mesmo que a venda vai cobrar. O acréscimo
+ * em reais é que se reparte entre as linhas, acumulando para a soma fechar no
+ * centavo; aplicar 4% e arredondar item a item daria outro total.
+ */
+function embutirPrazo<T extends { quantidade: number; preco: number; subtotal: number }>(
+  itens: T[],
+  acrescimo: number
+): T[] {
+  const rateios = ratearPorValor(itens.map((i) => i.subtotal), acrescimo)
+  let acumulado = 0
+  return itens.map((item, i) => {
+    const antes = arredondar(acumulado)
+    acumulado += rateios[i]
+    const subtotal = arredondar(item.subtotal + arredondar(acumulado) - antes)
+    return { ...item, subtotal, preco: subtotal / item.quantidade }
+  })
+}
+
+/**
+ * Centavo basta quase sempre. Em item barato e muita quantidade o unitário a
+ * prazo tem fração de centavo (0,05 → 0,052), e duas casas esconderiam o
+ * acréscimo e não bateriam com o total da linha.
+ */
+function unitario(item: { preco: number; quantidade: number; subtotal: number }) {
+  if (Math.abs(arredondar(item.preco) * item.quantidade - item.subtotal) < 0.021) {
+    return moeda(item.preco)
+  }
+  return item.preco.toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4,
+  })
+}
 
 /**
  * O papel que o cliente leva para decidir.
@@ -42,8 +88,27 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
 
   const desconto = Math.max(0, Number(url.searchParams.get("desconto")) || 0)
-  const preco = await precificar(itens, desconto)
-  if (!preco.ok) return new Response(preco.erro, { status: 400 })
+  const aVista = await precificar(itens, desconto)
+  if (!aVista.ok) return new Response(aVista.erro, { status: 400 })
+
+  // `condicao=<id>`: orçamento a prazo. Sem ela, à vista.
+  let condicao: CondicaoPagamento | null = null
+  const condicaoId = url.searchParams.get("condicao")
+  if (condicaoId) {
+    condicao = condicaoPorId(condicaoId)
+    if (!condicao?.ativa || !condicaoCabeNoTotal(condicao, aVista.total)) {
+      return new Response("Condição de pagamento inválida para este orçamento", { status: 400 })
+    }
+  }
+
+  const total = condicao ? totalDaCondicao(condicao, aVista.total) : aVista.total
+  const acrescimo = arredondar(total - aVista.total)
+  const preco = {
+    itens: acrescimo > 0 ? embutirPrazo(aVista.itens, acrescimo) : aVista.itens,
+    subtotal: arredondar(aVista.subtotal + acrescimo),
+    total,
+  }
+  const parcelas = condicao ? parcelasDaCondicao(condicao, total) : []
 
   const loja = await db.loja.findUnique({ where: { codigo: eu.loja } })
   // O e-mail da empresa é o mesmo de onde saem as notas (a caixa da Hostinger).
@@ -71,7 +136,7 @@ export async function loader({ request }: Route.LoaderArgs) {
         <td>${escapar(item.descricao)}</td>
         <td class="un">${escapar(item.unidade)}</td>
         <td class="qtd">${formatarQuantidade(item.quantidade)}</td>
-        <td class="valor">${moeda(item.preco)}</td>
+        <td class="valor">${acrescimo > 0 ? unitario(item) : moeda(item.preco)}</td>
         <td class="valor">${moeda(item.subtotal)}</td>
       </tr>`
     )
@@ -305,6 +370,17 @@ export async function loader({ request }: Route.LoaderArgs) {
         <span>Total</span>
         <span class="valor">${moeda(preco.total)}</span>
       </div>
+      ${
+        condicao
+          ? `<div class="linha"><span>Pagamento a prazo</span><span>${escapar(condicao.rotulo)}</span></div>
+      ${parcelas
+        .map(
+          (p) =>
+            `<div class="linha"><span>${parcelas.length > 1 ? `${p.parcela}ª parcela · ` : ""}${condicao.dias[p.parcela - 1]} dias após a compra</span><span class="valor">${moeda(p.valor)}</span></div>`
+        )
+        .join("")}`
+          : ""
+      }
     </div>
   </div>
 

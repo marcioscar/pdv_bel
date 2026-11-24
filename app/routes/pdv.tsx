@@ -1107,6 +1107,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
 
   const [condicao, setCondicao] = useState<CondicaoPagamento | null>(null)
   const [condicaoAberta, setCondicaoAberta] = useState(false)
+  const [orcamentoAberto, setOrcamentoAberto] = useState(false)
   const [pix, setPix] = useState<{
     cobranca: PixNoBalcao | null
     criando: boolean
@@ -1250,22 +1251,23 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       !comprovante &&
       !pix &&
       !condicaoAberta &&
+      !orcamentoAberto &&
       !finalizando
     ) {
       focar()
     }
-  }, [ajudaAberta, clienteAberto, comprovante, pix, condicaoAberta, finalizando, modo, focar])
+  }, [ajudaAberta, clienteAberto, comprovante, pix, condicaoAberta, orcamentoAberto, finalizando, modo, focar])
 
   // Clicar num botão de atalho tira o foco do campo; devolvemos no frame seguinte
   // para que a próxima tecla continue caindo na barra de comando.
   const devolverFoco = useCallback(() => {
-    if (ajudaAberta || clienteAberto || condicaoAberta || finalizando) return
+    if (ajudaAberta || clienteAberto || condicaoAberta || orcamentoAberto || finalizando) return
     // Menos quando o foco foi para um menu da barra de cima: puxado de volta,
     // o menu fechava no instante em que abria.
     requestAnimationFrame(() => {
       if (!focoEmMenu()) focar()
     })
-  }, [ajudaAberta, clienteAberto, condicaoAberta, finalizando, focar])
+  }, [ajudaAberta, clienteAberto, condicaoAberta, orcamentoAberto, finalizando, focar])
 
   const voltarParaBusca = useCallback(() => {
     setModo("busca")
@@ -2283,17 +2285,24 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     setClienteAberto(true)
   }, [])
 
-  const imprimirOrcamento = useCallback(() => {
+  /** F7: pergunta se o orçamento sai à vista ou a prazo, e só então imprime. */
+  const abrirOrcamento = useCallback(() => {
     if (venda.itens.length === 0) {
       avisar("Nenhum item para orçar", "erro")
       return
     }
+    setOrcamentoAberto(true)
+  }, [avisar, venda.itens.length])
+
+  const imprimirOrcamento = useCallback((prazo: CondicaoPagamento | null) => {
+    setOrcamentoAberto(false)
 
     const params = new URLSearchParams()
     for (const item of venda.itens) params.append("i", `${item.produtoId}:${item.quantidade}`)
     if (totais.desconto > 0) params.set("desconto", String(totais.desconto))
     // O cliente da venda sai impresso no orçamento, no lugar das linhas em branco.
     if (cliente) params.set("cliente", cliente.id)
+    if (prazo) params.set("condicao", prazo.id)
 
     imprimirDocumento(`/orcamento/impressao?${params}`).then((erro) => {
       avisar(erro ?? "Orçamento enviado para a impressora", erro ? "erro" : "sucesso")
@@ -2368,7 +2377,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
       }
 
       // Cliente, condição e finalização têm handler próprio em captura.
-      if (clienteAberto || condicaoAberta || finalizando) return
+      if (clienteAberto || condicaoAberta || orcamentoAberto || finalizando) return
 
       if (ajudaAberta) {
         if (key === "Escape" || key === "F1" || key === "?") {
@@ -2424,7 +2433,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
           return
         case "F7":
           evento.preventDefault()
-          imprimirOrcamento()
+          abrirOrcamento()
           return
         case "F9":
           evento.preventDefault()
@@ -2493,6 +2502,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     ajudaAberta,
     clienteAberto,
     condicaoAberta,
+    orcamentoAberto,
     comprovante,
     finalizando,
     pix,
@@ -2507,7 +2517,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     confirmar,
     desvincularCliente,
     entrada,
-    imprimirOrcamento,
+    abrirOrcamento,
     modo,
     pedirQuantidade,
     resultados.length,
@@ -2537,7 +2547,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     {
       tecla: "F7",
       rotulo: "Orçamento",
-      acao: imprimirOrcamento,
+      acao: abrirOrcamento,
       desabilitado: venda.itens.length === 0,
     },
     {
@@ -2765,6 +2775,16 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
             setCondicaoAberta(false)
             avisar("Venda a prazo cancelada — escolha a condição para fechar", "erro")
           }}
+        />
+      ) : null}
+
+      {orcamentoAberto ? (
+        <CondicaoDialogo
+          total={totais.total}
+          cliente={cliente}
+          onAVista={() => imprimirOrcamento(null)}
+          onEscolher={imprimirOrcamento}
+          onFechar={() => setOrcamentoAberto(false)}
         />
       ) : null}
 
