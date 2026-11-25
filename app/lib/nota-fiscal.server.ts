@@ -12,11 +12,13 @@ import {
   type RespostaFocus,
 } from "~/lib/focus.server"
 import {
+  condicaoPorExtenso,
   ehSimples,
   FRETE_SEM_TRANSPORTE,
   modalidadeFreteValida,
   modeloDaVenda,
   PIS_COFINS_SIMPLES,
+  formasDePagamentoDaNfe,
   formasDePagamentoDaNota,
   pendenciasDoEmitente,
   tributacaoDoItem,
@@ -241,7 +243,14 @@ export async function emitirDaVenda(
    * A frase do Simples é exigida por lei e não pode ser substituída pelo recado
    * do vendedor: as duas coisas convivem no mesmo campo, uma depois da outra.
    */
-  const informacoes = [ehSimples(loja.regimeTributario) ? AVISO_SIMPLES : "", observacao]
+  // O pagamento vem primeiro: é o que o cliente procura na NF-e. A NFC-e já
+  // imprime a forma de pagamento no próprio cupom.
+  const pagamento = modelo === "nfe" ? condicaoPorExtenso(venda) : ""
+  const informacoes = [
+    pagamento,
+    ehSimples(loja.regimeTributario) ? AVISO_SIMPLES : "",
+    observacao,
+  ]
     .filter(Boolean)
     .join(" ")
 
@@ -403,6 +412,7 @@ export async function emitirDaVenda(
             cliente!.ddd && cliente!.telefone ? `${cliente!.ddd}${cliente!.telefone}` : undefined,
           email_destinatario: ate60(cliente!.email || undefined),
           consumidor_final: consumidorFinal(cliente!.inscricaoEstadual),
+          formas_pagamento: formasDePagamentoDaNfe(venda, valorFrete),
         }
 
   const ambiente = ambienteFocus()

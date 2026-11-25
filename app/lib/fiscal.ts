@@ -1,5 +1,13 @@
 import { arredondar } from "~/lib/moeda"
-import { FORMA_MISTA, pagamentosDaVenda, type PagamentoDaVenda } from "~/lib/pdv"
+import {
+  condicaoPorId,
+  ehTransferenciaEntreLojas,
+  FORMA_MISTA,
+  pagamentosDaVenda,
+  parcelasDaCondicao,
+  rotuloDaForma,
+  type PagamentoDaVenda,
+} from "~/lib/pdv"
 
 /**
  * As regras fiscais que a nota exige, num lugar só.
@@ -305,6 +313,123 @@ export function formasDePagamentoDaNota(venda: {
     linhas.push({ forma_pagamento: CREDITO_LOJA, valor_pagamento: arredondar(venda.creditoUsado) })
   }
   return linhas
+}
+
+/** "Crédito em loja" na tabela atual da SEFAZ (o 05 virou cartão da loja). */
+const CREDITO_EM_LOJA = "21"
+
+/**
+ * As formas de pagamento da NF-e. Sem elas a Focus preenche sozinha "01 -
+ * Dinheiro" no total, e foi assim que saiu toda NF-e até 25/11/2026.
+ *
+ * Três diferenças para a NFC-e: o crédito abatido é sempre linha própria; o
+ * frete cobrado na nota entra no pagamento (a SEFAZ recusa pagamento menor que
+ * o total); e a transferência é 90, "sem pagamento", que só aceita valor zero.
+ */
+export function formasDePagamentoDaNfe(
+  venda: Parameters<typeof formasDePagamentoDaNota>[0],
+  valorFrete = 0
+) {
+  if (ehTransferenciaEntreLojas(venda.forma)) {
+    return [{ forma_pagamento: SEM_PAGAMENTO, valor_pagamento: 0 }]
+  }
+
+  const linhas = pagamentosDaVenda(venda)
+    .map((p, i) => linhaDaNfe(p.forma, arredondar(p.valor + (i === 0 ? valorFrete : 0))))
+    .filter((l) => l.valor_pagamento > 0)
+  const credito = arredondar(venda.creditoUsado ?? 0)
+  if (credito > 0) linhas.push({ forma_pagamento: CREDITO_EM_LOJA, valor_pagamento: credito })
+  return linhas
+}
+
+const SEM_PAGAMENTO = "90"
+
+function linhaDaNfe(forma: string, valor: number): {
+  forma_pagamento: string
+  valor_pagamento: number
+  indicador_pagamento?: number
+  descricao_pagamento?: string
+} {
+  const codigo = pagamentoNaNota(forma)
+  return {
+    forma_pagamento: codigo,
+    valor_pagamento: valor,
+    // 1 é a prazo: o boleto e o Pix que se paga na entrega.
+    indicador_pagamento: forma === "prazo" || forma === "entrega" ? 1 : 0,
+    // O 99 ("outros") exige dizer qual é.
+    ...(codigo === "99"
+      ? { descricao_pagamento: ROTULO_NA_NOTA[forma] ?? rotuloDaForma(forma) }
+      : {}),
+  }
+}
+
+function reais(valor: number) {
+  const [inteiro, centavos] = valor.toFixed(2).split(".")
+  return `R$ ${inteiro.replace(/\B(?=(\d{3})+$)/g, ".")},${centavos}`
+}
+
+function dataNaNota(data: Date) {
+  return data.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })
+}
+
+/**
+ * A condição de pagamento por extenso, para as informações complementares da
+ * NF-e: "PAGAMENTO: Boleto - 30/60 dias: 17/12/2026 R$ 100,00; ...".
+ *
+ * As parcelas são as do boleto (a mesma conta, com o crédito já abatido), para a
+ * nota não prometer valor ou data diferentes. Só caracteres que o schema da
+ * SEFAZ aceita: o travessão dos rótulos da tela derrubaria a nota inteira.
+ *
+ * Vazio na transferência entre lojas, em que ninguém paga nada.
+ */
+export function condicaoPorExtenso(venda: {
+  forma: string
+  total: number
+  creditoUsado: number
+  pagamentos: PagamentoDaVenda[]
+  condicao: string | null
+  vencimento: Date | null
+  criadaEm: Date
+}): string {
+  if (ehTransferenciaEntreLojas(venda.forma)) return ""
+
+  const credito = arredondar(venda.creditoUsado ?? 0)
+  const aPagar = arredondar(venda.total - credito)
+  const partes: string[] = []
+  if (credito > 0) partes.push(`Crédito/devolução abatido ${reais(credito)}`)
+
+  if (aPagar > 0) {
+    if (venda.forma === "prazo") {
+      const condicao = condicaoPorId(venda.condicao ?? "")
+      const parcelas = condicao
+        ? parcelasDaCondicao(condicao, aPagar, venda.criadaEm)
+        : venda.vencimento
+          ? [{ valor: aPagar, vencimento: venda.vencimento }]
+          : []
+      const titulo = condicao ? `Boleto - ${condicao.dias.join("/")} dias` : "Boleto"
+      const vencimentos = parcelas.map(
+        (p, i) =>
+          `${parcelas.length > 1 ? `${i + 1}a ` : ""}venc. ${dataNaNota(p.vencimento)} ${reais(p.valor)}`
+      )
+      partes.push(vencimentos.length ? `${titulo}: ${vencimentos.join("; ")}` : titulo)
+    } else if (venda.forma === "entrega" && venda.vencimento) {
+      partes.push(`Pix na entrega - venc. ${dataNaNota(venda.vencimento)} ${reais(aPagar)}`)
+    } else {
+      partes.push(
+        pagamentosDaVenda(venda)
+          .map((p) => `${ROTULO_NA_NOTA[p.forma] ?? rotuloDaForma(p.forma)} ${reais(p.valor)}`)
+          .join("; ")
+      )
+    }
+  }
+
+  return partes.length ? `PAGAMENTO: ${partes.join(" + ")}.` : ""
+}
+
+const ROTULO_NA_NOTA: Record<string, string> = {
+  credito: "Cartão de crédito",
+  debito: "Cartão de débito",
+  link: "Link de pagamento",
 }
 
 const SO_DIGITOS = /^\d+$/
