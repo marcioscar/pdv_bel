@@ -1,7 +1,7 @@
 import type { Prisma } from "@prisma/client"
 import { useEffect, useState } from "react"
 import { data, Link, useNavigation, useSearchParams } from "react-router"
-import { FileCode, FileText, Search } from "lucide-react"
+import { Barcode, FileCode, FileText, Search } from "lucide-react"
 
 import type { Route } from "./+types/admin.notas"
 import { EmailDaNota } from "~/components/pdv/email-da-nota"
@@ -151,6 +151,19 @@ export async function loader({ request }: Route.LoaderArgs) {
   const emailPorCliente = new Map(clientes.map((c) => [c.id, c.email?.trim() || null]))
   const vendaPorId = new Map(vendas.map((v) => [v.id, v]))
 
+  // Os boletos da venda, para reimprimir junto com a nota — é comum o cliente
+  // pedir os dois papéis de novo. Cancelado não volta: imprimir um boleto morto
+  // faria o cliente pagar algo que o banco recusa.
+  const cobrancas = await db.cobranca.findMany({
+    where: { vendaId: { in: vendaIds }, situacao: { not: "CANCELADO" } },
+    select: { vendaId: true, parcela: true, parcelas: true, vencimento: true, tipo: true },
+    orderBy: { parcela: "asc" },
+  })
+  const cobrancasPorVenda = new Map<string, typeof cobrancas>()
+  for (const c of cobrancas) {
+    cobrancasPorVenda.set(c.vendaId, [...(cobrancasPorVenda.get(c.vendaId) ?? []), c])
+  }
+
   const notas = emitidas.map((nota) => {
     const venda = nota.vendaId ? vendaPorId.get(nota.vendaId) : undefined
     return {
@@ -167,6 +180,13 @@ export async function loader({ request }: Route.LoaderArgs) {
       destinatarioNome: nota.destinatarioNome,
       destinatarioCpfCnpj: nota.destinatarioCpfCnpj,
       vendaNumero: venda?.numero ?? null,
+      vendaId: nota.vendaId,
+      boletos: (nota.vendaId ? (cobrancasPorVenda.get(nota.vendaId) ?? []) : []).map((c) => ({
+        parcela: c.parcela,
+        parcelas: c.parcelas,
+        vencimento: c.vencimento.toISOString(),
+        pix: c.tipo === "pix",
+      })),
       temDanfe: Boolean(nota.caminhoDanfe),
       xml: urlDoArquivo(nota.caminhoXml),
       emailDoCliente: venda?.clienteId ? (emailPorCliente.get(venda.clienteId) ?? null) : null,
@@ -477,6 +497,29 @@ export default function NotasEmitidas({ loaderData }: Route.ComponentProps) {
                             <FileCode className="size-4" aria-hidden /> XML
                           </Button>
                         ) : null}
+                        {nota.vendaId
+                          ? nota.boletos.map((boleto) => (
+                              <Button
+                                key={boleto.parcela}
+                                size="sm"
+                                variant="outline"
+                                className="rounded-lg"
+                                nativeButton={false}
+                                title={`Vencimento ${new Date(boleto.vencimento).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}`}
+                                render={
+                                  <a
+                                    href={`/vendas/${nota.vendaId}/boleto.pdf?parcela=${boleto.parcela}`}
+                                    target="_blank"
+                                    rel="noopener"
+                                  />
+                                }
+                              >
+                                <Barcode className="size-4" aria-hidden />{" "}
+                                {boleto.pix ? "Pix" : "Boleto"}
+                                {boleto.parcelas > 1 ? ` ${boleto.parcela}/${boleto.parcelas}` : ""}
+                              </Button>
+                            ))
+                          : null}
                         <EmailDaNota key={nota.id} nota={nota} alinhar="direita" />
                       </div>
                     ) : null}
