@@ -2294,12 +2294,13 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     setOrcamentoAberto(true)
   }, [avisar, venda.itens.length])
 
-  const imprimirOrcamento = useCallback((prazo: CondicaoPagamento | null) => {
+  const imprimirOrcamento = useCallback((prazo: CondicaoPagamento | null, desconto: number) => {
     setOrcamentoAberto(false)
 
     const params = new URLSearchParams()
     for (const item of venda.itens) params.append("i", `${item.produtoId}:${item.quantidade}`)
-    if (totais.desconto > 0) params.set("desconto", String(totais.desconto))
+    // O desconto é o dado na janela do F7, sobre o subtotal do carrinho.
+    if (desconto > 0) params.set("desconto", String(desconto))
     // O cliente da venda sai impresso no orçamento, no lugar das linhas em branco.
     if (cliente) params.set("cliente", cliente.id)
     if (prazo) params.set("condicao", prazo.id)
@@ -2307,7 +2308,7 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
     imprimirDocumento(`/orcamento/impressao?${params}`).then((erro) => {
       avisar(erro ?? "Orçamento enviado para a impressora", erro ? "erro" : "sucesso")
     })
-  }, [avisar, cliente, totais.desconto, venda.itens])
+  }, [avisar, cliente, venda.itens])
 
   /**
    * Volta a venda para Consumidor Final. O crédito abatido e a forma de
@@ -2780,9 +2781,9 @@ export default function Pdv({ loaderData }: Route.ComponentProps) {
 
       {orcamentoAberto ? (
         <CondicaoDialogo
-          total={totais.total}
+          total={totais.subtotal}
           cliente={cliente}
-          onAVista={() => imprimirOrcamento(null)}
+          onAVista={(desconto) => imprimirOrcamento(null, desconto)}
           onEscolher={imprimirOrcamento}
           onFechar={() => setOrcamentoAberto(false)}
         />

@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { CalendarClock } from "lucide-react"
 
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
+import { Input } from "~/components/ui/input"
 import { Kbd } from "~/components/ui/kbd"
 import { Separator } from "~/components/ui/separator"
-import { moeda } from "~/lib/moeda"
+import { arredondar, interpretarValor, moeda } from "~/lib/moeda"
 import { cn } from "~/lib/utils"
 import {
   CONDICOES_ATIVAS,
@@ -22,10 +23,12 @@ type Props = {
   cliente: { nome: string } | null
   /**
    * Presente só no orçamento (F7): põe "À vista" no topo da lista e troca os
-   * textos — ali se imprime um papel, não se fecha venda.
+   * textos — ali se imprime um papel, não se fecha venda. Também liga o campo
+   * de desconto, que só o orçamento tem: na venda o desconto é dado no F10.
    */
-  onAVista?: () => void
-  onEscolher: (condicao: CondicaoPagamento) => void
+  onAVista?: (desconto: number) => void
+  /** O desconto só vem no orçamento; na venda é sempre 0. */
+  onEscolher: (condicao: CondicaoPagamento, desconto: number) => void
   onFechar: () => void
 }
 
@@ -38,7 +41,19 @@ type Props = {
  * é o que o vendedor precisa dizer ao cliente, e é exatamente o que sairá nos
  * boletos (o mesmo `parcelasDaCondicao` roda no servidor na emissão).
  */
-export function CondicaoDialogo({ total, cliente, onAVista, onEscolher, onFechar }: Props) {
+export function CondicaoDialogo({ total: subtotal, cliente, onAVista, onEscolher, onFechar }: Props) {
+  /*
+   * Desconto do orçamento, em reais ("15,50") ou percentual ("10%"), como no
+   * F10. Fica só nesta janela: o papel sai com ele, o carrinho não muda — o
+   * desconto da venda continua sendo dado (e autorizado) no fechamento.
+   */
+  const campoDesconto = useRef<HTMLInputElement>(null)
+  const [descontoTexto, setDescontoTexto] = useState("")
+  const descontoLido = lerDesconto(descontoTexto, subtotal)
+  const desconto = onAVista && typeof descontoLido === "number" ? descontoLido : 0
+  const erroDesconto = onAVista && typeof descontoLido === "string" ? descontoLido : null
+  const total = arredondar(subtotal - desconto)
+
   // Só o que cabe no total é navegável: uma parcela abaixo do mínimo do Inter
   // seria recusada na emissão, depois de a venda já estar gravada.
   const cabem = CONDICOES_ATIVAS.filter((c) => condicaoCabeNoTotal(c, total))
@@ -48,9 +63,9 @@ export function CondicaoDialogo({ total, cliente, onAVista, onEscolher, onFechar
 
   function escolher(posicao: number) {
     const escolhida = disponiveis[posicao]
-    if (escolhida === undefined) return
-    if (escolhida === null) onAVista?.()
-    else onEscolher(escolhida)
+    if (escolhida === undefined || erroDesconto) return
+    if (escolhida === null) onAVista?.(desconto)
+    else onEscolher(escolhida, desconto)
   }
 
   const [indice, setIndice] = useState(0)
@@ -66,6 +81,17 @@ export function CondicaoDialogo({ total, cliente, onAVista, onEscolher, onFechar
         return
       }
 
+      // F3 leva ao desconto — a mesma tecla do carrinho e do fechamento.
+      if (key === "F3" && onAVista) {
+        evento.preventDefault()
+        campoDesconto.current?.focus()
+        campoDesconto.current?.select()
+        return
+      }
+
+      // Dentro do campo de desconto os números são do valor, não atalhos.
+      const digitando = evento.target === campoDesconto.current
+
       if (key === "ArrowDown" || key === "ArrowUp") {
         evento.preventDefault()
         const delta = key === "ArrowDown" ? 1 : -1
@@ -77,7 +103,7 @@ export function CondicaoDialogo({ total, cliente, onAVista, onEscolher, onFechar
 
       // Os números escolhem direto — é a via rápida de quem já sabe o prazo.
       const posicao = Number(key) - 1
-      if (Number.isInteger(posicao) && posicao >= 0 && posicao < disponiveis.length) {
+      if (!digitando && Number.isInteger(posicao) && posicao >= 0 && posicao < disponiveis.length) {
         evento.preventDefault()
         escolher(posicao)
         return
@@ -91,7 +117,7 @@ export function CondicaoDialogo({ total, cliente, onAVista, onEscolher, onFechar
 
     window.addEventListener("keydown", aoTeclar, true)
     return () => window.removeEventListener("keydown", aoTeclar, true)
-  }, [disponiveis, indice, onAVista, onEscolher, onFechar])
+  }, [disponiveis, indice, onAVista, onEscolher, onFechar, desconto, erroDesconto])
 
   return (
     <div
@@ -111,6 +137,39 @@ export function CondicaoDialogo({ total, cliente, onAVista, onEscolher, onFechar
             <Kbd>Esc</Kbd> cancela
           </span>
         </div>
+
+        {onAVista ? (
+          <div className="mt-4 flex items-start justify-between gap-4">
+            <label htmlFor="orcamento-desconto" className="pt-1.5 text-sm font-medium">
+              Desconto <Kbd>F3</Kbd>
+              <span className="block text-[11px] font-normal text-muted-foreground">
+                subtotal {moeda(subtotal)}
+              </span>
+            </label>
+            <div className="w-40">
+              <Input
+                id="orcamento-desconto"
+                ref={campoDesconto}
+                inputMode="decimal"
+                autoComplete="off"
+                placeholder="0,00 ou 10%"
+                value={descontoTexto}
+                onChange={(e) => setDescontoTexto(e.target.value)}
+                className={cn(
+                  "text-right font-mono tabular-nums",
+                  erroDesconto && "border-destructive"
+                )}
+              />
+              {erroDesconto ? (
+                <p className="mt-1 text-right text-xs text-destructive">{erroDesconto}</p>
+              ) : desconto > 0 ? (
+                <p className="mt-1 text-right text-xs text-muted-foreground">
+                  − {moeda(desconto)}
+                </p>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
 
         <p className="mt-1 text-xs text-muted-foreground">
           {moeda(total)} à vista
@@ -221,7 +280,7 @@ export function CondicaoDialogo({ total, cliente, onAVista, onEscolher, onFechar
           <Button
             type="button"
             tabIndex={-1}
-            disabled={disponiveis.length === 0}
+            disabled={disponiveis.length === 0 || Boolean(erroDesconto)}
             onClick={() => escolher(indice)}
             className="rounded-lg"
           >
@@ -232,4 +291,19 @@ export function CondicaoDialogo({ total, cliente, onAVista, onEscolher, onFechar
       </div>
     </div>
   )
+}
+
+/**
+ * O desconto digitado: o valor em reais, ou a mensagem de erro. Mesma regra do
+ * F10 — reais ou percentual sobre o subtotal, e nunca mais que o subtotal.
+ */
+function lerDesconto(texto: string, subtotal: number): number | string {
+  const limpo = texto.trim()
+  if (limpo === "") return 0
+  const percentual = limpo.endsWith("%")
+  const numero = interpretarValor(percentual ? limpo.slice(0, -1) : limpo)
+  if (numero === null || numero < 0) return "Desconto inválido"
+  const valor = percentual ? Math.round(subtotal * numero) / 100 : Math.round(numero * 100) / 100
+  if (valor > subtotal) return `Maior que o subtotal (${moeda(subtotal)})`
+  return valor
 }
