@@ -12,6 +12,7 @@ import {
   type RespostaFocus,
 } from "~/lib/focus.server"
 import {
+  cobrancaDaNfe,
   condicaoPorExtenso,
   ehSimples,
   FRETE_SEM_TRANSPORTE,
@@ -413,6 +414,8 @@ export async function emitirDaVenda(
           email_destinatario: ate60(cliente!.email || undefined),
           consumidor_final: consumidorFinal(cliente!.inscricaoEstadual),
           formas_pagamento: formasDePagamentoDaNfe(venda, valorFrete),
+          // Fatura e duplicatas no quadro próprio do DANFE, não só no texto.
+          ...cobrancaDaNfe(venda),
         }
 
   const ambiente = ambienteFocus()

@@ -401,11 +401,7 @@ export function condicaoPorExtenso(venda: {
   if (aPagar > 0) {
     if (venda.forma === "prazo") {
       const condicao = condicaoPorId(venda.condicao ?? "")
-      const parcelas = condicao
-        ? parcelasDaCondicao(condicao, aPagar, venda.criadaEm)
-        : venda.vencimento
-          ? [{ valor: aPagar, vencimento: venda.vencimento }]
-          : []
+      const parcelas = parcelasDoBoleto(venda)
       const titulo = condicao ? `Boleto - ${condicao.dias.join("/")} dias` : "Boleto"
       const vencimentos = parcelas.map(
         (p, i) =>
@@ -424,6 +420,74 @@ export function condicaoPorExtenso(venda: {
   }
 
   return partes.length ? `PAGAMENTO: ${partes.join(" + ")}.` : ""
+}
+
+type VendaAPrazo = {
+  forma: string
+  total: number
+  creditoUsado: number
+  condicao: string | null
+  vencimento: Date | null
+  criadaEm: Date
+}
+
+/**
+ * As parcelas que o cliente vai pagar por boleto ou Pix na entrega: o que
+ * ficou a pagar depois do crédito, repartido pela condição. A MESMA conta do
+ * boleto (`planoDaVenda` em cobranca.server), para a nota não prometer valor
+ * ou data diferentes do papel que o cliente recebe.
+ */
+function parcelasDoBoleto(venda: VendaAPrazo): { valor: number; vencimento: Date }[] {
+  const aPagar = arredondar(venda.total - (venda.creditoUsado ?? 0))
+  if (!(aPagar > 0)) return []
+  if (venda.forma === "prazo") {
+    const condicao = condicaoPorId(venda.condicao ?? "")
+    if (condicao) return parcelasDaCondicao(condicao, aPagar, venda.criadaEm)
+  }
+  if ((venda.forma === "prazo" || venda.forma === "entrega") && venda.vencimento) {
+    return [{ valor: aPagar, vencimento: venda.vencimento }]
+  }
+  return []
+}
+
+/**
+ * O grupo de cobrança da NF-e (`<cobr>`): a fatura e as duplicatas, que o DANFE
+ * imprime no quadro "Fatura/Duplicatas" — com número, vencimento e valor de
+ * cada parcela. Antes isso só existia por extenso nas informações
+ * complementares, e quem recebe a nota procura as parcelas no quadro.
+ *
+ * Só na venda a prazo (boleto) e no Pix na entrega; à vista não há fatura. O
+ * número da duplicata tem de ter três algarismos sequenciais ("001", "002"…):
+ * é regra do schema, e outro formato derruba a nota.
+ */
+export function cobrancaDaNfe(venda: VendaAPrazo & { numero: number }) {
+  if (ehTransferenciaEntreLojas(venda.forma)) return {}
+  const parcelas = parcelasDoBoleto(venda)
+  if (parcelas.length === 0) return {}
+
+  // A SEFAZ recusa duplicata vencida em relação à data de emissão. A nota de
+  // uma venda emitida depois do vencimento sai sem o quadro — as parcelas
+  // continuam no texto das informações complementares — em vez de ser recusada.
+  const hoje = dataSemHora(new Date())
+  if (parcelas.some((p) => dataSemHora(p.vencimento) < hoje)) return {}
+
+  const total = arredondar(parcelas.reduce((soma, p) => soma + p.valor, 0))
+  return {
+    numero_fatura: String(venda.numero),
+    valor_original_fatura: total,
+    valor_desconto_fatura: 0,
+    valor_liquido_fatura: total,
+    duplicatas: parcelas.map((p, i) => ({
+      numero: String(i + 1).padStart(3, "0"),
+      data_vencimento: dataSemHora(p.vencimento),
+      valor: arredondar(p.valor),
+    })),
+  }
+}
+
+/** "2026-12-12" no fuso de Brasília — o formato da Focus, e comparável como texto. */
+function dataSemHora(data: Date) {
+  return data.toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" })
 }
 
 const ROTULO_NA_NOTA: Record<string, string> = {
